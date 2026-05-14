@@ -851,11 +851,11 @@ MongoDB Atlas Admin API v2 and Data API v1 emulation with in-memory document sto
 - `/api/atlas/v2/groups/:groupId/databaseUsers` - list, create, retrieve, and delete database users
 - `/api/atlas/v2/groups/:groupId/clusters/:clusterName/databases` - list databases
 - `/api/atlas/v2/groups/:groupId/clusters/:clusterName/databases/:databaseName/collections` - list collections
-- `/app/data-api/v1/action/findOne` and `/find` - query documents
-- `/app/data-api/v1/action/insertOne` and `/insertMany` - insert documents
-- `/app/data-api/v1/action/updateOne` and `/updateMany` - update documents
-- `/app/data-api/v1/action/deleteOne` and `/deleteMany` - delete documents
-- `/app/data-api/v1/action/aggregate` - run aggregation pipelines
+- `POST /app/data-api/v1/action/findOne` and `POST /app/data-api/v1/action/find` - query documents
+- `POST /app/data-api/v1/action/insertOne` and `POST /app/data-api/v1/action/insertMany` - insert documents
+- `POST /app/data-api/v1/action/updateOne` and `POST /app/data-api/v1/action/updateMany` - update documents
+- `POST /app/data-api/v1/action/deleteOne` and `POST /app/data-api/v1/action/deleteMany` - delete documents
+- `POST /app/data-api/v1/action/aggregate` - run aggregation pipelines
 
 ## Clerk
 
