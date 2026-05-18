@@ -34,6 +34,20 @@ func TestRunStartRejectsInvalidPort(t *testing.T) {
 	}
 }
 
+func TestRunStartRejectsUnexpectedArgument(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"start", "github", "--port", "4010"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("start with unexpected argument exited successfully")
+	}
+	if !strings.Contains(stderr.String(), "Unexpected argument: github") {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "Requested base port") {
+		t.Fatalf("start continued after unexpected argument:\n%s", stdout.String())
+	}
+}
+
 func TestRunStartHelpExitsSuccessfully(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"start", "--help"}, &stdout, &stderr)
@@ -53,6 +67,34 @@ func TestRunInitHelpExitsSuccessfully(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "Usage of init:") {
 		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+}
+
+func TestRunInitRejectsUnexpectedArgument(t *testing.T) {
+	tempDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"init", "aws"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("init with unexpected argument exited successfully")
+	}
+	if !strings.Contains(stderr.String(), "Unexpected argument: aws") {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, "emulate.config.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected config file stat error: %v", err)
 	}
 }
 

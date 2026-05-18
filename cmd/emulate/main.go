@@ -75,6 +75,9 @@ func runStart(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		return 1
 	}
+	if hasUnexpectedArg(fs, stderr) {
+		return 1
+	}
 
 	port, err := strconv.Atoi(*portValue)
 	if err != nil || port < 1 || port > 65535 {
@@ -112,6 +115,9 @@ func runInit(args []string, stdout io.Writer, stderr io.Writer) int {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
+		return 1
+	}
+	if hasUnexpectedArg(fs, stderr) {
 		return 1
 	}
 
@@ -187,6 +193,14 @@ func getenv(name string, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func hasUnexpectedArg(fs *flag.FlagSet, stderr io.Writer) bool {
+	if fs.NArg() == 0 {
+		return false
+	}
+	fmt.Fprintf(stderr, "Unexpected argument: %s\n", fs.Arg(0))
+	return true
 }
 
 func existingConfigFile() (string, error) {
