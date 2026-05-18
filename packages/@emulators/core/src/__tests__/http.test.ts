@@ -37,6 +37,27 @@ describe("internal http layer", () => {
     expect(res.headers.get("Content-Type")).toBe("text/plain");
   });
 
+  it("prefers explicit HEAD routes over GET fallback", async () => {
+    const app = new Hono();
+    app.get("/object", (c) => c.text("get", 200, { "X-Handler": "get" }));
+    app.on("HEAD", "/object", (c) => c.body(null, 200, { "X-Handler": "head" }));
+
+    const res = await app.request("/object", { method: "HEAD" });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Handler")).toBe("head");
+  });
+
+  it("falls back to GET routes for HEAD requests", async () => {
+    const app = new Hono();
+    app.get("/object", (c) => c.text("get", 200, { "X-Handler": "get" }));
+
+    const res = await app.request("/object", { method: "HEAD" });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Handler")).toBe("get");
+  });
+
   it("handles CORS preflight requests", async () => {
     const app = new Hono();
     app.use("*", cors({ allowMethods: ["GET"], allowHeaders: ["x-test"], maxAge: 60 }));

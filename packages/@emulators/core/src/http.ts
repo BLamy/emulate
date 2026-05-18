@@ -7,7 +7,11 @@ type FormDataEntryValue = string | File;
 export type ContentfulStatusCode = number;
 export type Next = () => Promise<void>;
 
-type VariablesOf<E> = unknown extends E ? Record<string, any> : E extends { Variables: infer V } ? V : Record<string, any>;
+type VariablesOf<E> = unknown extends E
+  ? Record<string, any>
+  : E extends { Variables: infer V }
+    ? V
+    : Record<string, any>;
 type HandlerResult = Response | void | Promise<Response | void>;
 
 export type Handler<E = unknown, P extends string = string> = (c: Context<E, P>, next: Next) => HandlerResult;
@@ -293,10 +297,11 @@ export class Hono<E = unknown> {
       }
     }
 
-    const route = this.routes.find((candidate) => {
-      if (candidate.method !== method && !(method === "HEAD" && candidate.method === "GET")) return false;
-      return matchPath(candidate.compiled, path) != null;
-    });
+    const route =
+      this.routes.find((candidate) => candidate.method === method && matchPath(candidate.compiled, path) != null) ??
+      (method === "HEAD"
+        ? this.routes.find((candidate) => candidate.method === "GET" && matchPath(candidate.compiled, path) != null)
+        : undefined);
 
     if (route) {
       const match = matchPath(route.compiled, path) ?? {};
