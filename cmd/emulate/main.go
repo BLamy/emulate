@@ -259,9 +259,9 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "\nStart options:")
 	fmt.Fprintln(w, "  -p, --port <port>          Base port")
 	fmt.Fprintln(w, "  -s, --service <services>   Comma-separated services to enable")
-	fmt.Fprintln(w, "      --seed <file>          Path to seed config file")
+	fmt.Fprintln(w, "      --seed <file>          Path to seed config file (not supported in native Go yet)")
 	fmt.Fprintln(w, "      --base-url <url>       Override advertised base URL")
-	fmt.Fprintln(w, "      --portless             Serve over HTTPS via portless")
+	fmt.Fprintln(w, "      --portless             Serve over HTTPS via portless (not supported in native Go yet)")
 	fmt.Fprintln(w, "\nThe published TypeScript CLI remains the default user-facing runtime.")
 	fmt.Fprintln(w, "Use npx emulate for current production behavior.")
 }
@@ -272,9 +272,9 @@ func printStartHelp(w io.Writer) {
 	fmt.Fprintln(w, "\nOptions:")
 	fmt.Fprintln(w, "  -p, --port <port>          Base port")
 	fmt.Fprintln(w, "  -s, --service <services>   Comma-separated services to enable")
-	fmt.Fprintln(w, "      --seed <file>          Path to seed config file")
+	fmt.Fprintln(w, "      --seed <file>          Path to seed config file (not supported in native Go yet)")
 	fmt.Fprintln(w, "      --base-url <url>       Override advertised base URL")
-	fmt.Fprintln(w, "      --portless             Serve over HTTPS via portless")
+	fmt.Fprintln(w, "      --portless             Serve over HTTPS via portless (not supported in native Go yet)")
 }
 
 func printInitHelp(w io.Writer) {

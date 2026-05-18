@@ -102,6 +102,29 @@ func TestStoreRestoreRemovesCollectionsNotInSnapshot(t *testing.T) {
 	}
 }
 
+func TestCollectionRestoreRejectsDuplicateIDs(t *testing.T) {
+	store := New()
+	users := store.MustCollection("users", "email")
+
+	err := users.Restore(CollectionSnapshot{
+		Items: []Record{
+			{"id": 1, "email": "alice@example.com"},
+			{"id": 1, "email": "bob@example.com"},
+		},
+		AutoID:      2,
+		IndexFields: []string{"email"},
+	})
+	if err == nil {
+		t.Fatal("expected duplicate id error")
+	}
+	if users.Count() != 0 {
+		t.Fatalf("restore partially applied %d records", users.Count())
+	}
+	if matches := users.FindBy("email", "alice@example.com"); len(matches) != 0 {
+		t.Fatalf("restore left stale index entries: %#v", matches)
+	}
+}
+
 func TestCollectionRejectsMismatchedIndexes(t *testing.T) {
 	store := New()
 	if _, err := store.Collection("users", "email"); err != nil {

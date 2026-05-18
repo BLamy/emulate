@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	pathpkg "path"
 	"regexp"
 	"strings"
 	"sync"
@@ -40,11 +39,13 @@ func (c *Context) RequestID() string {
 }
 
 func (c *Context) JSON(status int, value any) {
-	setDefaultHeader(c.Writer.Header(), "Content-Type", "application/json; charset=utf-8")
-	c.Writer.WriteHeader(status)
-	if err := json.NewEncoder(c.Writer).Encode(value); err != nil {
+	body, err := json.Marshal(value)
+	if err != nil {
 		panic(err)
 	}
+	setDefaultHeader(c.Writer.Header(), "Content-Type", "application/json; charset=utf-8")
+	c.Writer.WriteHeader(status)
+	_, _ = c.Writer.Write(body)
 }
 
 func (c *Context) Text(status int, value string) {
@@ -341,11 +342,11 @@ func parseParamSegment(part string) segment {
 }
 
 func splitPath(value string) []string {
-	trimmed := strings.Trim(value, "/")
-	if trimmed == "" {
+	normalized := normalizePath(value)
+	if normalized == "/" {
 		return nil
 	}
-	return strings.Split(trimmed, "/")
+	return strings.Split(strings.TrimPrefix(normalized, "/"), "/")
 }
 
 func normalizePath(value string) string {
@@ -355,7 +356,7 @@ func normalizePath(value string) string {
 	if !strings.HasPrefix(value, "/") {
 		value = "/" + value
 	}
-	return pathpkg.Clean(value)
+	return value
 }
 
 func stripPrefix(prefix string, requestPath string) string {

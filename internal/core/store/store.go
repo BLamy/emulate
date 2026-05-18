@@ -312,10 +312,26 @@ func (c *Collection) Snapshot() CollectionSnapshot {
 }
 
 func (c *Collection) Restore(snapshot CollectionSnapshot) error {
+	fields := normalizeFields(snapshot.IndexFields)
+	records := make([]Record, 0, len(snapshot.Items))
+	seenIDs := map[int]struct{}{}
+	for _, item := range snapshot.Items {
+		id, ok := numericID(item["id"])
+		if !ok || id <= 0 {
+			return fmt.Errorf("record is missing positive numeric id")
+		}
+		if _, exists := seenIDs[id]; exists {
+			return fmt.Errorf("duplicate record id %d", id)
+		}
+		seenIDs[id] = struct{}{}
+		record := cloneRecord(item)
+		record["id"] = id
+		records = append(records, record)
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	fields := normalizeFields(snapshot.IndexFields)
 	if !sameStrings(c.indexFields, fields) {
 		c.indexFields = fields
 		c.indexes = map[string]map[string]map[int]struct{}{}
@@ -335,13 +351,8 @@ func (c *Collection) Restore(snapshot CollectionSnapshot) error {
 	if c.autoID < 1 {
 		c.autoID = 1
 	}
-	for _, item := range snapshot.Items {
-		id, ok := numericID(item["id"])
-		if !ok || id <= 0 {
-			return fmt.Errorf("record is missing positive numeric id")
-		}
-		record := cloneRecord(item)
-		record["id"] = id
+	for _, record := range records {
+		id, _ := numericID(record["id"])
 		c.items[id] = record
 		c.addToIndexes(record)
 		if id >= c.autoID {

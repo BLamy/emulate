@@ -98,6 +98,39 @@ func TestRouterMatchesRegexParamBeforeLiteralSuffix(t *testing.T) {
 	}
 }
 
+func TestRouterPreservesExactPathShape(t *testing.T) {
+	router := NewRouter()
+	router.Get("/iam/", func(c *Context) {
+		c.Text(http.StatusOK, "slash")
+	})
+	router.Get("/files/a/b", func(c *Context) {
+		c.Text(http.StatusOK, "clean")
+	})
+
+	tests := []struct {
+		path   string
+		status int
+		body   string
+	}{
+		{path: "/iam/", status: http.StatusOK, body: "slash"},
+		{path: "/iam", status: http.StatusNotFound},
+		{path: "/files/a/b", status: http.StatusOK, body: "clean"},
+		{path: "/files/a/../b", status: http.StatusNotFound},
+		{path: "/files/a//b", status: http.StatusNotFound},
+	}
+
+	for _, test := range tests {
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, httptest.NewRequest(http.MethodGet, test.path, nil))
+		if res.Code != test.status {
+			t.Fatalf("%s status = %d, body = %s", test.path, res.Code, res.Body.String())
+		}
+		if test.body != "" && res.Body.String() != test.body {
+			t.Fatalf("%s body = %q", test.path, res.Body.String())
+		}
+	}
+}
+
 func TestRouterPrefersExplicitHeadOverGetFallback(t *testing.T) {
 	router := NewRouter()
 	router.Get("/object", func(c *Context) {
@@ -175,6 +208,20 @@ func TestRouterResponseHelpers(t *testing.T) {
 		if test.body != "" && res.Body.String() != test.body {
 			t.Fatalf("%s body = %q", test.path, res.Body.String())
 		}
+	}
+}
+
+func TestRouterJSONEncodeFailureReturnsInternalServerError(t *testing.T) {
+	router := NewRouter()
+	router.Get("/bad-json", func(c *Context) {
+		c.JSON(http.StatusCreated, map[string]any{"bad": make(chan int)})
+	})
+
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/bad-json", nil))
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
 	}
 }
 
