@@ -1,5 +1,6 @@
 node_modules/
 dist/
+/emulate
 *.tsbuildinfo
 .turbo/
 .pnpm-store/
