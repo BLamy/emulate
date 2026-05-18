@@ -34,7 +34,7 @@ func TestRunStartRejectsInvalidPort(t *testing.T) {
 	}
 }
 
-func TestRunInitWritesStarterJSON(t *testing.T) {
+func TestRunInitWritesStarterConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	oldDir, err := os.Getwd()
 	if err != nil {
@@ -55,7 +55,7 @@ func TestRunInitWritesStarterJSON(t *testing.T) {
 		t.Fatalf("init exited with %d, stderr: %s", code, stderr.String())
 	}
 
-	raw, err := os.ReadFile(filepath.Join(tempDir, "emulate.config.json"))
+	raw, err := os.ReadFile(filepath.Join(tempDir, "emulate.config.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,5 +71,35 @@ func TestRunInitWritesStarterJSON(t *testing.T) {
 	}
 	if _, ok := config["github"]; ok {
 		t.Fatal("service-specific starter config included github")
+	}
+}
+
+func TestRunInitRejectsExistingAutoDetectedConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	existing := filepath.Join(tempDir, "emulate.config.yaml")
+	if err := os.WriteFile(existing, []byte("github: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"init", "--service", "aws"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("init with existing config exited successfully")
+	}
+	if !strings.Contains(stderr.String(), "Config file already exists: emulate.config.yaml") {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
 	}
 }

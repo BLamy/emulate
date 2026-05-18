@@ -24,9 +24,18 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm build
+
+      - run: go test ./...
+
+      - run: go build ./cmd/emulate
 
       - run: node scripts/sync-versions.mjs --check
 

@@ -15,6 +15,15 @@ import (
 
 var version = "dev"
 
+var configFilenames = []string{
+	"emulate.config.yaml",
+	"emulate.config.yml",
+	"emulate.config.json",
+	"service-emulator.config.yaml",
+	"service-emulator.config.yml",
+	"service-emulator.config.json",
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -106,12 +115,13 @@ func runInit(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 
-	const filename = "emulate.config.json"
-	if _, err := os.Stat(filename); err == nil {
-		fmt.Fprintf(stderr, "Config file already exists: %s\n", filename)
-		return 1
-	} else if !errors.Is(err, os.ErrNotExist) {
+	filename, err := existingConfigFile()
+	if err != nil {
 		fmt.Fprintf(stderr, "Failed to check %s: %v\n", filename, err)
+		return 1
+	}
+	if filename != "" {
+		fmt.Fprintf(stderr, "Config file already exists: %s\n", filename)
 		return 1
 	}
 
@@ -121,12 +131,13 @@ func runInit(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 	content = append(content, '\n')
-	if err := os.WriteFile(filename, content, 0o644); err != nil {
-		fmt.Fprintf(stderr, "Failed to write %s: %v\n", filename, err)
+	const targetFilename = "emulate.config.yaml"
+	if err := os.WriteFile(targetFilename, content, 0o644); err != nil {
+		fmt.Fprintf(stderr, "Failed to write %s: %v\n", targetFilename, err)
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "Created %s\n", filename)
+	fmt.Fprintf(stdout, "Created %s\n", targetFilename)
 	fmt.Fprintln(stdout, "\nRun 'npx emulate' to start the emulator.")
 	return 0
 }
@@ -145,9 +156,9 @@ func runList(stdout io.Writer) int {
 func printHelp(w io.Writer) {
 	fmt.Fprintf(w, "emulate %s native Go runtime experimental\n\n", version)
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  emulate [start] [--port <port>] [--service <services>] [--seed <file>]")
-	fmt.Fprintln(w, "  emulate init [--service <service>]")
-	fmt.Fprintln(w, "  emulate list")
+	fmt.Fprintln(w, "  npx emulate [start] [--port <port>] [--service <services>] [--seed <file>]")
+	fmt.Fprintln(w, "  npx emulate init [--service <service>]")
+	fmt.Fprintln(w, "  npx emulate list")
 	fmt.Fprintln(w, "\nThe published TypeScript CLI remains the default user-facing runtime.")
 	fmt.Fprintln(w, "Use npx emulate for current production behavior.")
 }
@@ -170,4 +181,15 @@ func getenv(name string, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func existingConfigFile() (string, error) {
+	for _, filename := range configFilenames {
+		if _, err := os.Stat(filename); err == nil {
+			return filename, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return filename, err
+		}
+	}
+	return "", nil
 }
