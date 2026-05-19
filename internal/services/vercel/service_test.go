@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	corehttp "github.com/vercel-labs/emulate/internal/core/http"
+	corestore "github.com/vercel-labs/emulate/internal/core/store"
 )
 
 const testBaseURL = "http://localhost:4000"
@@ -297,6 +298,60 @@ func TestVercelAPIKeyCanAuthenticateRequests(t *testing.T) {
 	handler.ServeHTTP(userRes, req)
 	if userRes.Code != http.StatusOK {
 		t.Fatalf("user status = %d, body = %s", userRes.Code, userRes.Body.String())
+	}
+}
+
+func TestVercelTeamScopeRequiresAuthenticatedMember(t *testing.T) {
+	runtimeStore := corestore.New()
+	service := New(Options{
+		Store:   runtimeStore,
+		BaseURL: testBaseURL,
+		Seed: &SeedConfig{
+			Teams: []TeamSeed{{Slug: "seed-team", Name: "Seed Team"}},
+			Projects: []ProjectSeed{{
+				Name: "team-project",
+				Team: "seed-team",
+			}},
+		},
+	})
+	service.store.Users.Insert(defaultUserRecord("octocat", "octocat@example.com", "Octocat"))
+
+	router := corehttp.NewRouter()
+	service.RegisterRoutes(router)
+
+	unauthenticated := doVercelJSON(router, http.MethodGet, "/v10/projects?slug=seed-team", "", false)
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, body = %s", unauthenticated.Code, unauthenticated.Body.String())
+	}
+
+	member := doVercelJSON(router, http.MethodGet, "/v10/projects?slug=seed-team", "", true)
+	if member.Code != http.StatusOK {
+		t.Fatalf("member status = %d, body = %s", member.Code, member.Body.String())
+	}
+
+	outsiderReq := httptest.NewRequest(http.MethodPost, "/v11/projects?slug=seed-team", strings.NewReader(`{"name":"intruder"}`))
+	outsiderReq.Header.Set("Content-Type", "application/json")
+	outsiderReq.Header.Set("Authorization", "Bearer test_token_user1")
+	outsider := httptest.NewRecorder()
+	router.ServeHTTP(outsider, outsiderReq)
+	if outsider.Code == http.StatusOK {
+		t.Fatalf("outsider was allowed to mutate team scope: %s", outsider.Body.String())
+	}
+
+	verify := doVercelJSON(router, http.MethodGet, "/v10/projects?slug=seed-team", "", true)
+	if verify.Code != http.StatusOK {
+		t.Fatalf("verify status = %d, body = %s", verify.Code, verify.Body.String())
+	}
+	var body struct {
+		Projects []struct {
+			Name string `json:"name"`
+		} `json:"projects"`
+	}
+	decodeVercelBody(t, verify, &body)
+	for _, project := range body.Projects {
+		if project.Name == "intruder" {
+			t.Fatal("outsider project was created")
+		}
 	}
 }
 

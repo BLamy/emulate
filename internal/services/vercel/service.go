@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	corehttp "github.com/vercel-labs/emulate/internal/core/http"
@@ -75,11 +74,8 @@ type IntegrationSeed struct {
 }
 
 type Service struct {
-	store    Store
-	baseURL  string
-	mu       sync.Mutex
-	codes    map[string]pendingCode
-	tokenMap map[string]string
+	store   Store
+	baseURL string
 }
 
 type pendingCode struct {
@@ -107,10 +103,8 @@ func New(options Options) *Service {
 		baseURL = "http://localhost:4000"
 	}
 	service := &Service{
-		store:    NewStore(runtimeStore),
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		codes:    map[string]pendingCode{},
-		tokenMap: map[string]string{},
+		store:   NewStore(runtimeStore),
+		baseURL: strings.TrimRight(baseURL, "/"),
 	}
 	service.SeedDefaults()
 	if options.Seed != nil {
@@ -351,11 +345,11 @@ func (s *Service) authLogin(c *corehttp.Context) (string, bool) {
 	if token == "" {
 		return "", false
 	}
-	s.mu.Lock()
-	login := s.tokenMap[token]
-	s.mu.Unlock()
-	if login != "" {
-		return login, true
+	if oauthToken := firstRecord(s.store.OAuthTokens.FindBy("tokenString", token)); oauthToken != nil {
+		login := stringField(oauthToken, "username")
+		if login != "" {
+			return login, true
+		}
 	}
 	if apiKey := firstRecord(s.store.APIKeys.FindBy("tokenString", token)); apiKey != nil {
 		user := firstRecord(s.store.Users.FindBy("uid", stringField(apiKey, "userId")))
@@ -413,9 +407,20 @@ type scope struct {
 }
 
 func (s *Service) resolveScope(c *corehttp.Context) (*scope, bool) {
+	login, ok := s.authLogin(c)
+	if !ok {
+		return nil, false
+	}
+	user := firstRecord(s.store.Users.FindBy("username", login))
+	if user == nil {
+		return nil, false
+	}
 	if teamID := strings.TrimSpace(c.Query("teamId")); teamID != "" {
 		team := firstRecord(s.store.Teams.FindBy("uid", teamID))
 		if team == nil {
+			return nil, false
+		}
+		if s.getTeamMember(stringField(team, "uid"), stringField(user, "uid")) == nil {
 			return nil, false
 		}
 		return &scope{AccountID: stringField(team, "uid"), Team: team}, true
@@ -425,15 +430,10 @@ func (s *Service) resolveScope(c *corehttp.Context) (*scope, bool) {
 		if team == nil {
 			return nil, false
 		}
+		if s.getTeamMember(stringField(team, "uid"), stringField(user, "uid")) == nil {
+			return nil, false
+		}
 		return &scope{AccountID: stringField(team, "uid"), Team: team}, true
-	}
-	login, ok := s.authLogin(c)
-	if !ok {
-		return nil, false
-	}
-	user := firstRecord(s.store.Users.FindBy("username", login))
-	if user == nil {
-		return nil, false
 	}
 	return &scope{AccountID: stringField(user, "uid")}, true
 }

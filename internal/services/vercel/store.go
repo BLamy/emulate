@@ -18,6 +18,8 @@ type Store struct {
 	ProtectionBypasses *corestore.Collection
 	APIKeys            *corestore.Collection
 	Integrations       *corestore.Collection
+	OAuthCodes         *corestore.Collection
+	OAuthTokens        *corestore.Collection
 }
 
 func NewStore(runtimeStore *corestore.Store) Store {
@@ -37,5 +39,7 @@ func NewStore(runtimeStore *corestore.Store) Store {
 		ProtectionBypasses: runtimeStore.MustCollection("vercel.protection_bypasses", "projectId", "secret"),
 		APIKeys:            runtimeStore.MustCollection("vercel.api_keys", "uid", "userId", "teamId", "tokenString"),
 		Integrations:       runtimeStore.MustCollection("vercel.integrations", "client_id"),
+		OAuthCodes:         runtimeStore.MustCollection("vercel.oauth_codes", "code", "username"),
+		OAuthTokens:        runtimeStore.MustCollection("vercel.oauth_tokens", "tokenString", "username"),
 	}
 }

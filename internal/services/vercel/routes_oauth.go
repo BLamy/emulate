@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corehttp "github.com/vercel-labs/emulate/internal/core/http"
+	corestore "github.com/vercel-labs/emulate/internal/core/store"
 	"github.com/vercel-labs/emulate/internal/core/ui"
 )
 
@@ -90,9 +91,7 @@ func (s *Service) registerOAuthRoutes(router *corehttp.Router) {
 			CodeChallengeMethod: c.Request.Form.Get("code_challenge_method"),
 			CreatedAt:           time.Now(),
 		}
-		s.mu.Lock()
-		s.codes[code] = pending
-		s.mu.Unlock()
+		s.storePendingCode(code, pending)
 		redirectTarget, err := url.Parse(pending.RedirectURI)
 		if err != nil || redirectTarget == nil {
 			writeVercelError(c, http.StatusBadRequest, "bad_request", "Invalid redirect_uri")
@@ -127,24 +126,18 @@ func (s *Service) registerOAuthRoutes(router *corehttp.Router) {
 			}
 		}
 
-		s.mu.Lock()
-		pending, ok := s.codes[code]
-		s.mu.Unlock()
+		pending, ok := s.pendingCode(code)
 		if !ok {
 			c.JSON(http.StatusBadRequest, map[string]any{"error": "invalid_grant", "error_description": "The code passed is incorrect or expired."})
 			return
 		}
 		if time.Since(pending.CreatedAt) > pendingCodeTTL {
-			s.mu.Lock()
-			delete(s.codes, code)
-			s.mu.Unlock()
+			s.deletePendingCode(code)
 			c.JSON(http.StatusBadRequest, map[string]any{"error": "invalid_grant", "error_description": "The code passed is incorrect or expired."})
 			return
 		}
 		if redirectURI != "" && pending.RedirectURI != "" && redirectURI != pending.RedirectURI {
-			s.mu.Lock()
-			delete(s.codes, code)
-			s.mu.Unlock()
+			s.deletePendingCode(code)
 			c.JSON(http.StatusBadRequest, map[string]any{"error": "invalid_grant", "error_description": "The redirect_uri does not match the one used during authorization."})
 			return
 		}
@@ -158,10 +151,8 @@ func (s *Service) registerOAuthRoutes(router *corehttp.Router) {
 			return
 		}
 		token := "vercel_" + generateSecret()
-		s.mu.Lock()
-		delete(s.codes, code)
-		s.tokenMap[token] = stringField(user, "username")
-		s.mu.Unlock()
+		s.deletePendingCode(code)
+		s.storeOAuthToken(token, stringField(user, "username"), pending.Scope)
 		c.JSON(http.StatusOK, map[string]any{
 			"access_token": token,
 			"token_type":   "Bearer",
@@ -182,6 +173,53 @@ func (s *Service) registerOAuthRoutes(router *corehttp.Router) {
 			"email_verified":     true,
 			"picture":            user["avatar"],
 		})
+	})
+}
+
+func (s *Service) storePendingCode(code string, pending pendingCode) {
+	s.store.OAuthCodes.Insert(corestore.Record{
+		"code":                code,
+		"username":            pending.Username,
+		"scope":               pending.Scope,
+		"redirectURI":         pending.RedirectURI,
+		"clientID":            pending.ClientID,
+		"codeChallenge":       pending.CodeChallenge,
+		"codeChallengeMethod": pending.CodeChallengeMethod,
+		"createdAt":           pending.CreatedAt.UnixMilli(),
+	})
+}
+
+func (s *Service) pendingCode(code string) (pendingCode, bool) {
+	row := firstRecord(s.store.OAuthCodes.FindBy("code", code))
+	if row == nil {
+		return pendingCode{}, false
+	}
+	createdMillis := timeMillis(row["createdAt"])
+	if createdMillis == 0 {
+		createdMillis = timeMillis(row["created_at"])
+	}
+	return pendingCode{
+		Username:            stringField(row, "username"),
+		Scope:               stringField(row, "scope"),
+		RedirectURI:         stringField(row, "redirectURI"),
+		ClientID:            stringField(row, "clientID"),
+		CodeChallenge:       stringField(row, "codeChallenge"),
+		CodeChallengeMethod: stringField(row, "codeChallengeMethod"),
+		CreatedAt:           time.UnixMilli(createdMillis),
+	}, true
+}
+
+func (s *Service) deletePendingCode(code string) {
+	for _, row := range s.store.OAuthCodes.FindBy("code", code) {
+		s.store.OAuthCodes.Delete(intField(row, "id"))
+	}
+}
+
+func (s *Service) storeOAuthToken(token string, username string, scope string) {
+	s.store.OAuthTokens.Insert(corestore.Record{
+		"tokenString": token,
+		"username":    username,
+		"scope":       scope,
 	})
 }
 
