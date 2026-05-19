@@ -315,18 +315,39 @@ describeExternalSqsE2E("AWS plugin - real @aws-sdk/client-sqs E2E", () => {
     const { QueueUrl } = await sqs.send(new CreateSQSQueueCommand({ QueueName: "sdk-e2e-messages" }));
     expect(QueueUrl).toBeTruthy();
 
-    const sent = await sqs.send(new SendMessageCommand({ QueueUrl, MessageBody: "hello from sqs sdk" }));
+    const sent = await sqs.send(
+      new SendMessageCommand({
+        QueueUrl,
+        MessageBody: "hello from sqs sdk",
+        MessageAttributes: { color: { DataType: "String", StringValue: "blue" } },
+      }),
+    );
     expect(sent.MessageId).toBeTruthy();
     expect(sent.MD5OfMessageBody).toBeTruthy();
 
-    const received = await sqs.send(new ReceiveMessageCommand({ QueueUrl, MaxNumberOfMessages: 1 }));
+    const received = await sqs.send(
+      new ReceiveMessageCommand({ QueueUrl, MaxNumberOfMessages: 1, MessageAttributeNames: ["All"] }),
+    );
     expect(received.Messages).toHaveLength(1);
     expect(received.Messages?.[0]?.Body).toBe("hello from sqs sdk");
     expect(received.Messages?.[0]?.ReceiptHandle).toBeTruthy();
+    expect(received.Messages?.[0]?.MessageAttributes?.color?.StringValue).toBe("blue");
 
     await sqs.send(new DeleteMessageCommand({ QueueUrl, ReceiptHandle: received.Messages?.[0]?.ReceiptHandle }));
     const afterDelete = await sqs.send(new ReceiveMessageCommand({ QueueUrl, MaxNumberOfMessages: 1 }));
     expect(afterDelete.Messages ?? []).toHaveLength(0);
+
+    await sqs.send(new DeleteSQSQueueCommand({ QueueUrl }));
+  });
+
+  it("SendMessage DelaySeconds keeps a message hidden initially", async () => {
+    const { QueueUrl } = await sqs.send(new CreateSQSQueueCommand({ QueueName: "sdk-e2e-delay" }));
+    expect(QueueUrl).toBeTruthy();
+
+    await sqs.send(new SendMessageCommand({ QueueUrl, MessageBody: "not yet", DelaySeconds: 5 }));
+
+    const received = await sqs.send(new ReceiveMessageCommand({ QueueUrl, MaxNumberOfMessages: 1 }));
+    expect(received.Messages ?? []).toHaveLength(0);
 
     await sqs.send(new DeleteSQSQueueCommand({ QueueUrl }));
   });

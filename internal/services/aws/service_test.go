@@ -461,6 +461,171 @@ func TestServiceHandlesSQSPurgeAndDeleteQueue(t *testing.T) {
 	}
 }
 
+func TestServiceHonorsSQSMessageDelaySeconds(t *testing.T) {
+	handler := newTestHandler()
+
+	res := executeAWSQueryRequest(handler, "sqs", "Action=CreateQueue&QueueName=delayed-query")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", res.Code, res.Body.String())
+	}
+	queueURL := xmlElement(res.Body.String(), "QueueUrl")
+
+	values := url.Values{}
+	values.Set("Action", "SendMessage")
+	values.Set("QueueUrl", queueURL)
+	values.Set("MessageBody", "wait for it")
+	values.Set("DelaySeconds", "5")
+	res = executeAWSQueryRequest(handler, "sqs", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("send status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values = url.Values{}
+	values.Set("Action", "ReceiveMessage")
+	values.Set("QueueUrl", queueURL)
+	values.Set("MaxNumberOfMessages", "1")
+	res = executeAWSQueryRequest(handler, "sqs", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("receive status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "<Message>") {
+		t.Fatalf("delayed message was visible immediately: %s", res.Body.String())
+	}
+}
+
+func TestServiceReturnsSQSQueryMessageAttributes(t *testing.T) {
+	handler := newTestHandler()
+
+	res := executeAWSQueryRequest(handler, "sqs", "Action=CreateQueue&QueueName=query-attrs")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", res.Code, res.Body.String())
+	}
+	queueURL := xmlElement(res.Body.String(), "QueueUrl")
+
+	values := url.Values{}
+	values.Set("Action", "SendMessage")
+	values.Set("QueueUrl", queueURL)
+	values.Set("MessageBody", "with attrs")
+	values.Set("MessageAttribute.1.Name", "color")
+	values.Set("MessageAttribute.1.Value.DataType", "String")
+	values.Set("MessageAttribute.1.Value.StringValue", "blue")
+	res = executeAWSQueryRequest(handler, "sqs", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("send status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values = url.Values{}
+	values.Set("Action", "ReceiveMessage")
+	values.Set("QueueUrl", queueURL)
+	values.Set("MessageAttributeName.1", "All")
+	res = executeAWSQueryRequest(handler, "sqs", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("receive status = %d, body = %s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"<MessageAttribute>", "<Name>color</Name>", "<DataType>String</DataType>", "<StringValue>blue</StringValue>"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("receive missing %q in %s", expected, body)
+		}
+	}
+}
+
+func TestServiceHandlesSQSJSONMessageAttributes(t *testing.T) {
+	handler := newTestHandler()
+
+	res := executeAWSJSONRequest(t, handler, "CreateQueue", map[string]any{"QueueName": "json-attrs"})
+	if res.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var created struct {
+		QueueURL string `json:"QueueUrl"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	res = executeAWSJSONRequest(t, handler, "SendMessage", map[string]any{
+		"QueueUrl":    created.QueueURL,
+		"MessageBody": "with attrs",
+		"MessageAttributes": map[string]any{
+			"color": map[string]any{
+				"DataType":    "String",
+				"StringValue": "blue",
+			},
+		},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("send status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSJSONRequest(t, handler, "ReceiveMessage", map[string]any{
+		"QueueUrl":              created.QueueURL,
+		"MessageAttributeNames": []string{"All"},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("receive status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var received struct {
+		Messages []struct {
+			MessageAttributes map[string]struct {
+				DataType    string `json:"DataType"`
+				StringValue string `json:"StringValue"`
+			} `json:"MessageAttributes"`
+		} `json:"Messages"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &received); err != nil {
+		t.Fatal(err)
+	}
+	if len(received.Messages) != 1 {
+		t.Fatalf("messages = %#v", received.Messages)
+	}
+	color := received.Messages[0].MessageAttributes["color"]
+	if color.DataType != "String" || color.StringValue != "blue" {
+		t.Fatalf("message attributes = %#v", received.Messages[0].MessageAttributes)
+	}
+}
+
+func TestServiceHonorsSQSJSONMessageDelaySeconds(t *testing.T) {
+	handler := newTestHandler()
+
+	res := executeAWSJSONRequest(t, handler, "CreateQueue", map[string]any{"QueueName": "json-delay"})
+	if res.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var created struct {
+		QueueURL string `json:"QueueUrl"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	res = executeAWSJSONRequest(t, handler, "SendMessage", map[string]any{
+		"QueueUrl":     created.QueueURL,
+		"MessageBody":  "wait for it",
+		"DelaySeconds": json.Number("5"),
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("send status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSJSONRequest(t, handler, "ReceiveMessage", map[string]any{
+		"QueueUrl":            created.QueueURL,
+		"MaxNumberOfMessages": json.Number("1"),
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("receive status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var received struct {
+		Messages []map[string]any `json:"Messages"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &received); err != nil {
+		t.Fatal(err)
+	}
+	if len(received.Messages) != 0 {
+		t.Fatalf("delayed message was visible immediately: %#v", received.Messages)
+	}
+}
+
 func TestServiceReturnsJSONRPCNotImplemented(t *testing.T) {
 	handler := newTestHandler()
 	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/", strings.NewReader(`{"TableName":"items"}`))
@@ -673,6 +838,21 @@ func executeAWSQueryRequest(handler http.Handler, service string, body string) *
 	return executeAWSRequest(handler, http.MethodPost, "http://127.0.0.1/"+service+"/", []byte(body), service, map[string]string{
 		"Content-Type": "application/x-www-form-urlencoded",
 	})
+}
+
+func executeAWSJSONRequest(t *testing.T, handler http.Handler, action string, payload map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/sqs/", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("X-Amz-Target", "AmazonSQS."+action)
+	signAWSRequest(req, "sqs")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	return res
 }
 
 func executeS3MultipartPost(t *testing.T, handler http.Handler, target string, fields map[string]string, fileBody []byte) *httptest.ResponseRecorder {

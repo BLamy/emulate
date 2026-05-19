@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -243,7 +244,7 @@ func (h *Handler) sendMessage(params map[string]string, requestID string) protoc
 			"SenderId":                         h.accountID(),
 		},
 		"message_attributes": parseMessageAttributes(params),
-		"visible_after":      now + int64(intField(queue, "delay_seconds"))*1000,
+		"visible_after":      now + int64(messageDelaySeconds(params, queue))*1000,
 		"sent_timestamp":     now,
 		"receive_count":      0,
 	})
@@ -314,7 +315,9 @@ func (h *Handler) receiveMessage(params map[string]string, requestID string) pro
       <Attribute><Name>ApproximateFirstReceiveTimestamp</Name><Value>`)
 		rows.WriteString(strconv.FormatInt(int64Field(message, "sent_timestamp"), 10))
 		rows.WriteString(`</Value></Attribute>
-    </Message>
+`)
+		writeMessageAttributesXML(&rows, message, params)
+		rows.WriteString(`    </Message>
 `)
 	}
 	body := `<?xml version="1.0" encoding="UTF-8"?>
@@ -474,7 +477,7 @@ func (h *Handler) sendMessageJSON(params map[string]string) protocols.ErrorRespo
 			"SenderId":                         h.accountID(),
 		},
 		"message_attributes": parseMessageAttributes(params),
-		"visible_after":      now + int64(intField(queue, "delay_seconds"))*1000,
+		"visible_after":      now + int64(messageDelaySeconds(params, queue))*1000,
 		"sent_timestamp":     now,
 		"receive_count":      0,
 	})
@@ -510,7 +513,7 @@ func (h *Handler) receiveMessageJSON(params map[string]string) protocols.ErrorRe
 			"visible_after":  now + int64(visibilityTimeout)*1000,
 			"receive_count":  receiveCount,
 		})
-		messages = append(messages, map[string]any{
+		item := map[string]any{
 			"MessageId":     stringField(updated, "message_id"),
 			"ReceiptHandle": stringField(updated, "receipt_handle"),
 			"MD5OfBody":     stringField(updated, "md5_of_body"),
@@ -520,7 +523,11 @@ func (h *Handler) receiveMessageJSON(params map[string]string) protocols.ErrorRe
 				"ApproximateReceiveCount":          strconv.Itoa(intField(updated, "receive_count")),
 				"ApproximateFirstReceiveTimestamp": strconv.FormatInt(int64Field(updated, "sent_timestamp"), 10),
 			},
-		})
+		}
+		if attrs := selectedMessageAttributes(updated, params); len(attrs) > 0 {
+			item["MessageAttributes"] = attrs
+		}
+		messages = append(messages, item)
 		if len(messages) == maxMessages {
 			break
 		}
@@ -716,11 +723,34 @@ func jsonParams(input map[string]any) map[string]string {
 					messageAttributeIndex++
 				}
 			}
+		case "AttributeNames":
+			addJSONListParams(params, "AttributeName", value)
+		case "MessageAttributeNames":
+			addJSONListParams(params, "MessageAttributeName", value)
+		case "MessageSystemAttributeNames":
+			addJSONListParams(params, "MessageSystemAttributeName", value)
 		default:
 			params[key] = scalarString(value)
 		}
 	}
 	return params
+}
+
+func addJSONListParams(params map[string]string, prefix string, value any) {
+	switch values := value.(type) {
+	case []any:
+		for index, item := range values {
+			params[prefix+"."+strconv.Itoa(index+1)] = scalarString(item)
+		}
+	case []string:
+		for index, item := range values {
+			params[prefix+"."+strconv.Itoa(index+1)] = item
+		}
+	default:
+		if raw := scalarString(value); raw != "" {
+			params[prefix+".1"] = raw
+		}
+	}
 }
 
 func scalarString(value any) string {
@@ -772,6 +802,113 @@ func parseMessageAttributes(params map[string]string) corestore.Record {
 		attrs[name] = value
 	}
 	return attrs
+}
+
+func messageDelaySeconds(params map[string]string, queue corestore.Record) int {
+	return intParam(params["DelaySeconds"], intField(queue, "delay_seconds"))
+}
+
+func selectedMessageAttributes(message corestore.Record, params map[string]string) corestore.Record {
+	attrs := recordField(message, "message_attributes")
+	if len(attrs) == 0 {
+		return corestore.Record{}
+	}
+	requested := indexedNames(params, "MessageAttributeName")
+	if len(requested) == 0 {
+		return corestore.Record{}
+	}
+	selected := corestore.Record{}
+	for _, request := range requested {
+		if request == "All" || request == ".*" {
+			for name, value := range attrs {
+				selected[name] = cloneAttributeValue(value)
+			}
+			continue
+		}
+		if strings.HasSuffix(request, ".*") {
+			prefix := strings.TrimSuffix(request, ".*")
+			for name, value := range attrs {
+				if strings.HasPrefix(name, prefix) {
+					selected[name] = cloneAttributeValue(value)
+				}
+			}
+			continue
+		}
+		if value, ok := attrs[request]; ok {
+			selected[request] = cloneAttributeValue(value)
+		}
+	}
+	return selected
+}
+
+func indexedNames(params map[string]string, prefix string) []string {
+	names := []string{}
+	for index := 1; ; index++ {
+		name := params[prefix+"."+strconv.Itoa(index)]
+		if name == "" {
+			break
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+func writeMessageAttributesXML(rows *strings.Builder, message corestore.Record, params map[string]string) {
+	attrs := selectedMessageAttributes(message, params)
+	names := sortedRecordKeys(attrs)
+	for _, name := range names {
+		value := recordValue(attrs[name])
+		rows.WriteString(`      <MessageAttribute><Name>`)
+		rows.WriteString(xmlEscape(name))
+		rows.WriteString(`</Name><Value><DataType>`)
+		rows.WriteString(xmlEscape(stringField(value, "DataType")))
+		rows.WriteString(`</DataType>`)
+		if stringValue := stringField(value, "StringValue"); stringValue != "" {
+			rows.WriteString(`<StringValue>`)
+			rows.WriteString(xmlEscape(stringValue))
+			rows.WriteString(`</StringValue>`)
+		}
+		if binaryValue := stringField(value, "BinaryValue"); binaryValue != "" {
+			rows.WriteString(`<BinaryValue>`)
+			rows.WriteString(xmlEscape(binaryValue))
+			rows.WriteString(`</BinaryValue>`)
+		}
+		rows.WriteString(`</Value></MessageAttribute>
+`)
+	}
+}
+
+func sortedRecordKeys(record corestore.Record) []string {
+	keys := make([]string, 0, len(record))
+	for key := range record {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func recordField(record corestore.Record, name string) corestore.Record {
+	return recordValue(record[name])
+}
+
+func recordValue(value any) corestore.Record {
+	switch typed := value.(type) {
+	case corestore.Record:
+		return typed
+	case map[string]any:
+		return corestore.Record(typed)
+	default:
+		return corestore.Record{}
+	}
+}
+
+func cloneAttributeValue(value any) corestore.Record {
+	source := recordValue(value)
+	clone := corestore.Record{}
+	for key, item := range source {
+		clone[key] = item
+	}
+	return clone
 }
 
 func intParam(raw string, fallback int) int {
