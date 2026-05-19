@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -53,5 +54,38 @@ func TestNewHandlerReturnsJSONNotFound(t *testing.T) {
 	}
 	if body["message"] != "Not Found" {
 		t.Fatalf("unexpected body: %#v", body)
+	}
+}
+
+func TestNewHandlerMountsAWSWhenEnabled(t *testing.T) {
+	handler := NewHandler(ServerOptions{Services: []string{"aws"}})
+	req := httptest.NewRequest(http.MethodPost, "/sqs/", strings.NewReader("Action=CreateQueue&QueueName=jobs"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE/20260519/us-east-1/sqs/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcdef")
+	req.Header.Set("X-Amz-Date", "20260519T000000Z")
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "sqs.CreateQueue") {
+		t.Fatalf("unexpected body: %s", res.Body.String())
+	}
+}
+
+func TestNewHandlerDoesNotMountAWSWhenDisabled(t *testing.T) {
+	handler := NewHandler(ServerOptions{Services: []string{"github"}})
+	req := httptest.NewRequest(http.MethodPost, "/sqs/", strings.NewReader("Action=CreateQueue&QueueName=jobs"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE/20260519/us-east-1/sqs/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcdef")
+	req.Header.Set("X-Amz-Date", "20260519T000000Z")
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
 	}
 }

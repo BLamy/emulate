@@ -6,6 +6,7 @@ import (
 	corehttp "github.com/vercel-labs/emulate/internal/core/http"
 	"github.com/vercel-labs/emulate/internal/core/store"
 	"github.com/vercel-labs/emulate/internal/core/ui"
+	"github.com/vercel-labs/emulate/internal/services/aws"
 )
 
 const HealthPath = "/_emulate/health"
@@ -61,6 +62,11 @@ func NewServer(options ServerOptions) *Server {
 			"runtime": "go",
 		})
 	})
+	if serviceEnabled(services, "aws") {
+		aws.Register(router, aws.Options{
+			Store: runtimeStore,
+		})
+	}
 	router.NotFound(func(c *corehttp.Context) {
 		c.JSON(http.StatusNotFound, map[string]any{"message": "Not Found"})
 	})
@@ -72,4 +78,13 @@ func NewServer(options ServerOptions) *Server {
 		BaseURL:  options.BaseURL,
 		Services: services,
 	}
+}
+
+func serviceEnabled(services []string, name string) bool {
+	for _, service := range services {
+		if service == name {
+			return true
+		}
+	}
+	return false
 }
