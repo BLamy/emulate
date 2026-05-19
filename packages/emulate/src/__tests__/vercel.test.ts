@@ -146,6 +146,46 @@ require (
     expect(readFileSync(join(cwd, "go.mod"), "utf-8")).toContain("github.com/vercel-labs/emulate v0.5.0");
   });
 
+  it("updates an older Go directive to the required Vercel function version", () => {
+    const cwd = tempDir();
+    writeFileSync(
+      join(cwd, "go.mod"),
+      `module example.com/app
+
+go 1.20
+
+require github.com/vercel-labs/emulate v0.5.0
+`,
+    );
+
+    const result = createVercelScaffold({ cwd, version: "0.5.0" });
+
+    expect(result.updated).toContain("go.mod");
+    const content = readFileSync(join(cwd, "go.mod"), "utf-8");
+    expect(content).toContain("go 1.24");
+    expect(content).not.toContain("go 1.20");
+  });
+
+  it("inserts a Go directive when an existing module is missing one", () => {
+    const cwd = tempDir();
+    writeFileSync(
+      join(cwd, "go.mod"),
+      `module example.com/app
+
+require github.com/vercel-labs/emulate v0.5.0
+`,
+    );
+
+    const result = createVercelScaffold({ cwd, version: "0.5.0" });
+
+    expect(result.updated).toContain("go.mod");
+    expect(readFileSync(join(cwd, "go.mod"), "utf-8")).toContain(`module example.com/app
+
+go 1.24
+
+require github.com/vercel-labs/emulate v0.5.0`);
+  });
+
   it("updates an existing Go dependency to the current scaffold version", () => {
     const cwd = tempDir();
     writeFileSync(
@@ -185,6 +225,22 @@ require (
     expect(() => createVercelScaffold({ cwd, version: "0.5.0", service: "github" })).toThrow(
       "currently supports native services: aws, resend",
     );
+  });
+
+  it("does not leave partial scaffold files when vercel.json validation fails", () => {
+    const cwd = tempDir();
+    writeFileSync(
+      join(cwd, "vercel.json"),
+      JSON.stringify({
+        rewrites: [{ source: "/emulate/:path*", destination: "/other" }],
+      }),
+    );
+
+    expect(() => createVercelScaffold({ cwd, version: "0.5.0" })).toThrow(
+      "vercel.json already has a rewrite for /emulate/:path*",
+    );
+    expect(() => readFileSync(join(cwd, "api/emulate.go"), "utf-8")).toThrow();
+    expect(() => readFileSync(join(cwd, "go.mod"), "utf-8")).toThrow();
   });
 });
 

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const SUPPORTED_VERCEL_SERVICES = ["aws", "resend"] as const;
+const REQUIRED_GO_VERSION = "1.24";
 const DEFAULT_REWRITE = {
   source: "/emulate/:path*",
   destination: "/api/emulate?path=:path*",
@@ -22,6 +23,14 @@ export interface VercelScaffoldResult {
 }
 
 type VercelConfig = Record<string, unknown>;
+
+interface PreparedVercelConfig {
+  relativePath: string;
+  target: string;
+  existed: boolean;
+  changed: boolean;
+  content?: string;
+}
 
 export function vercelInitCommand(options: VercelInitOptions): void {
   try {
@@ -51,6 +60,8 @@ export function vercelInitCommand(options: VercelInitOptions): void {
 export function createVercelScaffold(options: VercelInitOptions): VercelScaffoldResult {
   const cwd = resolve(options.cwd ?? process.cwd());
   const services = parseServiceList(options.service);
+  const force = options.force ?? false;
+  const vercelConfig = prepareVercelConfig(cwd, force);
   const result: VercelScaffoldResult = {
     created: [],
     updated: [],
@@ -60,9 +71,9 @@ export function createVercelScaffold(options: VercelInitOptions): VercelScaffold
 
   mkdirSync(join(cwd, "api"), { recursive: true });
 
-  writeFileIfAllowed(cwd, "api/emulate.go", renderHandler(services), options.force ?? false, result);
+  writeFileIfAllowed(cwd, "api/emulate.go", renderHandler(services), force, result);
   updateGoMod(cwd, options.version, result);
-  updateVercelConfig(cwd, options.force ?? false, result);
+  writePreparedVercelConfig(vercelConfig, result);
 
   return result;
 }
@@ -125,25 +136,30 @@ function updateGoMod(cwd: string, version: string, result: VercelScaffoldResult)
 
   const content = readFileSync(target, "utf-8");
   const existingVersion = getEmulateRequirementVersion(content);
-  if (existingVersion === moduleVersion) {
+  let nextContent = content;
+  if (existingVersion !== moduleVersion) {
+    nextContent = existingVersion
+      ? updateEmulateRequirement(nextContent, moduleVersion)
+      : addEmulateRequirement(nextContent, moduleVersion);
+  }
+  nextContent = ensureGoDirective(nextContent, REQUIRED_GO_VERSION);
+
+  if (nextContent === content) {
     result.unchanged.push(relativePath);
     return;
   }
 
-  const nextContent = existingVersion
-    ? updateEmulateRequirement(content, moduleVersion)
-    : addEmulateRequirement(content, moduleVersion);
   writeFileSync(target, nextContent, "utf-8");
   result.updated.push(relativePath);
 }
 
 function getEmulateRequirementVersion(content: string): string | undefined {
-  return content.match(/^\s*(?:require\s+)?github\.com\/vercel-labs\/emulate\s+(v\S+)/m)?.[1];
+  return content.match(/^[ \t]*(?:require[ \t]+)?github\.com\/vercel-labs\/emulate[ \t]+(v\S+)/m)?.[1];
 }
 
 function updateEmulateRequirement(content: string, moduleVersion: string): string {
   return content.replace(
-    /^(\s*(?:require\s+)?github\.com\/vercel-labs\/emulate\s+)v\S+(\s*(?:\/\/.*)?$)/m,
+    /^([ \t]*(?:require[ \t]+)?github\.com\/vercel-labs\/emulate[ \t]+)v\S+([ \t]*(?:\/\/.*)?$)/m,
     `$1${moduleVersion}$2`,
   );
 }
@@ -157,7 +173,65 @@ function addEmulateRequirement(content: string, moduleVersion: string): string {
   return `${content}${suffix}\nrequire ${dependency}\n`;
 }
 
-function updateVercelConfig(cwd: string, force: boolean, result: VercelScaffoldResult): void {
+function ensureGoDirective(content: string, requiredVersion: string): string {
+  const directive = content.match(/^[ \t]*go[ \t]+(\S+)[ \t]*(?:\/\/.*)?$/m);
+  if (directive) {
+    const existingVersion = directive[1];
+    if (compareGoVersions(existingVersion, requiredVersion) >= 0) {
+      return content;
+    }
+    return content.replace(/^([ \t]*go[ \t]+)\S+([ \t]*(?:\/\/.*)?$)/m, `$1${requiredVersion}$2`);
+  }
+
+  if (/^module[ \t]+\S+[ \t]*(?:\/\/.*)?$/m.test(content)) {
+    return content.replace(
+      /^(module[ \t]+\S+[ \t]*(?:\/\/.*)?)(?:\r?\n)+/m,
+      (_match, moduleLine: string) => `${moduleLine}\n\ngo ${requiredVersion}\n\n`,
+    );
+  }
+
+  const suffix = content.endsWith("\n") ? "" : "\n";
+  return `${content}${suffix}\ngo ${requiredVersion}\n`;
+}
+
+function compareGoVersions(left: string, right: string): number {
+  const leftVersion = parseGoVersion(left);
+  const rightVersion = parseGoVersion(right);
+  if (!leftVersion || !rightVersion) {
+    return left === right ? 0 : -1;
+  }
+  for (const key of ["major", "minor", "patch"] as const) {
+    const diff = leftVersion[key] - rightVersion[key];
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  if (leftVersion.rc === rightVersion.rc) {
+    return 0;
+  }
+  if (leftVersion.rc === undefined) {
+    return 1;
+  }
+  if (rightVersion.rc === undefined) {
+    return -1;
+  }
+  return leftVersion.rc - rightVersion.rc;
+}
+
+function parseGoVersion(version: string): { major: number; minor: number; patch: number; rc?: number } | undefined {
+  const match = version.match(/^(\d+)\.(\d+)(?:\.(\d+))?(?:rc(\d+))?$/);
+  if (!match) {
+    return undefined;
+  }
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: match[3] ? Number(match[3]) : 0,
+    rc: match[4] ? Number(match[4]) : undefined,
+  };
+}
+
+function prepareVercelConfig(cwd: string, force: boolean): PreparedVercelConfig {
   const relativePath = "vercel.json";
   const target = join(cwd, relativePath);
   let config: VercelConfig = {
@@ -187,20 +261,33 @@ function updateVercelConfig(cwd: string, force: boolean, result: VercelScaffoldR
   const hasRewrite = rewriteList.some(isDefaultRewrite);
   const nextRewriteList = moveExistingRewriteBeforeCatchAll(hasRewrite ? rewriteList : insertRewrite(rewriteList));
   if (hasRewrite && !force && nextRewriteList === rewriteList) {
-    result.unchanged.push(relativePath);
-    return;
+    return { relativePath, target, existed, changed: false };
   }
   config.rewrites = nextRewriteList;
 
   if (!("$schema" in config)) {
     config.$schema = "https://openapi.vercel.sh/vercel.json";
   }
-  writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+  return {
+    relativePath,
+    target,
+    existed,
+    changed: true,
+    content: `${JSON.stringify(config, null, 2)}\n`,
+  };
+}
 
-  if (existed) {
-    result.updated.push(relativePath);
+function writePreparedVercelConfig(prepared: PreparedVercelConfig, result: VercelScaffoldResult): void {
+  if (!prepared.changed) {
+    result.unchanged.push(prepared.relativePath);
+    return;
+  }
+  writeFileSync(prepared.target, prepared.content ?? "", "utf-8");
+
+  if (prepared.existed) {
+    result.updated.push(prepared.relativePath);
   } else {
-    result.created.push(relativePath);
+    result.created.push(prepared.relativePath);
   }
 }
 
@@ -272,7 +359,7 @@ function normalizeGoModuleVersion(version: string): string {
 function renderGoMod(moduleVersion: string): string {
   return `module emulate-vercel-preview
 
-go 1.24
+go ${REQUIRED_GO_VERSION}
 
 require github.com/vercel-labs/emulate ${moduleVersion}
 `;
