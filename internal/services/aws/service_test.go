@@ -35,6 +35,25 @@ func TestServiceReturnsS3RESTXMLNotImplemented(t *testing.T) {
 	}
 }
 
+func TestServiceReturnsUnsignedPathStyleS3NotImplemented(t *testing.T) {
+	handler := newTestHandler()
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/photos?list-type=2", nil)
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("Content-Type"); got != "application/xml" {
+		t.Fatalf("content type = %q", got)
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, "<Code>NotImplemented</Code>") || !strings.Contains(body, "s3.ListObjectsV2") {
+		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
 func TestServiceReturnsQueryXMLNotImplemented(t *testing.T) {
 	handler := newTestHandler()
 	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/sqs/", strings.NewReader("Action=CreateQueue&QueueName=jobs"))
@@ -55,6 +74,26 @@ func TestServiceReturnsQueryXMLNotImplemented(t *testing.T) {
 	}
 	body := res.Body.String()
 	if !strings.Contains(body, "<Code>NotImplemented</Code>") || !strings.Contains(body, "sqs.CreateQueue") {
+		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
+func TestServiceAcceptsBearerTokenForQueryShell(t *testing.T) {
+	handler := newTestHandler()
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/sqs/", strings.NewReader("Action=CreateQueue&QueueName=jobs"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer test_token_admin")
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("Content-Type"); got != "application/xml" {
+		t.Fatalf("content type = %q", got)
+	}
+	if body := res.Body.String(); !strings.Contains(body, "sqs.CreateQueue") {
 		t.Fatalf("unexpected body: %s", body)
 	}
 }
@@ -92,7 +131,7 @@ func TestServiceReturnsJSONRPCNotImplemented(t *testing.T) {
 func TestServicePassesThroughNonAWSNotFound(t *testing.T) {
 	handler := newTestHandler()
 	res := httptest.NewRecorder()
-	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/missing", nil))
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodTrace, "/missing", nil))
 
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())

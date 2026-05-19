@@ -98,13 +98,29 @@ func looksLikeAWSRequest(req *http.Request) bool {
 	if strings.Contains(host, "amazonaws.com") || hasKnownServiceLabel(host) {
 		return true
 	}
-	return hasKnownServicePath(req.URL.Path)
+	if hasKnownServicePath(req.URL.Path) {
+		return true
+	}
+	return looksLikeS3RESTRequest(req)
 }
 
 func hasKnownServicePath(pathValue string) bool {
 	first := firstPathSegment(pathValue)
 	switch first {
 	case "cloudformation", "dynamodb", "events", "iam", "kms", "lambda", "logs", "s3", "secretsmanager", "sns", "sqs", "ssm", "states", "sts":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikeS3RESTRequest(req *http.Request) bool {
+	first := firstPathSegment(req.URL.Path)
+	if strings.HasPrefix(first, "_") {
+		return false
+	}
+	switch req.Method {
+	case http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPost, http.MethodDelete:
 		return true
 	default:
 		return false

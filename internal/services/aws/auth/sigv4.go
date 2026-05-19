@@ -117,6 +117,9 @@ func parseAuthorizationHeader(req *http.Request) (Signature, error) {
 		return Signature{}, nil
 	}
 	algorithm := fields[0]
+	if isTokenAuthorizationScheme(algorithm) {
+		return Signature{}, nil
+	}
 	if algorithm != AlgorithmSigV4 {
 		return Signature{}, fmt.Errorf("unsupported SigV4 algorithm %q", algorithm)
 	}
@@ -175,4 +178,13 @@ func splitSignedHeaders(value string) []string {
 		}
 	}
 	return headers
+}
+
+func isTokenAuthorizationScheme(algorithm string) bool {
+	switch strings.ToLower(algorithm) {
+	case "bearer", "token":
+		return true
+	default:
+		return false
+	}
 }

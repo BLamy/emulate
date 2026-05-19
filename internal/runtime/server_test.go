@@ -43,7 +43,7 @@ func TestNewHandlerReturnsJSONNotFound(t *testing.T) {
 	handler := NewHandler(ServerOptions{})
 
 	res := httptest.NewRecorder()
-	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/missing", nil))
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodTrace, "/missing", nil))
 
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())

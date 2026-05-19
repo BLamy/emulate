@@ -67,6 +67,20 @@ func TestResolveRelaxedAllowsUnknownKey(t *testing.T) {
 	}
 }
 
+func TestResolveRelaxedAllowsBearerToken(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "https://sts.amazonaws.com/", nil)
+	req.Header.Set("Authorization", "Bearer test_token_admin")
+
+	ctx := Resolve(req, Options{Mode: ModeRelaxed})
+
+	if ctx.Status != StatusMissing {
+		t.Fatalf("status = %q, want %q", ctx.Status, StatusMissing)
+	}
+	if ctx.Error != nil {
+		t.Fatalf("error = %#v, want nil", ctx.Error)
+	}
+}
+
 func TestResolveKnownKeysUsesCredentialIdentity(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "https://sts.amazonaws.com/", nil)
 	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAKNOWN/20260519/us-east-1/sts/aws4_request, SignedHeaders=host, Signature=abcdef")
