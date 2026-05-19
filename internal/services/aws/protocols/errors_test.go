@@ -44,6 +44,27 @@ func TestSerializeXMLErrorUsesQueryShape(t *testing.T) {
 	}
 }
 
+func TestSerializeXMLErrorDefaultsInternalFailureToReceiver(t *testing.T) {
+	response := SerializeXMLError(AWSError{})
+
+	if response.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusInternalServerError)
+	}
+
+	var parsed struct {
+		Error struct {
+			Type string `xml:"Type"`
+			Code string `xml:"Code"`
+		} `xml:"Error"`
+	}
+	if err := xml.Unmarshal(response.Body, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Error.Type != "Receiver" || parsed.Error.Code != "InternalFailure" {
+		t.Fatalf("unexpected parsed error: %#v", parsed.Error)
+	}
+}
+
 func TestSerializeRESTXMLErrorUsesS3Shape(t *testing.T) {
 	response := SerializeRESTXMLError(AWSError{
 		Code:       "NoSuchBucket",

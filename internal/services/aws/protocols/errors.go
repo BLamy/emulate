@@ -110,7 +110,11 @@ func normalizeAWSError(awsError AWSError) AWSError {
 		awsError.Message = "An internal error occurred."
 	}
 	if awsError.StatusCode == 0 {
-		awsError.StatusCode = http.StatusBadRequest
+		if awsError.Code == "InternalFailure" {
+			awsError.StatusCode = http.StatusInternalServerError
+		} else {
+			awsError.StatusCode = http.StatusBadRequest
+		}
 	}
 	if awsError.Type == "" {
 		if awsError.StatusCode >= 500 {

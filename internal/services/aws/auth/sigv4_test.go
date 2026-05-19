@@ -169,6 +169,75 @@ func TestResolveKnownKeysRejectsBareCredentialScope(t *testing.T) {
 	}
 }
 
+func TestResolveKnownKeysRejectsIncompleteHeaderSignature(t *testing.T) {
+	tests := []struct {
+		name          string
+		authorization string
+	}{
+		{
+			name:          "missing signed headers",
+			authorization: "AWS4-HMAC-SHA256 Credential=AKIAKNOWN/20260519/us-east-1/sts/aws4_request, Signature=abcdef",
+		},
+		{
+			name:          "missing signature",
+			authorization: "AWS4-HMAC-SHA256 Credential=AKIAKNOWN/20260519/us-east-1/sts/aws4_request, SignedHeaders=host",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "https://sts.amazonaws.com/", nil)
+			req.Header.Set("Authorization", test.authorization)
+			store := NewStore(Credential{AccessKeyID: "AKIAKNOWN"})
+
+			ctx := Resolve(req, Options{Mode: ModeKnownKeys, Store: store})
+
+			if ctx.Status != StatusInvalid {
+				t.Fatalf("status = %q, want %q", ctx.Status, StatusInvalid)
+			}
+			if ctx.Error == nil || ctx.Error.Code != "AuthorizationHeaderMalformed" {
+				t.Fatalf("error = %#v, want AuthorizationHeaderMalformed", ctx.Error)
+			}
+		})
+	}
+}
+
+func TestResolveKnownKeysRejectsIncompletePresignedSignature(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{
+			name: "missing algorithm",
+			url:  "https://s3.us-east-1.amazonaws.com/photos?X-Amz-Credential=AKIAKNOWN%2F20260519%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-SignedHeaders=host&X-Amz-Signature=abcdef",
+		},
+		{
+			name: "missing signed headers",
+			url:  "https://s3.us-east-1.amazonaws.com/photos?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAKNOWN%2F20260519%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Signature=abcdef",
+		},
+		{
+			name: "missing signature",
+			url:  "https://s3.us-east-1.amazonaws.com/photos?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAKNOWN%2F20260519%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-SignedHeaders=host",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, test.url, nil)
+			store := NewStore(Credential{AccessKeyID: "AKIAKNOWN"})
+
+			ctx := Resolve(req, Options{Mode: ModeKnownKeys, Store: store})
+
+			if ctx.Status != StatusInvalid {
+				t.Fatalf("status = %q, want %q", ctx.Status, StatusInvalid)
+			}
+			if ctx.Error == nil || ctx.Error.Code != "AuthorizationHeaderMalformed" {
+				t.Fatalf("error = %#v, want AuthorizationHeaderMalformed", ctx.Error)
+			}
+		})
+	}
+}
+
 func TestResolveInvalidModeIsExplicit(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "https://sts.amazonaws.com/", nil)
 	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAKNOWN/20260519/us-east-1/sts/aws4_request, SignedHeaders=host, Signature=abcdef")

@@ -76,7 +76,7 @@ func parsePresignedSigV4(req *http.Request) (Signature, error) {
 	query := req.URL.Query()
 	algorithm := strings.TrimSpace(query.Get("X-Amz-Algorithm"))
 	if algorithm == "" {
-		algorithm = AlgorithmSigV4
+		return Signature{}, fmt.Errorf("missing SigV4 algorithm")
 	}
 	if algorithm != AlgorithmSigV4 {
 		return Signature{}, fmt.Errorf("unsupported SigV4 algorithm %q", algorithm)
@@ -86,13 +86,21 @@ func parsePresignedSigV4(req *http.Request) (Signature, error) {
 	if err != nil {
 		return Signature{}, err
 	}
+	signedHeaders := splitSignedHeaders(query.Get("X-Amz-SignedHeaders"))
+	if len(signedHeaders) == 0 {
+		return Signature{}, fmt.Errorf("missing SigV4 signed headers")
+	}
+	signatureValue := strings.TrimSpace(query.Get("X-Amz-Signature"))
+	if signatureValue == "" {
+		return Signature{}, fmt.Errorf("missing SigV4 signature")
+	}
 	return Signature{
 		Present:        true,
 		Algorithm:      algorithm,
 		AccessKeyID:    accessKeyID,
 		Scope:          scope,
-		SignedHeaders:  splitSignedHeaders(query.Get("X-Amz-SignedHeaders")),
-		SignatureValue: query.Get("X-Amz-Signature"),
+		SignedHeaders:  signedHeaders,
+		SignatureValue: signatureValue,
 		SessionToken:   query.Get("X-Amz-Security-Token"),
 		Presigned:      true,
 		RawCredential:  rawCredential,
@@ -118,13 +126,21 @@ func parseAuthorizationHeader(req *http.Request) (Signature, error) {
 	if err != nil {
 		return Signature{}, err
 	}
+	signedHeaders := splitSignedHeaders(params["SignedHeaders"])
+	if len(signedHeaders) == 0 {
+		return Signature{}, fmt.Errorf("missing SigV4 signed headers")
+	}
+	signatureValue := strings.TrimSpace(params["Signature"])
+	if signatureValue == "" {
+		return Signature{}, fmt.Errorf("missing SigV4 signature")
+	}
 	return Signature{
 		Present:        true,
 		Algorithm:      algorithm,
 		AccessKeyID:    accessKeyID,
 		Scope:          scope,
-		SignedHeaders:  splitSignedHeaders(params["SignedHeaders"]),
-		SignatureValue: params["Signature"],
+		SignedHeaders:  signedHeaders,
+		SignatureValue: signatureValue,
 		SessionToken:   req.Header.Get("X-Amz-Security-Token"),
 		RawCredential:  rawCredential,
 	}, nil
