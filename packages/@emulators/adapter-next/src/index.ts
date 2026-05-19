@@ -98,6 +98,11 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
+interface ResponseRewriteOptions {
+  publicPrefix: string;
+  upstreamPrefix?: string;
+}
+
 function resolvePlugin(mod: EmulatorModule): ServicePlugin {
   const plugin = mod.plugin ?? mod.default;
   if (!plugin) {
@@ -157,11 +162,17 @@ function restoreFromSnapshot(apps: Map<string, ServiceApp>, snapshot: FullSnapsh
 function detectPrefix(url: string, pathSegments: string[]): string {
   const parsed = new URL(url);
   const fullPath = parsed.pathname;
-  const restPath = "/" + pathSegments.join("/");
-  const idx = fullPath.lastIndexOf(restPath);
-  if (idx > 0) {
-    return fullPath.slice(0, idx);
+  const restPaths = ["/" + encodePathSegments(pathSegments).join("/"), "/" + pathSegments.join("/")];
+
+  for (const restPath of new Set(restPaths)) {
+    if (fullPath === restPath) {
+      return "";
+    }
+    if (fullPath.endsWith(restPath)) {
+      return fullPath.slice(0, fullPath.length - restPath.length);
+    }
   }
+
   throw new Error(`Could not detect mount path from URL: ${url}`);
 }
 
@@ -209,6 +220,14 @@ function buildProxyUrl(targetConfig: EmulateProxyTargetConfig, forwardedPathSegm
   target.pathname = parts.length > 0 ? `/${parts.join("/")}` : "/";
   target.search = search;
   return target;
+}
+
+function buildProxyUpstreamPrefix(targetConfig: EmulateProxyTargetConfig): string {
+  const target = new URL(targetConfig.target.toString());
+  const parts = [...splitPath(target.pathname), ...splitPath(targetConfig.pathPrefix)];
+  if (parts.length === 0) return "";
+  target.pathname = `/${parts.join("/")}`;
+  return normalizeMountPath(target.pathname);
 }
 
 function copyForwardHeaders(request: Request): Headers {
@@ -286,13 +305,41 @@ function buildProxyRequest(request: Request, target: URL, headers: Headers): Req
   return new Request(target.toString(), init);
 }
 
-async function rewriteResponse(response: Response, servicePrefix: string): Promise<Response> {
+function hasPathPrefix(path: string, prefix: string): boolean {
+  return (
+    path === prefix || path.startsWith(`${prefix}/`) || path.startsWith(`${prefix}?`) || path.startsWith(`${prefix}#`)
+  );
+}
+
+function prefixRootPath(prefix: string, path: string): string {
+  const normalizedPrefix = normalizeMountPath(prefix);
+  if (!normalizedPrefix) return path || "/";
+  if (!path || path === "/") return normalizedPrefix;
+  if (path.startsWith("?") || path.startsWith("#")) return `${normalizedPrefix}${path}`;
+  return `${normalizedPrefix}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function rewriteRootPath(path: string, options: ResponseRewriteOptions): string {
+  const publicPrefix = normalizeMountPath(options.publicPrefix);
+  const upstreamPrefix = normalizeMountPath(options.upstreamPrefix ?? "");
+
+  if (publicPrefix && hasPathPrefix(path, publicPrefix)) {
+    return path;
+  }
+
+  if (upstreamPrefix && hasPathPrefix(path, upstreamPrefix)) {
+    return prefixRootPath(publicPrefix, path.slice(upstreamPrefix.length));
+  }
+
+  return prefixRootPath(publicPrefix, path);
+}
+
+async function rewriteResponse(response: Response, options: ResponseRewriteOptions): Promise<Response> {
   const contentType = response.headers.get("Content-Type") ?? "";
   const location = response.headers.get("Location");
   const isHtml = contentType.includes("text/html");
   const locationChanged = location != null && location.startsWith("/");
-  const rewrittenLocation =
-    locationChanged && !location.startsWith(servicePrefix) ? servicePrefix + location : location;
+  const rewrittenLocation = locationChanged ? rewriteRootPath(location, options) : location;
 
   if (!isHtml) {
     if (!locationChanged || rewrittenLocation === location) return response;
@@ -307,16 +354,12 @@ async function rewriteResponse(response: Response, servicePrefix: string): Promi
 
   let html = await response.text();
 
-  // Skip paths already carrying the service prefix to avoid double-prefixing
-  // (e.g., redirects that already went through rewriting).
   html = html.replace(/(action|href)="(\/[^"]*?)"/g, (_match, attr, path) => {
-    if (path.startsWith(servicePrefix)) return `${attr}="${path}"`;
-    return `${attr}="${servicePrefix}${path}"`;
+    return `${attr}="${rewriteRootPath(path, options)}"`;
   });
 
   html = html.replace(/url\('(\/[^']*?)'\)/g, (_match, path) => {
-    if (path.startsWith(servicePrefix)) return `url('${path}')`;
-    return `url('${servicePrefix}${path}')`;
+    return `url('${rewriteRootPath(path, options)}')`;
   });
 
   const headers = new Headers(response.headers);
@@ -449,7 +492,7 @@ export function createEmulateHandler(config: EmulateHandlerConfig) {
     let response = await sa.app.fetch(strippedReq);
 
     const servicePrefix = `${mountPath!}/${serviceName}`;
-    response = await rewriteResponse(response, servicePrefix);
+    response = await rewriteResponse(response, { publicPrefix: servicePrefix });
 
     if (persistence && MUTATING_METHODS.has(req.method)) {
       enqueueSave();
@@ -513,6 +556,7 @@ export function createEmulateProxy(config: EmulateProxyConfig) {
     }
 
     const targetUrl = buildProxyUrl(targetConfig, forwardedPathSegments, url.search);
+    const upstreamPrefix = buildProxyUpstreamPrefix(targetConfig);
     const context: EmulateProxyContext = {
       service,
       mountPath,
@@ -524,7 +568,7 @@ export function createEmulateProxy(config: EmulateProxyConfig) {
     const headers = await buildProxyHeaders(req, context, config.headers, targetConfig.headers);
     const proxyRequest = buildProxyRequest(req, targetUrl, headers);
     const response = await fetch(proxyRequest);
-    return rewriteResponse(response, publicPrefix);
+    return rewriteResponse(response, { publicPrefix, upstreamPrefix });
   }
 
   const handler: RouteHandler = handleRequest;

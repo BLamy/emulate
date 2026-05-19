@@ -164,6 +164,65 @@ describe("createEmulateProxy", () => {
     expect(response.headers.get("Location")).toBe("/emulate/aws/sqs");
   });
 
+  it("strips internal target prefixes from rewritten single target responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          '<form action="/runtime/v1/aws/sqs"><a href="/runtime/v1/aws/sqs">SQS</a><style>.icon{background:url(\'/runtime/v1/_emulate/favicon.ico\')}</style></form>',
+          {
+            headers: {
+              "Content-Type": "text/html",
+              Location: "/runtime/v1/aws/sqs",
+            },
+          },
+        );
+      }),
+    );
+
+    const proxy = createEmulateProxy({
+      routePrefix: "/emulate",
+      target: {
+        target: "http://127.0.0.1:4020/runtime",
+        pathPrefix: "/v1",
+      },
+    });
+
+    const response = await proxy.GET(new Request("https://preview.example.com/emulate/aws/sqs"), ctx(["aws", "sqs"]));
+
+    expect(response.headers.get("Location")).toBe("/emulate/aws/sqs");
+    await expect(response.text()).resolves.toBe(
+      '<form action="/emulate/aws/sqs"><a href="/emulate/aws/sqs">SQS</a><style>.icon{background:url(\'/emulate/_emulate/favicon.ico\')}</style></form>',
+    );
+  });
+
+  it("detects the public prefix when catch-all params contain decoded characters", async () => {
+    let forwardedRequest: Request | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        forwardedRequest = input as Request;
+        return new Response("ok");
+      }),
+    );
+
+    const proxy = createEmulateProxy({
+      targets: {
+        resend: "http://127.0.0.1:4018",
+      },
+    });
+
+    const response = await proxy.GET(
+      new Request("https://preview.example.com/emulate/resend/emails/email%201?expand=html"),
+      ctx(["resend", "emails", "email 1"]),
+    );
+
+    expect(response.status).toBe(200);
+    expect(forwardedRequest).not.toBeNull();
+    expect(forwardedRequest!.url).toBe("http://127.0.0.1:4018/emails/email%201?expand=html");
+    expect(forwardedRequest!.headers.get("x-forwarded-prefix")).toBe("/emulate/resend");
+  });
+
   it("allows config and target headers to extend the forwarded header contract", async () => {
     let forwardedRequest: Request | null = null;
     vi.stubGlobal(
