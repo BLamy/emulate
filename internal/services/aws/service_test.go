@@ -54,6 +54,25 @@ func TestServiceReturnsUnsignedPathStyleS3NotImplemented(t *testing.T) {
 	}
 }
 
+func TestServiceReturnsLegacyS3PathStyleNotImplementedInConservativeMode(t *testing.T) {
+	handler := newTestHandler()
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/s3/photos", nil)
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("Content-Type"); got != "application/xml" {
+		t.Fatalf("content type = %q", got)
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, "<Code>NotImplemented</Code>") || !strings.Contains(body, "s3.ListObjects") {
+		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
 func TestServiceReturnsUnsignedS3SubresourceNotImplemented(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -193,6 +212,31 @@ func TestServiceDoesNotTreatSignedNonS3ServicePathAsS3(t *testing.T) {
 		t.Fatalf("unexpected body: %#v", body)
 	}
 	if strings.Contains(res.Body.String(), "s3.GetObject") {
+		t.Fatalf("unexpected S3 fallback response: %s", res.Body.String())
+	}
+}
+
+func TestServiceDoesNotTreatKnownNonS3ServiceRootAsS3(t *testing.T) {
+	handler := newTestHandler()
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/lambda", nil)
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("Content-Type"); got != "application/x-amz-json-1.0" {
+		t.Fatalf("content type = %q", got)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["__type"] != "com.amazonaws.lambda#NotImplemented" {
+		t.Fatalf("unexpected body: %#v", body)
+	}
+	if strings.Contains(res.Body.String(), "s3.ListObjects") {
 		t.Fatalf("unexpected S3 fallback response: %s", res.Body.String())
 	}
 }

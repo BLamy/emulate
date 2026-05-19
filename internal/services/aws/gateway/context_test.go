@@ -169,6 +169,28 @@ func TestBuildContextSignedNonS3ServicePathDoesNotFallBackToS3(t *testing.T) {
 	}
 }
 
+func TestBuildContextKnownNonS3ServiceRootDoesNotFallBackToS3(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/lambda", nil)
+
+	ctx, err := BuildContext(req, nil, fixedOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if ctx.Service != "lambda" {
+		t.Fatalf("service = %q, want lambda", ctx.Service)
+	}
+	if ctx.Protocol != protocols.ProtocolUnknown {
+		t.Fatalf("protocol = %q, want %q", ctx.Protocol, protocols.ProtocolUnknown)
+	}
+	if ctx.Action != "" {
+		t.Fatalf("action = %q, want empty", ctx.Action)
+	}
+	if ctx.S3 != nil {
+		t.Fatalf("S3 route = %#v, want nil", ctx.S3)
+	}
+}
+
 func TestBuildContextS3CopyObject(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "http://127.0.0.1/photos/docs/copy.txt", nil)
 	req.Header.Set("x-amz-copy-source", "/photos/docs/source.txt")

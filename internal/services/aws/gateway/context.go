@@ -228,7 +228,44 @@ func shouldTreatAsS3(req *http.Request, hostService string, pathService string, 
 	if credentialService != "" {
 		return false
 	}
+	if pathService != "" && isServiceRootPath(req.URL.Path) && !hasS3RequestHint(req) {
+		return false
+	}
 	return hostService == ""
+}
+
+func isServiceRootPath(pathValue string) bool {
+	trimmed := strings.Trim(pathValue, "/")
+	if trimmed == "" {
+		return false
+	}
+	_, rest, _ := strings.Cut(trimmed, "/")
+	return rest == ""
+}
+
+func hasS3RequestHint(req *http.Request) bool {
+	query := req.URL.Query()
+	if query.Get("list-type") == "2" {
+		return true
+	}
+	for _, key := range []string{
+		"acl",
+		"delete",
+		"lifecycle",
+		"location",
+		"notification",
+		"policy",
+		"tagging",
+		"uploadId",
+		"uploads",
+		"versioning",
+		"website",
+	} {
+		if _, ok := query[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func detectHost(host string) hostDetection {

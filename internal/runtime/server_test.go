@@ -107,6 +107,20 @@ func TestNewHandlerAWSOnlyUsesS3PathFallback(t *testing.T) {
 	}
 }
 
+func TestNewHandlerMultiServiceKeepsLegacyS3Path(t *testing.T) {
+	handler := NewHandler(ServerOptions{Services: []string{"aws", "github"}})
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/s3/photos", nil))
+
+	if res.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "s3.ListObjects") {
+		t.Fatalf("unexpected body: %s", res.Body.String())
+	}
+}
+
 func TestNewHandlerMultiServiceDoesNotTreatNestedKnownServicePathAsS3(t *testing.T) {
 	handler := NewHandler(ServerOptions{Services: []string{"aws", "github"}})
 

@@ -128,6 +128,9 @@ func hasAWSHeader(req *http.Request) bool {
 
 func hasKnownServiceEndpointPath(pathValue string) bool {
 	first, rest := splitFirstPathSegment(pathValue)
+	if first == "s3" {
+		return true
+	}
 	if rest != "" {
 		return false
 	}
