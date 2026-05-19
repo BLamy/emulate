@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
@@ -60,6 +61,15 @@ type AssetSnapshot struct {
 
 type StoreSnapshot struct {
 	Assets []AssetSnapshot `json:"assets"`
+}
+
+type FullAssetSnapshot struct {
+	Metadata Metadata `json:"metadata"`
+	Body     []byte   `json:"body"`
+}
+
+type FullStoreSnapshot struct {
+	Assets []FullAssetSnapshot `json:"assets"`
 }
 
 type asset struct {
@@ -204,6 +214,58 @@ func (store *Store) Snapshot() StoreSnapshot {
 	return snapshot
 }
 
+func (store *Store) FullSnapshot() FullStoreSnapshot {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+
+	ids := store.sortedIDsLocked()
+	snapshot := FullStoreSnapshot{Assets: make([]FullAssetSnapshot, 0, len(ids))}
+	for _, id := range ids {
+		asset := store.assets[id]
+		snapshot.Assets = append(snapshot.Assets, FullAssetSnapshot{
+			Metadata: cloneMetadata(asset.metadata),
+			Body:     append([]byte(nil), asset.body...),
+		})
+	}
+	return snapshot
+}
+
+func (store *Store) RestoreFullSnapshot(snapshot FullStoreSnapshot) error {
+	next := make(map[string]asset, len(snapshot.Assets))
+	for _, item := range snapshot.Assets {
+		if item.Metadata.ID == "" {
+			return fmt.Errorf("asset id is required")
+		}
+		if _, ok := next[item.Metadata.ID]; ok {
+			return fmt.Errorf("duplicate asset id %q", item.Metadata.ID)
+		}
+		if err := validateFullAssetSnapshot(item); err != nil {
+			return fmt.Errorf("restore asset %q: %w", item.Metadata.ID, err)
+		}
+		next[item.Metadata.ID] = asset{
+			metadata: cloneMetadata(item.Metadata),
+			body:     append([]byte(nil), item.Body...),
+		}
+	}
+
+	store.mu.Lock()
+	store.assets = next
+	store.mu.Unlock()
+	return nil
+}
+
+func (store *Store) MarshalFullSnapshot() ([]byte, error) {
+	return json.MarshalIndent(store.FullSnapshot(), "", "  ")
+}
+
+func (store *Store) RestoreFullJSON(raw []byte) error {
+	var snapshot FullStoreSnapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return err
+	}
+	return store.RestoreFullSnapshot(snapshot)
+}
+
 func (store *Store) sortedIDsLocked() []string {
 	ids := make([]string, 0, len(store.assets))
 	for id := range store.assets {
@@ -241,6 +303,29 @@ func buildMetadata(id string, body []byte, options PutOptions, now func() time.T
 		LastModified:   lastModified,
 		UserMetadata:   cloneStringMap(options.UserMetadata),
 	}
+}
+
+func validateFullAssetSnapshot(item FullAssetSnapshot) error {
+	if item.Metadata.ContentLength != int64(len(item.Body)) {
+		return fmt.Errorf("content length %d does not match body length %d", item.Metadata.ContentLength, len(item.Body))
+	}
+	if item.Metadata.ChecksumMD5 != "" && item.Metadata.ChecksumMD5 != checksumMD5Hex(item.Body) {
+		return fmt.Errorf("md5 checksum mismatch")
+	}
+	if item.Metadata.ChecksumSHA256 != "" && item.Metadata.ChecksumSHA256 != checksumSHA256Hex(item.Body) {
+		return fmt.Errorf("sha256 checksum mismatch")
+	}
+	return nil
+}
+
+func checksumMD5Hex(body []byte) string {
+	sum := md5.Sum(body)
+	return hex.EncodeToString(sum[:])
+}
+
+func checksumSHA256Hex(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
 }
 
 func cloneMetadata(metadata Metadata) Metadata {

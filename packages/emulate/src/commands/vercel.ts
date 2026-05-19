@@ -124,17 +124,28 @@ function updateGoMod(cwd: string, version: string, result: VercelScaffoldResult)
   }
 
   const content = readFileSync(target, "utf-8");
-  if (hasEmulateRequirement(content)) {
+  const existingVersion = getEmulateRequirementVersion(content);
+  if (existingVersion === moduleVersion) {
     result.unchanged.push(relativePath);
     return;
   }
 
-  writeFileSync(target, addEmulateRequirement(content, moduleVersion), "utf-8");
+  const nextContent = existingVersion
+    ? updateEmulateRequirement(content, moduleVersion)
+    : addEmulateRequirement(content, moduleVersion);
+  writeFileSync(target, nextContent, "utf-8");
   result.updated.push(relativePath);
 }
 
-function hasEmulateRequirement(content: string): boolean {
-  return /^\s*(?:require\s+)?github\.com\/vercel-labs\/emulate\s+v\S+/m.test(content);
+function getEmulateRequirementVersion(content: string): string | undefined {
+  return content.match(/^\s*(?:require\s+)?github\.com\/vercel-labs\/emulate\s+(v\S+)/m)?.[1];
+}
+
+function updateEmulateRequirement(content: string, moduleVersion: string): string {
+  return content.replace(
+    /^(\s*(?:require\s+)?github\.com\/vercel-labs\/emulate\s+)v\S+(\s*(?:\/\/.*)?$)/m,
+    `$1${moduleVersion}$2`,
+  );
 }
 
 function addEmulateRequirement(content: string, moduleVersion: string): string {
@@ -174,16 +185,12 @@ function updateVercelConfig(cwd: string, force: boolean, result: VercelScaffoldR
   }
 
   const hasRewrite = rewriteList.some(isDefaultRewrite);
-  if (hasRewrite && !force) {
-    const orderedRewriteList = moveExistingRewriteBeforeCatchAll(rewriteList);
-    if (orderedRewriteList === rewriteList) {
-      result.unchanged.push(relativePath);
-      return;
-    }
-    config.rewrites = orderedRewriteList;
-  } else {
-    config.rewrites = hasRewrite ? rewriteList : insertRewrite(rewriteList);
+  const nextRewriteList = moveExistingRewriteBeforeCatchAll(hasRewrite ? rewriteList : insertRewrite(rewriteList));
+  if (hasRewrite && !force && nextRewriteList === rewriteList) {
+    result.unchanged.push(relativePath);
+    return;
   }
+  config.rewrites = nextRewriteList;
 
   if (!("$schema" in config)) {
     config.$schema = "https://openapi.vercel.sh/vercel.json";

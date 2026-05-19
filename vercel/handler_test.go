@@ -165,6 +165,49 @@ func TestHandlerLoadsAndSavesPerServiceSnapshots(t *testing.T) {
 	}
 }
 
+func TestHandlerLoadsAndSavesAWSS3ObjectSnapshots(t *testing.T) {
+	persistence := &memoryPersistence{snapshots: map[string][]byte{}}
+	handler := NewHandler(Options{
+		Services:    []string{"aws"},
+		Persistence: persistence,
+	})
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"https://preview.example.com/emulate/aws/emulate-default/docs/persistent.txt",
+		strings.NewReader("persistent object"),
+	)
+	req.Host = "preview.example.com"
+	req.Header.Set("Content-Type", "text/plain")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("put status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if len(persistence.snapshots["aws"]) == 0 {
+		t.Fatal("missing aws snapshot")
+	}
+
+	restored := NewHandler(Options{
+		Services:    []string{"aws"},
+		Persistence: persistence,
+	})
+	req = httptest.NewRequest(http.MethodGet, "https://preview.example.com/emulate/aws/emulate-default/docs/persistent.txt", nil)
+	req.Host = "preview.example.com"
+	res = httptest.NewRecorder()
+	restored.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("get status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if res.Body.String() != "persistent object" {
+		t.Fatalf("body = %q", res.Body.String())
+	}
+	if got := res.Header().Get("Content-Type"); got != "text/plain" {
+		t.Fatalf("content type = %q", got)
+	}
+}
+
 func createEmail(t *testing.T, handler http.Handler, subject string) {
 	t.Helper()
 	req := newJSONRequest(

@@ -3,6 +3,7 @@ package runtime
 import (
 	"net/http"
 
+	coreassets "github.com/vercel-labs/emulate/internal/core/assets"
 	corehttp "github.com/vercel-labs/emulate/internal/core/http"
 	"github.com/vercel-labs/emulate/internal/core/store"
 	"github.com/vercel-labs/emulate/internal/core/ui"
@@ -17,15 +18,17 @@ type ServerOptions struct {
 	BaseURL    string
 	Services   []string
 	Store      *store.Store
+	AssetStore *coreassets.Store
 	ResendSeed *resend.SeedConfig
 }
 
 type Server struct {
-	Handler  http.Handler
-	Store    *store.Store
-	Version  string
-	BaseURL  string
-	Services []string
+	Handler    http.Handler
+	Store      *store.Store
+	AssetStore *coreassets.Store
+	Version    string
+	BaseURL    string
+	Services   []string
 }
 
 func NewHandler(options ServerOptions) http.Handler {
@@ -45,6 +48,10 @@ func NewServer(options ServerOptions) *Server {
 	runtimeStore := options.Store
 	if runtimeStore == nil {
 		runtimeStore = store.New()
+	}
+	assetStore := options.AssetStore
+	if assetStore == nil {
+		assetStore = coreassets.New()
 	}
 
 	router := corehttp.NewRouter()
@@ -68,6 +75,7 @@ func NewServer(options ServerOptions) *Server {
 		aws.Register(router, aws.Options{
 			Store:          runtimeStore,
 			S3PathFallback: len(services) == 1,
+			AssetStore:     assetStore,
 			BaseURL:        options.BaseURL,
 		})
 	}
@@ -82,11 +90,12 @@ func NewServer(options ServerOptions) *Server {
 	})
 
 	return &Server{
-		Handler:  router,
-		Store:    runtimeStore,
-		Version:  version,
-		BaseURL:  options.BaseURL,
-		Services: services,
+		Handler:    router,
+		Store:      runtimeStore,
+		AssetStore: assetStore,
+		Version:    version,
+		BaseURL:    options.BaseURL,
+		Services:   services,
 	}
 }
 

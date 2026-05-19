@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	coreassets "github.com/vercel-labs/emulate/internal/core/assets"
 	corestore "github.com/vercel-labs/emulate/internal/core/store"
 	emuruntime "github.com/vercel-labs/emulate/internal/runtime"
 )
@@ -53,6 +54,11 @@ type Runtime struct {
 
 	mu      sync.Mutex
 	servers map[string]*emuruntime.Server
+}
+
+type persistentSnapshot struct {
+	Store  *corestore.StoreSnapshot      `json:"store,omitempty"`
+	Assets *coreassets.FullStoreSnapshot `json:"assets,omitempty"`
 }
 
 func SupportedServices() []string {
@@ -113,7 +119,7 @@ func (rt *Runtime) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	server.Handler.ServeHTTP(recorder, forwarded)
 
 	if rt.persistence != nil && isMutating(r.Method) && recorder.statusOrDefault() < http.StatusInternalServerError {
-		snapshot, err := server.Store.MarshalSnapshot()
+		snapshot, err := marshalPersistentSnapshot(server.Store, server.AssetStore)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
 			return
@@ -188,26 +194,56 @@ func (rt *Runtime) serverFor(ctx context.Context, service string, baseURL string
 	}
 
 	runtimeStore := corestore.New()
+	assetStore := coreassets.New()
 	if rt.persistence != nil {
 		raw, err := rt.persistence.Load(ctx, service)
 		if err != nil {
 			return nil, err
 		}
 		if len(bytes.TrimSpace(raw)) > 0 {
-			if err := runtimeStore.RestoreJSON(raw); err != nil {
+			if err := restorePersistentSnapshot(raw, runtimeStore, assetStore); err != nil {
 				return nil, err
 			}
 		}
 	}
 
 	server := emuruntime.NewServer(emuruntime.ServerOptions{
-		Version:  rt.version,
-		BaseURL:  baseURL,
-		Services: []string{service},
-		Store:    runtimeStore,
+		Version:    rt.version,
+		BaseURL:    baseURL,
+		Services:   []string{service},
+		Store:      runtimeStore,
+		AssetStore: assetStore,
 	})
 	rt.servers[key] = server
 	return server, nil
+}
+
+func marshalPersistentSnapshot(runtimeStore *corestore.Store, assetStore *coreassets.Store) ([]byte, error) {
+	storeSnapshot := runtimeStore.Snapshot()
+	assetSnapshot := assetStore.FullSnapshot()
+	return json.MarshalIndent(persistentSnapshot{
+		Store:  &storeSnapshot,
+		Assets: &assetSnapshot,
+	}, "", "  ")
+}
+
+func restorePersistentSnapshot(raw []byte, runtimeStore *corestore.Store, assetStore *coreassets.Store) error {
+	var snapshot persistentSnapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return err
+	}
+	if snapshot.Store == nil {
+		return runtimeStore.RestoreJSON(raw)
+	}
+	if err := runtimeStore.Restore(*snapshot.Store); err != nil {
+		return err
+	}
+	if snapshot.Assets != nil {
+		if err := assetStore.RestoreFullSnapshot(*snapshot.Assets); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func cloneForwardedRequest(r *http.Request, restPath string, query url.Values, publicPath string, publicPrefix string, service string) *http.Request {

@@ -171,6 +171,40 @@ func TestStoreSnapshotUsesStableReferences(t *testing.T) {
 	}
 }
 
+func TestStoreFullSnapshotRoundTripsBodies(t *testing.T) {
+	store := New(WithClock(fixedClock()))
+	if _, err := store.PutBytes("alpha", []byte{0, 1, 255, 'a'}, PutOptions{
+		Purpose:      "aws.s3.object",
+		ContentType:  "application/octet-stream",
+		UserMetadata: map[string]string{"source": "test"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := store.MarshalFullSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restored := New()
+	if err := restored.RestoreFullJSON(raw); err != nil {
+		t.Fatal(err)
+	}
+	body, metadata, ok := restored.Bytes("alpha")
+	if !ok {
+		t.Fatal("restored asset missing")
+	}
+	if !bytes.Equal(body, []byte{0, 1, 255, 'a'}) {
+		t.Fatalf("body = %v", body)
+	}
+	if metadata.ContentType != "application/octet-stream" || metadata.Purpose != "aws.s3.object" {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+	if metadata.UserMetadata["source"] != "test" {
+		t.Fatalf("user metadata = %#v", metadata.UserMetadata)
+	}
+}
+
 func TestStoreListDeleteAndReset(t *testing.T) {
 	store := New(WithClock(fixedClock()))
 	if _, err := store.PutBytes("b", []byte("b"), PutOptions{}); err != nil {
