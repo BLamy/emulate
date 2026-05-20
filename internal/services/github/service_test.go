@@ -1,0 +1,178 @@
+package github
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	corehttp "github.com/vercel-labs/emulate/internal/core/http"
+	corestore "github.com/vercel-labs/emulate/internal/core/store"
+)
+
+const testBaseURL = "http://localhost:4000"
+
+func TestGitHubCurrentUserUsesDefaultToken(t *testing.T) {
+	handler := newGitHubTestHandler(nil)
+	res := doGitHubJSON(handler, http.MethodGet, "/user", "", "Bearer test_token_admin")
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Login string `json:"login"`
+		Email string `json:"email"`
+	}
+	decodeGitHubBody(t, res, &body)
+	if body.Login != "admin" || body.Email != "admin@localhost" {
+		t.Fatalf("unexpected user: %#v", body)
+	}
+}
+
+func TestGitHubReposIssuesCommentsAndPulls(t *testing.T) {
+	handler := newGitHubTestHandler(&SeedConfig{
+		Users: []UserSeed{{Login: "octocat", Name: "The Octocat", Email: "octocat@github.com"}},
+		Repos: []RepoSeed{{Owner: "octocat", Name: "hello-world", Description: "Hello", Topics: []string{"hello"}, Language: "Go"}},
+	})
+
+	repo := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world", "", "Bearer test_token_user1")
+	if repo.Code != http.StatusOK {
+		t.Fatalf("repo status = %d, body = %s", repo.Code, repo.Body.String())
+	}
+	var repoBody struct {
+		FullName      string `json:"full_name"`
+		DefaultBranch string `json:"default_branch"`
+	}
+	decodeGitHubBody(t, repo, &repoBody)
+	if repoBody.FullName != "octocat/hello-world" || repoBody.DefaultBranch != "main" {
+		t.Fatalf("unexpected repo: %#v", repoBody)
+	}
+
+	branches := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world/branches", "", "Bearer test_token_user1")
+	if branches.Code != http.StatusOK || !strings.Contains(branches.Body.String(), `"name":"main"`) {
+		t.Fatalf("unexpected branches: status = %d, body = %s", branches.Code, branches.Body.String())
+	}
+
+	issue := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/issues", `{"title":"Bug","body":"broken"}`, "Bearer test_token_user1")
+	if issue.Code != http.StatusCreated {
+		t.Fatalf("issue status = %d, body = %s", issue.Code, issue.Body.String())
+	}
+	var issueBody struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+	}
+	decodeGitHubBody(t, issue, &issueBody)
+	if issueBody.Number != 1 || issueBody.Title != "Bug" {
+		t.Fatalf("unexpected issue: %#v", issueBody)
+	}
+
+	comment := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/issues/1/comments", `{"body":"confirmed"}`, "Bearer test_token_user1")
+	if comment.Code != http.StatusCreated || !strings.Contains(comment.Body.String(), "confirmed") {
+		t.Fatalf("comment status = %d, body = %s", comment.Code, comment.Body.String())
+	}
+
+	ref := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/git/refs", `{"ref":"refs/heads/feature","sha":"abc123"}`, "Bearer test_token_user1")
+	if ref.Code != http.StatusCreated {
+		t.Fatalf("ref status = %d, body = %s", ref.Code, ref.Body.String())
+	}
+
+	pr := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/pulls", `{"title":"Feature","head":"feature","base":"main"}`, "Bearer test_token_user1")
+	if pr.Code != http.StatusCreated {
+		t.Fatalf("pull status = %d, body = %s", pr.Code, pr.Body.String())
+	}
+	if !strings.Contains(pr.Body.String(), `"number":2`) {
+		t.Fatalf("unexpected pull body: %s", pr.Body.String())
+	}
+}
+
+func TestGitHubOAuthIssuesUsableToken(t *testing.T) {
+	handler := newGitHubTestHandler(&SeedConfig{
+		Users: []UserSeed{{Login: "octocat", Email: "octocat@github.com"}},
+		OAuthApps: []OAuthAppSeed{{
+			ClientID:     "client-id",
+			ClientSecret: "client-secret",
+			Name:         "Test App",
+			RedirectURIs: []string{"http://localhost:3000/callback"},
+		}},
+	})
+
+	form := url.Values{
+		"login":        {"octocat"},
+		"redirect_uri": {"http://localhost:3000/callback"},
+		"scope":        {"repo user"},
+		"state":        {"state-1"},
+		"client_id":    {"client-id"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/login/oauth/callback", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusFound {
+		t.Fatalf("callback status = %d, body = %s", res.Code, res.Body.String())
+	}
+	location, err := url.Parse(res.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := location.Query().Get("code")
+	if code == "" || location.Query().Get("state") != "state-1" {
+		t.Fatalf("unexpected callback location: %s", location.String())
+	}
+
+	token := doGitHubJSON(handler, http.MethodPost, "/login/oauth/access_token", `{"code":"`+code+`","client_id":"client-id","client_secret":"client-secret"}`, "")
+	if token.Code != http.StatusOK {
+		t.Fatalf("token status = %d, body = %s", token.Code, token.Body.String())
+	}
+	var tokenBody struct {
+		AccessToken string `json:"access_token"`
+		TokenType   string `json:"token_type"`
+	}
+	decodeGitHubBody(t, token, &tokenBody)
+	if tokenBody.AccessToken == "" || tokenBody.TokenType != "bearer" {
+		t.Fatalf("unexpected token: %#v", tokenBody)
+	}
+
+	user := doGitHubJSON(handler, http.MethodGet, "/user", "", "Bearer "+tokenBody.AccessToken)
+	if user.Code != http.StatusOK || !strings.Contains(user.Body.String(), `"login":"octocat"`) {
+		t.Fatalf("user status = %d, body = %s", user.Code, user.Body.String())
+	}
+}
+
+func newGitHubTestHandler(seed *SeedConfig) http.Handler {
+	router := corehttp.NewRouter()
+	Register(router, Options{Store: corestore.New(), BaseURL: testBaseURL, Seed: seed})
+	router.NotFound(func(c *corehttp.Context) {
+		c.JSON(http.StatusNotFound, map[string]any{"message": "Not Found"})
+	})
+	return router
+}
+
+func doGitHubJSON(handler http.Handler, method string, target string, body string, authorization string) *httptest.ResponseRecorder {
+	var reader *strings.Reader
+	if body == "" {
+		reader = strings.NewReader("")
+	} else {
+		reader = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, target, reader)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	return res
+}
+
+func decodeGitHubBody(t *testing.T, res *httptest.ResponseRecorder, target any) {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(res.Body.Bytes()))
+	if err := decoder.Decode(target); err != nil {
+		t.Fatalf("decode body %q: %v", res.Body.String(), err)
+	}
+}
