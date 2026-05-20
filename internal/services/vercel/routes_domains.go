@@ -149,10 +149,10 @@ func (s *Service) registerDomainRoutes(router *corehttp.Router) {
 		}
 		patch := corestore.Record{}
 		if value, exists := body["gitBranch"]; exists {
-			patch["gitBranch"] = parseNullableString(value)
+			patch["gitBranch"] = parseNullableStringPatch(value, existing["gitBranch"])
 		}
 		if value, exists := body["redirect"]; exists {
-			patch["redirect"] = parseNullableTrimmedString(value)
+			patch["redirect"] = parseNullableTrimmedStringPatch(value, existing["redirect"])
 		}
 		if value, exists := body["redirectStatusCode"]; exists {
 			code, valid := parseRedirectStatusCode(value)
@@ -163,7 +163,7 @@ func (s *Service) registerDomainRoutes(router *corehttp.Router) {
 			patch["redirectStatusCode"] = code
 		}
 		if value, exists := body["customEnvironmentId"]; exists {
-			patch["customEnvironmentId"] = parseNullableString(value)
+			patch["customEnvironmentId"] = parseNullableStringPatch(value, existing["customEnvironmentId"])
 		}
 		updated, ok := s.store.Domains.Update(intField(existing, "id"), patch)
 		if !ok {
@@ -309,4 +309,28 @@ func parseNullableTrimmedString(raw any) any {
 		return str
 	}
 	return nil
+}
+
+func parseNullableStringPatch(raw any, existing any) any {
+	if raw == nil {
+		return nil
+	}
+	if str, ok := raw.(string); ok {
+		return str
+	}
+	return existing
+}
+
+func parseNullableTrimmedStringPatch(raw any, existing any) any {
+	if raw == nil {
+		return nil
+	}
+	if str, ok := raw.(string); ok {
+		str = strings.TrimSpace(str)
+		if str == "" {
+			return nil
+		}
+		return str
+	}
+	return existing
 }

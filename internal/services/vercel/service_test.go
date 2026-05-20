@@ -34,6 +34,21 @@ func TestVercelCurrentUserUsesSeededTokenUser(t *testing.T) {
 	}
 }
 
+func TestVercelUser1TokenDoesNotFallbackToAdmin(t *testing.T) {
+	handler := newVercelTestHandlerWithSeed(&SeedConfig{})
+	req := httptest.NewRequest(http.MethodGet, "/v2/user", nil)
+	req.Header.Set("Authorization", "Bearer test_token_user1")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code == http.StatusOK {
+		t.Fatalf("test_token_user1 unexpectedly authenticated as admin: %s", res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "User not found") {
+		t.Fatalf("unexpected response: status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
 func TestVercelProjectsEnvAndDomains(t *testing.T) {
 	handler := newVercelTestHandler()
 	create := doVercelJSON(handler, http.MethodPost, "/v11/projects", `{
@@ -115,6 +130,45 @@ func TestVercelProjectsEnvAndDomains(t *testing.T) {
 	decodeVercelBody(t, domainCreate, &domain)
 	if domain.Name != "docs-app.vercel.app" || !domain.Verified {
 		t.Fatalf("unexpected domain: %#v", domain)
+	}
+}
+
+func TestVercelDomainPatchMalformedNullableFieldsPreserveExistingValues(t *testing.T) {
+	handler := newVercelTestHandler()
+	projectID := createVercelProject(t, handler, "domain-patch-app")
+	create := doVercelJSON(handler, http.MethodPost, "/v10/projects/"+projectID+"/domains", `{
+		"name":"docs.example.com",
+		"redirect":"https://example.com",
+		"redirectStatusCode":308,
+		"gitBranch":"main",
+		"customEnvironmentId":"env_custom"
+	}`, true)
+	if create.Code != http.StatusOK {
+		t.Fatalf("domain status = %d, body = %s", create.Code, create.Body.String())
+	}
+
+	patch := doVercelJSON(handler, http.MethodPatch, "/v9/projects/"+projectID+"/domains/docs.example.com", `{
+		"redirect":123,
+		"gitBranch":false,
+		"customEnvironmentId":{}
+	}`, true)
+	if patch.Code != http.StatusOK {
+		t.Fatalf("patch status = %d, body = %s", patch.Code, patch.Body.String())
+	}
+	var body struct {
+		Redirect            *string `json:"redirect"`
+		GitBranch           *string `json:"gitBranch"`
+		CustomEnvironmentID *string `json:"customEnvironmentId"`
+	}
+	decodeVercelBody(t, patch, &body)
+	if body.Redirect == nil || *body.Redirect != "https://example.com" {
+		t.Fatalf("redirect was not preserved: %s", patch.Body.String())
+	}
+	if body.GitBranch == nil || *body.GitBranch != "main" {
+		t.Fatalf("gitBranch was not preserved: %s", patch.Body.String())
+	}
+	if body.CustomEnvironmentID == nil || *body.CustomEnvironmentID != "env_custom" {
+		t.Fatalf("customEnvironmentId was not preserved: %s", patch.Body.String())
 	}
 }
 

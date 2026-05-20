@@ -366,10 +366,7 @@ func (s *Service) authLogin(c *corehttp.Context) (string, bool) {
 	case "test_token_admin":
 		return "admin", true
 	case "test_token_user1":
-		if firstRecord(s.store.Users.FindBy("username", "octocat")) != nil {
-			return "octocat", true
-		}
-		return "admin", true
+		return "octocat", true
 	default:
 		return "", false
 	}
