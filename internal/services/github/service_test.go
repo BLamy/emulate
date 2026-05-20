@@ -1176,6 +1176,68 @@ func TestGitHubRejectsPublicRepoMutationByNonCollaborator(t *testing.T) {
 	}
 }
 
+func TestGitHubRejectsRepoMutationByReadOnlyCollaborator(t *testing.T) {
+	service, handler := newGitHubTestServiceHandler(&SeedConfig{
+		Users: []UserSeed{
+			{Login: "octocat", Email: "octocat@github.com"},
+			{Login: "reader", Email: "reader@example.com"},
+		},
+		Tokens: map[string]TokenSeed{
+			"reader_token": {Login: "reader", Scopes: []string{"repo", "user"}},
+		},
+		Repos: []RepoSeed{{Owner: "octocat", Name: "hello-world"}},
+	})
+	repo := service.lookupRepo("octocat", "hello-world")
+	reader := firstRecord(service.store.Users.FindBy("login", "reader"))
+	service.store.Collaborators.Insert(corestore.Record{
+		"repo_id":    intField(repo, "id"),
+		"user_id":    intField(reader, "id"),
+		"permission": "pull",
+	})
+
+	branches := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world/branches", "", "Bearer reader_token")
+	if branches.Code != http.StatusOK {
+		t.Fatalf("branches status = %d, body = %s", branches.Code, branches.Body.String())
+	}
+	mainSha := defaultBranchSha(t, branches, "main")
+
+	res := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/git/refs", `{"ref":"refs/heads/reader","sha":"`+mainSha+`"}`, "Bearer reader_token")
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestGitHubAllowsRepoMutationByPushCollaborator(t *testing.T) {
+	service, handler := newGitHubTestServiceHandler(&SeedConfig{
+		Users: []UserSeed{
+			{Login: "octocat", Email: "octocat@github.com"},
+			{Login: "writer", Email: "writer@example.com"},
+		},
+		Tokens: map[string]TokenSeed{
+			"writer_token": {Login: "writer", Scopes: []string{"repo", "user"}},
+		},
+		Repos: []RepoSeed{{Owner: "octocat", Name: "hello-world"}},
+	})
+	repo := service.lookupRepo("octocat", "hello-world")
+	writer := firstRecord(service.store.Users.FindBy("login", "writer"))
+	service.store.Collaborators.Insert(corestore.Record{
+		"repo_id":    intField(repo, "id"),
+		"user_id":    intField(writer, "id"),
+		"permission": "push",
+	})
+
+	branches := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world/branches", "", "Bearer writer_token")
+	if branches.Code != http.StatusOK {
+		t.Fatalf("branches status = %d, body = %s", branches.Code, branches.Body.String())
+	}
+	mainSha := defaultBranchSha(t, branches, "main")
+
+	res := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/git/refs", `{"ref":"refs/heads/writer","sha":"`+mainSha+`"}`, "Bearer writer_token")
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
 func TestGitHubFailedIssuePatchDoesNotAdjustOpenIssueCount(t *testing.T) {
 	handler := newGitHubTestHandler(&SeedConfig{
 		Users: []UserSeed{{Login: "octocat", Email: "octocat@github.com"}},

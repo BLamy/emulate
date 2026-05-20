@@ -426,7 +426,7 @@ func (s *Service) assertRepoWrite(c *corehttp.Context, repo corestore.Record) (c
 		writeForbidden(c)
 		return nil, false
 	}
-	if s.hasRepoAdmin(user, repo) || s.canAccessRepo(auth, repo) {
+	if s.hasRepoWrite(user, repo) {
 		return user, true
 	}
 	writeForbidden(c)
@@ -548,11 +548,46 @@ func (s *Service) hasRepoAdmin(user corestore.Record, repo corestore.Record) boo
 	}
 	for _, collab := range s.store.Collaborators.FindBy("repo_id", intField(repo, "id")) {
 		if intField(collab, "user_id") == userID {
-			permission := stringField(collab, "permission")
-			return permission == "admin" || permission == "maintain"
+			return repoPermissionLevel(stringField(collab, "permission")) >= repoPermissionLevel("maintain")
 		}
 	}
 	return false
+}
+
+func (s *Service) hasRepoWrite(user corestore.Record, repo corestore.Record) bool {
+	userID := intField(user, "id")
+	if boolField(user, "site_admin") {
+		return true
+	}
+	if stringField(repo, "owner_type") == "User" && intField(repo, "owner_id") == userID {
+		return true
+	}
+	if stringField(repo, "owner_type") == "Organization" && s.isOrgMember(userID, intField(repo, "owner_id")) {
+		return true
+	}
+	for _, collab := range s.store.Collaborators.FindBy("repo_id", intField(repo, "id")) {
+		if intField(collab, "user_id") == userID {
+			return repoPermissionLevel(stringField(collab, "permission")) >= repoPermissionLevel("push")
+		}
+	}
+	return false
+}
+
+func repoPermissionLevel(permission string) int {
+	switch permission {
+	case "pull":
+		return 0
+	case "triage":
+		return 1
+	case "push":
+		return 2
+	case "maintain":
+		return 3
+	case "admin":
+		return 4
+	default:
+		return -1
+	}
 }
 
 func (s *Service) isOrgMember(userID int, orgID int) bool {
