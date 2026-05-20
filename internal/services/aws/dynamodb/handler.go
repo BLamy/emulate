@@ -24,6 +24,13 @@ type Handler struct {
 	Now       func() time.Time
 }
 
+type batchWriteOperation struct {
+	Table  corestore.Record
+	Parts  keyParts
+	Item   map[string]any
+	Delete bool
+}
+
 func (h *Handler) Handle(req *http.Request, ctx gateway.AwsRequestContext) protocols.ErrorResponse {
 	requestID := ctx.RequestID
 	if requestID == "" {
@@ -83,6 +90,9 @@ func (h *Handler) createTable(ctx gateway.AwsRequestContext) protocols.ErrorResp
 	attributeDefinitions, err := normalizeRecordList(input["AttributeDefinitions"], "AttributeName", "AttributeType")
 	if err != nil || len(attributeDefinitions) == 0 {
 		return h.validation("AttributeDefinitions must contain at least one attribute.", ctx.RequestID)
+	}
+	if err := validateTableSchema(keySchema, attributeDefinitions); err != nil {
+		return h.validation(err.Error(), ctx.RequestID)
 	}
 	billingMode := strings.TrimSpace(stringInput(input, "BillingMode"))
 	if billingMode == "" {
@@ -200,19 +210,7 @@ func (h *Handler) putItem(ctx gateway.AwsRequestContext) protocols.ErrorResponse
 		return h.validation(err.Error(), ctx.RequestID)
 	}
 	oldItem, found := h.findItem(table, parts)
-	if found {
-		h.Items.Delete(intRecordField(oldItem, "id"))
-	}
-	h.Items.Insert(corestore.Record{
-		"account_id": stringRecordField(table, "account_id"),
-		"region":     stringRecordField(table, "region"),
-		"table_name": stringRecordField(table, "table_name"),
-		"table_arn":  stringRecordField(table, "arn"),
-		"pk":         parts.Partition,
-		"sk":         parts.Sort,
-		"key":        parts.Key,
-		"item":       item,
-	})
+	h.putStoredItem(table, parts, item)
 	out := map[string]any{}
 	if strings.EqualFold(stringInput(ctx.Input, "ReturnValues"), "ALL_OLD") && found {
 		out["Attributes"] = projectItem(itemMap(oldItem), ctx.Input)
@@ -376,6 +374,7 @@ func (h *Handler) batchWriteItem(ctx gateway.AwsRequestContext) protocols.ErrorR
 	if !ok {
 		return h.validation("RequestItems is required.", ctx.RequestID)
 	}
+	operations := []batchWriteOperation{}
 	for tableName, raw := range requestItems {
 		table, ok := h.findTable(ctx, tableName)
 		if !ok {
@@ -399,19 +398,7 @@ func (h *Handler) batchWriteItem(ctx gateway.AwsRequestContext) protocols.ErrorR
 				if err != nil {
 					return h.validation(err.Error(), ctx.RequestID)
 				}
-				if oldItem, found := h.findItem(table, parts); found {
-					h.Items.Delete(intRecordField(oldItem, "id"))
-				}
-				h.Items.Insert(corestore.Record{
-					"account_id": stringRecordField(table, "account_id"),
-					"region":     stringRecordField(table, "region"),
-					"table_name": stringRecordField(table, "table_name"),
-					"table_arn":  stringRecordField(table, "arn"),
-					"pk":         parts.Partition,
-					"sk":         parts.Sort,
-					"key":        parts.Key,
-					"item":       item,
-				})
+				operations = append(operations, batchWriteOperation{Table: table, Parts: parts, Item: item})
 				continue
 			}
 			if deleteRequest, ok := asMap(entry["DeleteRequest"]); ok {
@@ -419,13 +406,20 @@ func (h *Handler) batchWriteItem(ctx gateway.AwsRequestContext) protocols.ErrorR
 				if err != nil {
 					return h.validation(err.Error(), ctx.RequestID)
 				}
-				if item, found := h.findItem(table, parts); found {
-					h.Items.Delete(intRecordField(item, "id"))
-				}
+				operations = append(operations, batchWriteOperation{Table: table, Parts: parts, Delete: true})
 				continue
 			}
 			return h.validation("Batch write entries require PutRequest or DeleteRequest.", ctx.RequestID)
 		}
+	}
+	for _, operation := range operations {
+		if operation.Delete {
+			if item, found := h.findItem(operation.Table, operation.Parts); found {
+				h.Items.Delete(intRecordField(item, "id"))
+			}
+			continue
+		}
+		h.putStoredItem(operation.Table, operation.Parts, operation.Item)
 	}
 	return jsonResponse(http.StatusOK, map[string]any{"UnprocessedItems": map[string]any{}})
 }
@@ -495,8 +489,14 @@ func (h *Handler) queryMatcher(table corestore.Record, input map[string]any, req
 		}
 		switch name {
 		case partitionName:
+			if err := validateKeyAttributeValue(table, name, value); err != nil {
+				return nil, h.validation(err.Error(), requestID), false
+			}
 			requiredPartition = value
 		case sortName:
+			if err := validateKeyAttributeValue(table, name, value); err != nil {
+				return nil, h.validation(err.Error(), requestID), false
+			}
 			requiredSort = value
 		default:
 			return nil, h.validation("KeyConditionExpression can only reference key attributes.", requestID), false
@@ -559,6 +559,22 @@ func (h *Handler) findItem(table corestore.Record, parts keyParts) (corestore.Re
 		}
 	}
 	return nil, false
+}
+
+func (h *Handler) putStoredItem(table corestore.Record, parts keyParts, item map[string]any) {
+	if oldItem, found := h.findItem(table, parts); found {
+		h.Items.Delete(intRecordField(oldItem, "id"))
+	}
+	h.Items.Insert(corestore.Record{
+		"account_id": stringRecordField(table, "account_id"),
+		"region":     stringRecordField(table, "region"),
+		"table_name": stringRecordField(table, "table_name"),
+		"table_arn":  stringRecordField(table, "arn"),
+		"pk":         parts.Partition,
+		"sk":         parts.Sort,
+		"key":        parts.Key,
+		"item":       item,
+	})
 }
 
 func (h *Handler) tableItems(table corestore.Record) []corestore.Record {

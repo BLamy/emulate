@@ -51,12 +51,18 @@ func keyPartsFromValues(table corestore.Record, values map[string]any) (keyParts
 	if !ok {
 		return keyParts{}, fmt.Errorf("missing partition key %s", partitionName)
 	}
+	if err := validateKeyAttributeValue(table, partitionName, partitionValue); err != nil {
+		return keyParts{}, err
+	}
 	key := map[string]any{partitionName: partitionValue}
 	parts := keyParts{Partition: attributeIdentity(partitionValue), Key: key}
 	if sortName != "" {
 		sortValue, ok := values[sortName]
 		if !ok {
 			return keyParts{}, fmt.Errorf("missing sort key %s", sortName)
+		}
+		if err := validateKeyAttributeValue(table, sortName, sortValue); err != nil {
+			return keyParts{}, err
 		}
 		key[sortName] = sortValue
 		parts.Sort = attributeIdentity(sortValue)
@@ -163,11 +169,11 @@ func normalizeAttributeValue(raw any) (map[string]any, error) {
 func keyAttributeNames(table corestore.Record) (string, string) {
 	var partitionName, sortName string
 	for _, item := range recordList(table["key_schema"]) {
-		switch strings.ToUpper(stringRecordField(item, "KeyType")) {
+		switch strings.ToUpper(strings.TrimSpace(stringRecordField(item, "KeyType"))) {
 		case "HASH":
-			partitionName = stringRecordField(item, "AttributeName")
+			partitionName = strings.TrimSpace(stringRecordField(item, "AttributeName"))
 		case "RANGE":
-			sortName = stringRecordField(item, "AttributeName")
+			sortName = strings.TrimSpace(stringRecordField(item, "AttributeName"))
 		}
 	}
 	return partitionName, sortName
@@ -176,12 +182,97 @@ func keyAttributeNames(table corestore.Record) (string, string) {
 func keyAttributeTypes(table corestore.Record) map[string]string {
 	types := map[string]string{}
 	for _, item := range recordList(table["attribute_definitions"]) {
-		name := stringRecordField(item, "AttributeName")
+		name := strings.TrimSpace(stringRecordField(item, "AttributeName"))
 		if name != "" {
-			types[name] = strings.ToUpper(stringRecordField(item, "AttributeType"))
+			types[name] = strings.ToUpper(strings.TrimSpace(stringRecordField(item, "AttributeType")))
 		}
 	}
 	return types
+}
+
+func validateTableSchema(keySchema []corestore.Record, attributeDefinitions []corestore.Record) error {
+	if len(keySchema) > 2 {
+		return fmt.Errorf("KeySchema can contain one HASH key and one RANGE key")
+	}
+	keyNames := map[string]bool{}
+	hashName := ""
+	rangeName := ""
+	for _, key := range keySchema {
+		name := strings.TrimSpace(stringRecordField(key, "AttributeName"))
+		keyType := strings.ToUpper(strings.TrimSpace(stringRecordField(key, "KeyType")))
+		if keyNames[name] {
+			return fmt.Errorf("KeySchema contains duplicate key attribute %s", name)
+		}
+		keyNames[name] = true
+		switch keyType {
+		case "HASH":
+			if hashName != "" {
+				return fmt.Errorf("KeySchema can contain only one HASH key")
+			}
+			hashName = name
+		case "RANGE":
+			if rangeName != "" {
+				return fmt.Errorf("KeySchema can contain only one RANGE key")
+			}
+			rangeName = name
+		default:
+			return fmt.Errorf("KeySchema contains unsupported KeyType %s", keyType)
+		}
+	}
+	if hashName == "" {
+		return fmt.Errorf("KeySchema must include one HASH key attribute")
+	}
+
+	attributeTypes := map[string]string{}
+	for _, definition := range attributeDefinitions {
+		name := strings.TrimSpace(stringRecordField(definition, "AttributeName"))
+		attributeType := strings.ToUpper(strings.TrimSpace(stringRecordField(definition, "AttributeType")))
+		if attributeTypes[name] != "" {
+			return fmt.Errorf("AttributeDefinitions contains duplicate attribute %s", name)
+		}
+		if !isKeyAttributeType(attributeType) {
+			return fmt.Errorf("AttributeDefinitions member %s must use AttributeType S, N, or B", name)
+		}
+		attributeTypes[name] = attributeType
+	}
+	for _, name := range []string{hashName, rangeName} {
+		if name == "" {
+			continue
+		}
+		if attributeTypes[name] == "" {
+			return fmt.Errorf("missing AttributeDefinition for key attribute %s", name)
+		}
+	}
+	for name := range attributeTypes {
+		if !keyNames[name] {
+			return fmt.Errorf("AttributeDefinition %s is not used by KeySchema", name)
+		}
+	}
+	return nil
+}
+
+func validateKeyAttributeValue(table corestore.Record, name string, value any) error {
+	expectedType := keyAttributeTypes(table)[name]
+	if expectedType == "" {
+		return nil
+	}
+	normalized, err := normalizeAttributeValue(value)
+	if err != nil {
+		return err
+	}
+	if _, ok := normalized[expectedType]; !ok {
+		return fmt.Errorf("key attribute %s must be type %s", name, expectedType)
+	}
+	return nil
+}
+
+func isKeyAttributeType(attributeType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(attributeType)) {
+	case "S", "N", "B":
+		return true
+	default:
+		return false
+	}
 }
 
 func attributeIdentity(value any) string {

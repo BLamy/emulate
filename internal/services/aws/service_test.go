@@ -1145,6 +1145,116 @@ func TestServiceRejectsDynamoDBUnsupportedExpressionsWithoutMutation(t *testing.
 	}
 }
 
+func TestServiceRejectsDynamoDBInvalidKeySchemasAndKeyTypes(t *testing.T) {
+	handler := newTestHandler()
+
+	tests := []struct {
+		name    string
+		payload map[string]any
+	}{
+		{
+			name: "missing hash key",
+			payload: map[string]any{
+				"TableName": "missing-hash",
+				"AttributeDefinitions": []map[string]any{
+					{"AttributeName": "sk", "AttributeType": "S"},
+				},
+				"KeySchema": []map[string]any{
+					{"AttributeName": "sk", "KeyType": "RANGE"},
+				},
+				"BillingMode": "PAY_PER_REQUEST",
+			},
+		},
+		{
+			name: "missing key attribute definition",
+			payload: map[string]any{
+				"TableName": "missing-definition",
+				"AttributeDefinitions": []map[string]any{
+					{"AttributeName": "id", "AttributeType": "S"},
+				},
+				"KeySchema": []map[string]any{
+					{"AttributeName": "pk", "KeyType": "HASH"},
+				},
+				"BillingMode": "PAY_PER_REQUEST",
+			},
+		},
+		{
+			name: "unsupported key attribute type",
+			payload: map[string]any{
+				"TableName": "unsupported-type",
+				"AttributeDefinitions": []map[string]any{
+					{"AttributeName": "pk", "AttributeType": "BOOL"},
+				},
+				"KeySchema": []map[string]any{
+					{"AttributeName": "pk", "KeyType": "HASH"},
+				},
+				"BillingMode": "PAY_PER_REQUEST",
+			},
+		},
+		{
+			name: "unused attribute definition",
+			payload: map[string]any{
+				"TableName": "unused-definition",
+				"AttributeDefinitions": []map[string]any{
+					{"AttributeName": "pk", "AttributeType": "S"},
+					{"AttributeName": "extra", "AttributeType": "S"},
+				},
+				"KeySchema": []map[string]any{
+					{"AttributeName": "pk", "KeyType": "HASH"},
+				},
+				"BillingMode": "PAY_PER_REQUEST",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			res := executeAWSDynamoDBRequest(t, handler, "CreateTable", test.payload)
+			if res.Code != http.StatusBadRequest || res.Header().Get("x-amzn-errortype") != "ValidationException" {
+				t.Fatalf("create status = %d, headers = %#v, body = %s", res.Code, res.Header(), res.Body.String())
+			}
+		})
+	}
+
+	res := executeAWSDynamoDBRequest(t, handler, "CreateTable", map[string]any{
+		"TableName": "typed-keys",
+		"AttributeDefinitions": []map[string]any{
+			{"AttributeName": "pk", "AttributeType": "S"},
+		},
+		"KeySchema": []map[string]any{
+			{"AttributeName": "pk", "KeyType": "HASH"},
+		},
+		"BillingMode": "PAY_PER_REQUEST",
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("create typed table status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "PutItem", map[string]any{
+		"TableName": "typed-keys",
+		"Item": map[string]any{
+			"pk": map[string]any{"N": "1"},
+		},
+	})
+	if res.Code != http.StatusBadRequest || res.Header().Get("x-amzn-errortype") != "ValidationException" || !strings.Contains(res.Body.String(), "key attribute pk must be type S") {
+		t.Fatalf("wrong key type status = %d, headers = %#v, body = %s", res.Code, res.Header(), res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "Query", map[string]any{
+		"TableName":              "typed-keys",
+		"KeyConditionExpression": "#pk = :pk",
+		"ExpressionAttributeNames": map[string]any{
+			"#pk": "pk",
+		},
+		"ExpressionAttributeValues": map[string]any{
+			":pk": map[string]any{"N": "1"},
+		},
+	})
+	if res.Code != http.StatusBadRequest || res.Header().Get("x-amzn-errortype") != "ValidationException" || !strings.Contains(res.Body.String(), "key attribute pk must be type S") {
+		t.Fatalf("wrong query key type status = %d, headers = %#v, body = %s", res.Code, res.Header(), res.Body.String())
+	}
+}
+
 func TestServiceHandlesDynamoDBBatchOperations(t *testing.T) {
 	handler := newTestHandler()
 	res := executeAWSDynamoDBRequest(t, handler, "CreateTable", map[string]any{
@@ -1192,6 +1302,50 @@ func TestServiceHandlesDynamoDBBatchOperations(t *testing.T) {
 	decodeJSONBody(t, res, &body)
 	if len(body.Responses["events"]) != 2 {
 		t.Fatalf("unexpected batch get body: %#v", body)
+	}
+}
+
+func TestServiceRejectsDynamoDBInvalidBatchWriteWithoutMutation(t *testing.T) {
+	handler := newTestHandler()
+	res := executeAWSDynamoDBRequest(t, handler, "CreateTable", map[string]any{
+		"TableName": "atomic-events",
+		"AttributeDefinitions": []map[string]any{
+			{"AttributeName": "id", "AttributeType": "S"},
+		},
+		"KeySchema": []map[string]any{
+			{"AttributeName": "id", "KeyType": "HASH"},
+		},
+		"BillingMode": "PAY_PER_REQUEST",
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "BatchWriteItem", map[string]any{
+		"RequestItems": map[string]any{
+			"atomic-events": []map[string]any{
+				{"PutRequest": map[string]any{"Item": map[string]any{"id": map[string]any{"S": "evt#1"}, "type": map[string]any{"S": "push"}}}},
+				{},
+			},
+		},
+	})
+	if res.Code != http.StatusBadRequest || res.Header().Get("x-amzn-errortype") != "ValidationException" {
+		t.Fatalf("batch write status = %d, headers = %#v, body = %s", res.Code, res.Header(), res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "GetItem", map[string]any{
+		"TableName": "atomic-events",
+		"Key": map[string]any{
+			"id": map[string]any{"S": "evt#1"},
+		},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("get after failed batch status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	decodeJSONBody(t, res, &body)
+	if _, ok := body["Item"]; ok {
+		t.Fatalf("failed batch write mutated item: %#v", body)
 	}
 }
 
