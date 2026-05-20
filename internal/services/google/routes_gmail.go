@@ -30,9 +30,11 @@ func (s *Service) registerGmailRoutes(router *corehttp.Router) {
 
 	router.Get("/gmail/v1/users/:userId/drafts", s.handleListDrafts)
 	router.Post("/gmail/v1/users/:userId/drafts", s.handleCreateDraft)
+	router.Post("/upload/gmail/v1/users/:userId/drafts", s.handleCreateDraft)
 	router.Get("/gmail/v1/users/:userId/drafts/:id", s.handleGetDraft)
 	router.Put("/gmail/v1/users/:userId/drafts/:id", s.handleUpdateDraft)
 	router.Post("/gmail/v1/users/:userId/drafts/send", s.handleSendDraftFromBody)
+	router.Post("/upload/gmail/v1/users/:userId/drafts/send", s.handleSendDraftFromBody)
 	router.Post("/gmail/v1/users/:userId/drafts/:id/send", s.handleSendDraftByID)
 	router.Delete("/gmail/v1/users/:userId/drafts/:id", s.handleDeleteDraft)
 
@@ -803,6 +805,13 @@ func (s *Service) handleCreateFilter(c *corehttp.Context) {
 	from := stringValue(criteria["from"])
 	add := getStringArray(action, "addLabelIds")
 	remove := getStringArray(action, "removeLabelIds")
+	if len(add) == 0 && len(remove) == 0 {
+		googleAPIError(c, http.StatusBadRequest, "Filter actions are required.", "invalidArgument", "INVALID_ARGUMENT")
+		return
+	}
+	if !s.validateMutationLabelIDs(c, email, append(add, remove...)) {
+		return
+	}
 	for _, filter := range s.store.Filters.FindBy("user_email", email) {
 		if stringField(filter, "criteria_from") == from && sameStringSet(stringSliceValue(filter["add_label_ids"]), add) && sameStringSet(stringSliceValue(filter["remove_label_ids"]), remove) {
 			googleAPIError(c, http.StatusBadRequest, "Filter already exists", "invalidArgument", "INVALID_ARGUMENT")
@@ -838,11 +847,27 @@ func (s *Service) handleWatch(c *corehttp.Context) {
 	if !ok {
 		return
 	}
+	body := parseJSONBody(c.Request)
+	topicName := strings.TrimSpace(stringValue(body["topicName"]))
+	if topicName == "" {
+		googleAPIError(c, http.StatusBadRequest, "Topic name is required.", "invalidArgument", "INVALID_ARGUMENT")
+		return
+	}
+	labelIDs := getStringArray(body, "labelIds")
+	if !s.validateMutationLabelIDs(c, email, labelIDs) {
+		return
+	}
 	historyID := generateHistoryID()
 	for _, row := range s.store.WatchRegistries.FindBy("user_email", email) {
 		s.store.WatchRegistries.Delete(intField(row, "id"))
 	}
-	s.store.WatchRegistries.Insert(corestore.Record{"user_email": email, "history_id": historyID})
+	s.store.WatchRegistries.Insert(corestore.Record{
+		"user_email":            email,
+		"history_id":            historyID,
+		"topic_name":            topicName,
+		"label_ids":             labelIDs,
+		"label_filter_behavior": nullableString(firstNonEmpty(stringValue(body["labelFilterBehavior"]), stringValue(body["labelFilterAction"]))),
+	})
 	c.JSON(http.StatusOK, map[string]any{"historyId": historyID, "expiration": strconv.FormatInt(time.Now().UnixMilli()+604800000, 10)})
 }
 

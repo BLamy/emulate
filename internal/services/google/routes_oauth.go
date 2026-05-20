@@ -252,6 +252,12 @@ func (s *Service) handleAuthorizationCodeToken(c *corehttp.Context, body map[str
 			writeOAuthError(c, http.StatusInternalServerError, "server_error", "Failed to sign ID token.")
 			return
 		}
+		s.store.IDTokens.Insert(corestore.Record{
+			"token":     idToken,
+			"email":     stringField(user, "email"),
+			"sub":       stringField(user, "uid"),
+			"client_id": clientID,
+		})
 		response["id_token"] = idToken
 	}
 	c.JSON(http.StatusOK, response)
@@ -294,6 +300,9 @@ func (s *Service) handleRevoke(c *corehttp.Context) {
 	for _, record := range s.store.RefreshTokens.FindBy("token", token) {
 		s.store.RefreshTokens.Delete(intField(record, "id"))
 	}
+	for _, record := range s.store.IDTokens.FindBy("token", token) {
+		s.store.IDTokens.Delete(intField(record, "id"))
+	}
 	c.Writer.WriteHeader(http.StatusOK)
 }
 
@@ -324,22 +333,36 @@ func (s *Service) handleUserinfo(c *corehttp.Context) {
 }
 
 func (s *Service) handleTokeninfo(c *corehttp.Context) {
-	token := c.Query("access_token")
-	if token == "" {
-		token = c.Query("id_token")
-	}
-	if token == "" {
+	accessToken := c.Query("access_token")
+	idToken := c.Query("id_token")
+	if accessToken == "" && idToken == "" {
 		body, _ := parseTokenBody(c.Request)
-		token = firstNonEmpty(body["access_token"], body["id_token"])
+		accessToken = body["access_token"]
+		idToken = body["id_token"]
 	}
-	record := firstRecord(s.store.AccessTokens.FindBy("token", token))
+	if accessToken != "" {
+		record := firstRecord(s.store.AccessTokens.FindBy("token", accessToken))
+		if record == nil {
+			writeOAuthError(c, http.StatusBadRequest, "invalid_token", "Invalid token.")
+			return
+		}
+		c.JSON(http.StatusOK, map[string]any{
+			"aud":            stringField(record, "client_id"),
+			"scope":          stringField(record, "scope"),
+			"email":          stringField(record, "email"),
+			"email_verified": "true",
+			"expires_in":     3600,
+		})
+		return
+	}
+	record := firstRecord(s.store.IDTokens.FindBy("token", idToken))
 	if record == nil {
 		writeOAuthError(c, http.StatusBadRequest, "invalid_token", "Invalid token.")
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{
 		"aud":            stringField(record, "client_id"),
-		"scope":          stringField(record, "scope"),
+		"sub":            stringField(record, "sub"),
 		"email":          stringField(record, "email"),
 		"email_verified": "true",
 		"expires_in":     3600,

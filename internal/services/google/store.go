@@ -8,6 +8,7 @@ type Store struct {
 	OAuthCodes      *corestore.Collection
 	AccessTokens    *corestore.Collection
 	RefreshTokens   *corestore.Collection
+	IDTokens        *corestore.Collection
 	Labels          *corestore.Collection
 	Messages        *corestore.Collection
 	Attachments     *corestore.Collection
@@ -29,6 +30,7 @@ func NewStore(store *corestore.Store) Store {
 		OAuthCodes:      store.MustCollection("google.oauth_codes", "code"),
 		AccessTokens:    store.MustCollection("google.oauth_access_tokens", "token"),
 		RefreshTokens:   store.MustCollection("google.oauth_refresh_tokens", "token"),
+		IDTokens:        store.MustCollection("google.oauth_id_tokens", "token"),
 		Labels:          store.MustCollection("google.labels", "gmail_id", "user_email", "name"),
 		Messages:        store.MustCollection("google.messages", "gmail_id", "thread_id", "user_email"),
 		Attachments:     store.MustCollection("google.attachments", "gmail_id", "message_gmail_id", "user_email"),

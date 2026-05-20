@@ -168,6 +168,25 @@ func TestGoogleOAuthAuthorizationCodeAndRefresh(t *testing.T) {
 	}
 }
 
+func TestGoogleTokeninfoAcceptsIssuedIDToken(t *testing.T) {
+	handler := newGoogleTestHandler()
+	tokens := issueGoogleOAuthTokens(t, handler)
+
+	res := googleRequest(handler, http.MethodGet, "/tokeninfo?id_token="+url.QueryEscape(tokens.IDToken), "", false)
+	if res.Code != http.StatusOK {
+		t.Fatalf("tokeninfo status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Aud   string `json:"aud"`
+		Sub   string `json:"sub"`
+		Email string `json:"email"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &body)
+	if body.Aud != "emu_google_client_id" || body.Sub == "" || body.Email != "testuser@example.com" {
+		t.Fatalf("unexpected tokeninfo body: %#v", body)
+	}
+}
+
 func TestGoogleGmailCalendarAndDriveSeededRoutes(t *testing.T) {
 	handler := newGoogleTestHandler()
 	res := googleRequest(handler, http.MethodGet, "/oauth2/v2/userinfo", "", true)
@@ -244,6 +263,61 @@ func TestGoogleGmailCalendarAndDriveSeededRoutes(t *testing.T) {
 	body, _ := io.ReadAll(res.Result().Body)
 	if string(body) != "pdf-handbook-data" {
 		t.Fatalf("unexpected drive media body: %q", string(body))
+	}
+}
+
+func TestGoogleFilterAndWatchValidation(t *testing.T) {
+	handler := newGoogleTestHandler()
+
+	res := googleRequest(handler, http.MethodPost, "/gmail/v1/users/me/settings/filters", `{"criteria":{"from":"support@example.com"},"action":{}}`, true)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "Filter actions are required") {
+		t.Fatalf("empty filter action status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = googleRequest(handler, http.MethodPost, "/gmail/v1/users/me/settings/filters", `{"criteria":{"from":"support@example.com"},"action":{"addLabelIds":["Label_missing"]}}`, true)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "Invalid label IDs: Label_missing") {
+		t.Fatalf("missing label filter status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = googleRequest(handler, http.MethodPost, "/gmail/v1/users/me/settings/filters", `{"criteria":{"from":"support@example.com"},"action":{"addLabelIds":["Label_ops"]}}`, true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("valid filter status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = googleRequest(handler, http.MethodPost, "/gmail/v1/users/me/watch", `{}`, true)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "Topic name is required") {
+		t.Fatalf("missing topic watch status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = googleRequest(handler, http.MethodPost, "/gmail/v1/users/me/watch", `{"topicName":"projects/local/topics/gmail","labelIds":["Label_missing"]}`, true)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "Invalid label IDs: Label_missing") {
+		t.Fatalf("missing label watch status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = googleRequest(handler, http.MethodPost, "/gmail/v1/users/me/watch", `{"topicName":"projects/local/topics/gmail","labelIds":["Label_ops"]}`, true)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"historyId"`) {
+		t.Fatalf("valid watch status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestGoogleUploadDraftRoutes(t *testing.T) {
+	handler := newGoogleTestHandler()
+
+	res := googleRequest(handler, http.MethodPost, "/upload/gmail/v1/users/me/drafts", `{"message":{"to":"partner@example.com","subject":"Upload draft","text":"Draft from upload route"}}`, true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("upload create draft status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var draft struct {
+		ID string `json:"id"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &draft)
+	if draft.ID == "" {
+		t.Fatalf("missing draft ID: %s", res.Body.String())
+	}
+
+	res = googleRequest(handler, http.MethodPost, "/upload/gmail/v1/users/me/drafts/send", `{"id":"`+draft.ID+`"}`, true)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"SENT"`) {
+		t.Fatalf("upload send draft status = %d, body = %s", res.Code, res.Body.String())
 	}
 }
 
@@ -436,6 +510,59 @@ func googleRequest(handler http.Handler, method string, path string, body string
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 	return res
+}
+
+type googleOAuthTokens struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	IDToken      string `json:"id_token"`
+	Scope        string `json:"scope"`
+}
+
+func issueGoogleOAuthTokens(t *testing.T, handler http.Handler) googleOAuthTokens {
+	t.Helper()
+	form := url.Values{
+		"email":        {"testuser@example.com"},
+		"redirect_uri": {"http://localhost:3000/api/auth/callback/google"},
+		"scope":        {"openid email profile"},
+		"client_id":    {"emu_google_client_id"},
+	}
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://localhost:4016/o/oauth2/v2/auth/callback", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusFound {
+		t.Fatalf("authorize callback status = %d, body = %s", res.Code, res.Body.String())
+	}
+	location, err := url.Parse(res.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := location.Query().Get("code")
+	if code == "" {
+		t.Fatalf("missing code in redirect: %s", res.Header().Get("Location"))
+	}
+
+	tokenForm := url.Values{
+		"code":          {code},
+		"grant_type":    {"authorization_code"},
+		"redirect_uri":  {"http://localhost:3000/api/auth/callback/google"},
+		"client_id":     {"emu_google_client_id"},
+		"client_secret": {"emu_google_client_secret"},
+	}
+	res = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "http://localhost:4016/oauth2/token", strings.NewReader(tokenForm.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("token status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var tokens googleOAuthTokens
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &tokens)
+	if tokens.AccessToken == "" || tokens.IDToken == "" {
+		t.Fatalf("unexpected token body: %#v", tokens)
+	}
+	return tokens
 }
 
 func mustDecodeGoogleJSON(t *testing.T, raw []byte, target any) {
