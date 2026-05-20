@@ -238,6 +238,42 @@ func TestNewHandlerMountsMicrosoftWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestNewHandlerMultiServiceOIDCDiscoveryUsesServicePrefixes(t *testing.T) {
+	handler := NewHandler(ServerOptions{
+		Services: []string{"apple", "google", "microsoft"},
+		BaseURL:  "http://localhost:4010",
+	})
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil))
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("root discovery status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "service specific discovery path") {
+		t.Fatalf("unexpected root discovery body: %s", res.Body.String())
+	}
+
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{path: "/google/.well-known/openid-configuration", want: `"issuer":"http://localhost:4010/google"`},
+		{path: "/apple/.well-known/openid-configuration", want: `"issuer":"http://localhost:4010/apple"`},
+		{path: "/microsoft/.well-known/openid-configuration", want: `"issuer":"http://localhost:4010/microsoft/9188040d-6c67-4c5b-b112-36a304b66dad/v2.0"`},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if res.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+			}
+			if !strings.Contains(res.Body.String(), tc.want) {
+				t.Fatalf("missing %s in %s", tc.want, res.Body.String())
+			}
+		})
+	}
+}
+
 func TestNewHandlerDoesNotMountMicrosoftWhenDisabled(t *testing.T) {
 	handler := NewHandler(ServerOptions{Services: []string{"resend"}})
 

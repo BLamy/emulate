@@ -35,7 +35,7 @@ func TestHandlerServesPreviewHealth(t *testing.T) {
 	if !body.OK || body.Adapter != "vercel" || body.Runtime != "go" || body.Version != "test" || body.RoutePrefix != "/emulate" {
 		t.Fatalf("unexpected body: %#v", body)
 	}
-	if strings.Join(body.Services, ",") != "apple,aws,github,microsoft,resend,vercel" {
+	if strings.Join(body.Services, ",") != "apple,aws,github,google,microsoft,resend,vercel" {
 		t.Fatalf("services = %#v", body.Services)
 	}
 }
@@ -157,6 +157,23 @@ func TestHandlerForwardsMicrosoftService(t *testing.T) {
 	}
 }
 
+func TestHandlerForwardsGoogleService(t *testing.T) {
+	handler := NewHandler(Options{Services: []string{"google"}})
+	req := httptest.NewRequest(http.MethodGet, "https://preview.example.com/emulate/google/.well-known/openid-configuration", nil)
+	req.Host = "preview.example.com"
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"issuer":"https://preview.example.com/emulate/google"`) ||
+		!strings.Contains(res.Body.String(), `"authorization_endpoint":"https://preview.example.com/emulate/google/o/oauth2/v2/auth"`) {
+		t.Fatalf("unexpected body: %s", res.Body.String())
+	}
+}
+
 func TestHandlerRewritesGitHubPaginationLinksThroughPublicServicePrefix(t *testing.T) {
 	handler := NewHandler(Options{Services: []string{"github"}})
 	for _, name := range []string{"one", "two"} {
@@ -218,7 +235,7 @@ func TestHandlerRewritesHTMLRootPathsThroughPublicServicePrefix(t *testing.T) {
 
 func TestHandlerReturnsUnknownService(t *testing.T) {
 	handler := NewHandler(Options{})
-	req := httptest.NewRequest(http.MethodGet, "https://preview.example.com/emulate/google/user", nil)
+	req := httptest.NewRequest(http.MethodGet, "https://preview.example.com/emulate/okta/user", nil)
 
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
@@ -226,7 +243,7 @@ func TestHandlerReturnsUnknownService(t *testing.T) {
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
 	}
-	if !strings.Contains(res.Body.String(), "Unknown service: google") {
+	if !strings.Contains(res.Body.String(), "Unknown service: okta") {
 		t.Fatalf("unexpected body: %s", res.Body.String())
 	}
 }

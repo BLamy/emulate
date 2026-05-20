@@ -22,6 +22,7 @@ import (
 	emuruntime "github.com/vercel-labs/emulate/internal/runtime"
 	"github.com/vercel-labs/emulate/internal/services/apple"
 	"github.com/vercel-labs/emulate/internal/services/github"
+	"github.com/vercel-labs/emulate/internal/services/google"
 	"github.com/vercel-labs/emulate/internal/services/microsoft"
 	"github.com/vercel-labs/emulate/internal/services/resend"
 	"github.com/vercel-labs/emulate/internal/services/vercel"
@@ -109,6 +110,7 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	var seedServices []string
 	var appleSeed *apple.SeedConfig
 	var githubSeed *github.SeedConfig
+	var googleSeed *google.SeedConfig
 	var microsoftSeed *microsoft.SeedConfig
 	var resendSeed *resend.SeedConfig
 	var vercelSeed *vercel.SeedConfig
@@ -119,7 +121,7 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 			return 1
 		}
 		if unsupported := unsupportedNativeSeedServices(loaded.Data); len(unsupported) > 0 {
-			fmt.Fprintf(stderr, "The native Go runtime only supports --seed for apple, github, microsoft, resend, and vercel. Unsupported seed config services: %s\n", strings.Join(unsupported, ", "))
+			fmt.Fprintf(stderr, "The native Go runtime only supports --seed for apple, github, google, microsoft, resend, and vercel. Unsupported seed config services: %s\n", strings.Join(unsupported, ", "))
 			return 1
 		}
 		seedServices = coreconfig.InferServices(loaded.Data, nativeSeedServiceNames())
@@ -130,6 +132,14 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 				return 1
 			}
 			githubSeed = &cfg
+		}
+		if raw, ok := loaded.Data["google"]; ok {
+			var cfg google.SeedConfig
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				fmt.Fprintf(stderr, "Failed to parse google seed config: %v\n", err)
+				return 1
+			}
+			googleSeed = &cfg
 		}
 		if raw, ok := loaded.Data["tokens"]; ok {
 			var tokens map[string]github.TokenSeed
@@ -199,6 +209,7 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		Services:      services,
 		AppleSeed:     appleSeed,
 		GitHubSeed:    githubSeed,
+		GoogleSeed:    googleSeed,
 		MicrosoftSeed: microsoftSeed,
 		ResendSeed:    resendSeed,
 		VercelSeed:    vercelSeed,
@@ -388,7 +399,7 @@ func parseServices(value string) ([]string, error) {
 }
 
 func nativeSeedServiceNames() []string {
-	return []string{"apple", "github", "microsoft", "resend", "vercel"}
+	return []string{"apple", "github", "google", "microsoft", "resend", "vercel"}
 }
 
 func unsupportedNativeSeedServices(data map[string]json.RawMessage) []string {

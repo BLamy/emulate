@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"net/http"
+	"strings"
 
 	coreassets "github.com/vercel-labs/emulate/internal/core/assets"
 	corehttp "github.com/vercel-labs/emulate/internal/core/http"
@@ -10,6 +11,7 @@ import (
 	"github.com/vercel-labs/emulate/internal/services/apple"
 	"github.com/vercel-labs/emulate/internal/services/aws"
 	"github.com/vercel-labs/emulate/internal/services/github"
+	"github.com/vercel-labs/emulate/internal/services/google"
 	"github.com/vercel-labs/emulate/internal/services/microsoft"
 	"github.com/vercel-labs/emulate/internal/services/resend"
 	"github.com/vercel-labs/emulate/internal/services/vercel"
@@ -25,6 +27,7 @@ type ServerOptions struct {
 	AssetStore    *coreassets.Store
 	AppleSeed     *apple.SeedConfig
 	GitHubSeed    *github.SeedConfig
+	GoogleSeed    *google.SeedConfig
 	MicrosoftSeed *microsoft.SeedConfig
 	ResendSeed    *resend.SeedConfig
 	VercelSeed    *vercel.SeedConfig
@@ -79,6 +82,16 @@ func NewServer(options ServerOptions) *Server {
 			"runtime": "go",
 		})
 	})
+	ambiguousOIDCServices := enabledRootOIDCServices(services)
+	if len(ambiguousOIDCServices) > 1 {
+		router.Get("/.well-known/openid-configuration", func(c *corehttp.Context) {
+			c.JSON(http.StatusBadRequest, map[string]any{
+				"message":  "Multiple enabled services serve OIDC discovery at /.well-known/openid-configuration. Use a service specific discovery path.",
+				"services": ambiguousOIDCServices,
+				"paths":    oidcDiscoveryPaths(ambiguousOIDCServices),
+			})
+		})
+	}
 	if serviceEnabled(services, "aws") {
 		aws.Register(router, aws.Options{
 			Store:          runtimeStore,
@@ -107,12 +120,35 @@ func NewServer(options ServerOptions) *Server {
 			Seed:    options.GitHubSeed,
 		})
 	}
+	if serviceEnabled(services, "google") {
+		google.Register(router, google.Options{
+			Store:   runtimeStore,
+			BaseURL: options.BaseURL,
+			Seed:    options.GoogleSeed,
+		})
+		if len(ambiguousOIDCServices) > 1 {
+			prefixed := corehttp.NewRouter()
+			google.Register(prefixed, google.Options{
+				Store:   runtimeStore,
+				BaseURL: servicePrefixedBaseURL(options.BaseURL, "google"),
+			})
+			router.Mount("/google", prefixed)
+		}
+	}
 	if serviceEnabled(services, "apple") {
 		apple.Register(router, apple.Options{
 			Store:   runtimeStore,
 			BaseURL: options.BaseURL,
 			Seed:    options.AppleSeed,
 		})
+		if len(ambiguousOIDCServices) > 1 {
+			prefixed := corehttp.NewRouter()
+			apple.Register(prefixed, apple.Options{
+				Store:   runtimeStore,
+				BaseURL: servicePrefixedBaseURL(options.BaseURL, "apple"),
+			})
+			router.Mount("/apple", prefixed)
+		}
 	}
 	if serviceEnabled(services, "microsoft") {
 		microsoft.Register(router, microsoft.Options{
@@ -120,6 +156,14 @@ func NewServer(options ServerOptions) *Server {
 			BaseURL: options.BaseURL,
 			Seed:    options.MicrosoftSeed,
 		})
+		if len(ambiguousOIDCServices) > 1 {
+			prefixed := corehttp.NewRouter()
+			microsoft.Register(prefixed, microsoft.Options{
+				Store:   runtimeStore,
+				BaseURL: servicePrefixedBaseURL(options.BaseURL, "microsoft"),
+			})
+			router.Mount("/microsoft", prefixed)
+		}
 	}
 	router.NotFound(func(c *corehttp.Context) {
 		c.JSON(http.StatusNotFound, map[string]any{"message": "Not Found"})
@@ -142,4 +186,30 @@ func serviceEnabled(services []string, name string) bool {
 		}
 	}
 	return false
+}
+
+func enabledRootOIDCServices(services []string) []string {
+	names := []string{}
+	for _, name := range []string{"apple", "google", "microsoft"} {
+		if serviceEnabled(services, name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func servicePrefixedBaseURL(baseURL string, service string) string {
+	trimmed := strings.TrimRight(baseURL, "/")
+	if trimmed == "" {
+		trimmed = "http://localhost:4000"
+	}
+	return trimmed + "/" + service
+}
+
+func oidcDiscoveryPaths(services []string) map[string]string {
+	paths := map[string]string{}
+	for _, service := range services {
+		paths[service] = "/" + service + "/.well-known/openid-configuration"
+	}
+	return paths
 }

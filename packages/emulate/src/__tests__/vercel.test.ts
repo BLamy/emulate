@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createVercelScaffold } from "../commands/vercel.js";
+import { createVercelScaffold, DEFAULT_VERCEL_SERVICE_OPTION } from "../commands/vercel.js";
 
 const tempDirs: string[] = [];
 
@@ -22,7 +22,7 @@ describe("createVercelScaffold", () => {
       'emulate "github.com/vercel-labs/emulate/vercel"',
     );
     expect(readFileSync(join(cwd, "api/emulate.go"), "utf-8")).toContain(
-      'Services: []string{"apple", "aws", "github", "microsoft", "resend", "vercel"}',
+      'Services: []string{"apple", "aws", "github", "google", "microsoft", "resend", "vercel"}',
     );
     expect(readFileSync(join(cwd, "go.mod"), "utf-8")).toContain("require github.com/vercel-labs/emulate v0.5.0");
     const vercelConfig = JSON.parse(readFileSync(join(cwd, "vercel.json"), "utf-8")) as {
@@ -32,6 +32,10 @@ describe("createVercelScaffold", () => {
       source: "/emulate/:path*",
       destination: "/api/emulate?path=:path*",
     });
+  });
+
+  it("includes google in the shared Vercel CLI service default", () => {
+    expect(DEFAULT_VERCEL_SERVICE_OPTION).toBe("apple,aws,github,google,microsoft,resend,vercel");
   });
 
   it("merges the rewrite into an existing vercel.json", () => {
@@ -224,8 +228,8 @@ require (
   it("rejects services not available in the native Vercel scaffold", () => {
     const cwd = tempDir();
 
-    expect(() => createVercelScaffold({ cwd, version: "0.5.0", service: "google" })).toThrow(
-      "currently supports native services: apple, aws, github, microsoft, resend, vercel",
+    expect(() => createVercelScaffold({ cwd, version: "0.5.0", service: "okta" })).toThrow(
+      "currently supports native services: apple, aws, github, google, microsoft, resend, vercel",
     );
   });
 
