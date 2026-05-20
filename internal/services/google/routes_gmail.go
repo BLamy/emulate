@@ -174,7 +174,10 @@ func (s *Service) createMessageFromRequest(c *corehttp.Context, mode string) {
 	if mode == "send" && input.From == "" {
 		input.From = email
 	}
-	if input.Raw == nil && (input.From == "" || input.To == "") {
+	if !validateRawMessagePayload(c, input.Raw) {
+		return
+	}
+	if stringValue(input.Raw) == "" && (input.From == "" || input.To == "") {
 		googleAPIError(c, http.StatusBadRequest, "A raw MIME message or explicit from/to fields are required.", "invalidArgument", "INVALID_ARGUMENT")
 		return
 	}
@@ -314,7 +317,10 @@ func (s *Service) handleCreateDraft(c *corehttp.Context) {
 	if !s.validateMutationLabelIDs(c, email, input.LabelIDs) {
 		return
 	}
-	if input.Raw == nil && (input.From == "" || input.To == "") {
+	if !validateRawMessagePayload(c, input.Raw) {
+		return
+	}
+	if stringValue(input.Raw) == "" && (input.From == "" || input.To == "") {
 		googleAPIError(c, http.StatusBadRequest, "A raw MIME message or explicit from/to fields are required.", "invalidArgument", "INVALID_ARGUMENT")
 		return
 	}
@@ -356,6 +362,9 @@ func (s *Service) handleUpdateDraft(c *corehttp.Context) {
 		messageBody = nested
 	}
 	input := s.messageInputFromBody(email, messageBody)
+	if !validateRawMessagePayload(c, input.Raw) {
+		return
+	}
 	patch := messagePatchFromInput(input)
 	patch["label_ids"] = applyLabelMutation(stringSliceValue(message["label_ids"]), []string{"DRAFT"}, nil)
 	patch["history_id"] = generateHistoryID()
@@ -443,6 +452,18 @@ func (s *Service) messageInputFromBody(email string, body map[string]any) messag
 		InReplyTo:    nullableString(stringValue(firstNonNil(body["inReplyTo"], body["in_reply_to"]))),
 		LabelIDs:     getStringArray(body, "labelIds"),
 	}
+}
+
+func validateRawMessagePayload(c *corehttp.Context, raw any) bool {
+	value := stringValue(raw)
+	if value == "" {
+		return true
+	}
+	if parseRawMessage(value).Valid {
+		return true
+	}
+	googleAPIError(c, http.StatusBadRequest, "Invalid raw MIME message payload.", "invalidArgument", "INVALID_ARGUMENT")
+	return false
 }
 
 func messagePatchFromInput(input messageInput) corestore.Record {

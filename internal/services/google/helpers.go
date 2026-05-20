@@ -658,11 +658,12 @@ func (s *Service) createStoredMessage(input messageInput) corestore.Record {
 	if len(labels) == 0 {
 		labels = []string{}
 	}
+	historyID := generateHistoryID()
 	message := s.store.Messages.Insert(corestore.Record{
 		"gmail_id":      messageID,
 		"thread_id":     threadID,
 		"user_email":    input.UserEmail,
-		"history_id":    generateHistoryID(),
+		"history_id":    historyID,
 		"internal_date": internalDate,
 		"raw":           nullableString(raw),
 		"label_ids":     labels,
@@ -680,7 +681,7 @@ func (s *Service) createStoredMessage(input messageInput) corestore.Record {
 		"body_text":     nullableString(bodyText),
 		"body_html":     nullableString(bodyHTML),
 	})
-	s.recordHistory("messageAdded", message, nil)
+	s.recordHistoryWithID(historyID, "messageAdded", message, nil)
 	s.applyFilters(message)
 	return message
 }
@@ -695,11 +696,18 @@ func (s *Service) getMessageByID(userEmail string, messageID string) corestore.R
 }
 
 func (s *Service) recordHistory(changeType string, message corestore.Record, labelIDs []string) {
+	s.recordHistoryWithID(generateHistoryID(), changeType, message, labelIDs)
+}
+
+func (s *Service) recordHistoryWithID(historyID string, changeType string, message corestore.Record, labelIDs []string) {
 	if message == nil {
 		return
 	}
+	if historyID == "" {
+		historyID = generateHistoryID()
+	}
 	s.store.History.Insert(corestore.Record{
-		"gmail_id":         generateHistoryID(),
+		"gmail_id":         historyID,
 		"user_email":       stringField(message, "user_email"),
 		"change_type":      changeType,
 		"message_gmail_id": stringField(message, "gmail_id"),
@@ -711,18 +719,19 @@ func (s *Service) recordHistory(changeType string, message corestore.Record, lab
 func (s *Service) updateMessageLabels(message corestore.Record, labels []string) corestore.Record {
 	current := stringSliceValue(message["label_ids"])
 	added, removed := diffLabels(current, labels)
+	historyID := generateHistoryID()
 	updated, ok := s.store.Messages.Update(intField(message, "id"), corestore.Record{
 		"label_ids":  dedupeStrings(labels),
-		"history_id": generateHistoryID(),
+		"history_id": historyID,
 	})
 	if !ok {
 		return message
 	}
 	if len(added) > 0 {
-		s.recordHistory("labelAdded", updated, added)
+		s.recordHistoryWithID(historyID, "labelAdded", updated, added)
 	}
 	if len(removed) > 0 {
-		s.recordHistory("labelRemoved", updated, removed)
+		s.recordHistoryWithID(historyID, "labelRemoved", updated, removed)
 	}
 	return updated
 }
@@ -1110,6 +1119,7 @@ type parsedRawMessage struct {
 	BodyText    string
 	BodyHTML    string
 	Attachments []parsedAttachment
+	Valid       bool
 }
 
 type parsedAttachment struct {
@@ -1135,6 +1145,7 @@ func parseRawMessage(raw string) parsedRawMessage {
 	}
 	headers := parseMIMEHeaders(headerText)
 	out := parsedRawMessage{
+		Valid:   true,
 		From:    headers["from"],
 		To:      headers["to"],
 		Subject: headers["subject"],
@@ -1443,7 +1454,7 @@ func formatCalendarEventResource(s *Service, event corestore.Record) map[string]
 		"updated":   stringField(event, "updated_at"),
 		"start":     calendarDateRange(event, "start", timeZone),
 		"end":       calendarDateRange(event, "end", timeZone),
-		"attendees": recordSliceValue(event["attendees"]),
+		"attendees": formatCalendarAttendees(recordSliceValue(event["attendees"])),
 	}
 	if value := stringField(event, "html_link"); value != "" {
 		out["htmlLink"] = value
@@ -1469,6 +1480,31 @@ func formatCalendarEventResource(s *Service, event corestore.Record) map[string]
 		out["conferenceData"] = map[string]any{"entryPoints": formatted}
 	}
 	return out
+}
+
+func formatCalendarAttendees(attendees []map[string]any) []map[string]any {
+	formatted := make([]map[string]any, 0, len(attendees))
+	for _, attendee := range attendees {
+		email := stringValue(attendee["email"])
+		if email == "" {
+			continue
+		}
+		item := map[string]any{"email": email}
+		if value := stringValue(attendee["display_name"]); value != "" {
+			item["displayName"] = value
+		}
+		if value := stringValue(attendee["response_status"]); value != "" {
+			item["responseStatus"] = value
+		}
+		if value, ok := attendee["organizer"].(bool); ok {
+			item["organizer"] = value
+		}
+		if value, ok := attendee["self"].(bool); ok {
+			item["self"] = value
+		}
+		formatted = append(formatted, item)
+	}
+	return formatted
 }
 
 func calendarDateRange(event corestore.Record, prefix string, timeZone string) map[string]any {

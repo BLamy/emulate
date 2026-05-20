@@ -300,6 +300,57 @@ func TestGoogleFilterAndWatchValidation(t *testing.T) {
 	}
 }
 
+func TestGoogleRejectsInvalidRawMIMEPayloads(t *testing.T) {
+	handler := newGoogleTestHandler()
+	cases := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "send message",
+			path: "/gmail/v1/users/me/messages/send",
+			body: `{"raw":"not valid raw!"}`,
+		},
+		{
+			name: "import message",
+			path: "/gmail/v1/users/me/messages/import",
+			body: `{"raw":"not valid raw!"}`,
+		},
+		{
+			name: "insert message",
+			path: "/gmail/v1/users/me/messages",
+			body: `{"raw":"not valid raw!"}`,
+		},
+		{
+			name: "create draft",
+			path: "/gmail/v1/users/me/drafts",
+			body: `{"message":{"raw":"not valid raw!"}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := googleRequest(handler, http.MethodPost, tc.path, tc.body, true)
+			if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "Invalid raw MIME message payload") {
+				t.Fatalf("raw payload status = %d, body = %s", res.Code, res.Body.String())
+			}
+		})
+	}
+
+	res := googleRequest(handler, http.MethodPost, "/gmail/v1/users/me/drafts", `{"message":{"to":"partner@example.com","subject":"Valid draft","text":"Body"}}`, true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create draft status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var draft struct {
+		ID string `json:"id"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &draft)
+	res = googleRequest(handler, http.MethodPut, "/gmail/v1/users/me/drafts/"+draft.ID, `{"message":{"raw":"not valid raw!"}}`, true)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "Invalid raw MIME message payload") {
+		t.Fatalf("update draft raw payload status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
 func TestGoogleUploadDraftRoutes(t *testing.T) {
 	handler := newGoogleTestHandler()
 
@@ -409,6 +460,53 @@ func TestGoogleRejectsUnknownCreateLabels(t *testing.T) {
 	}
 }
 
+func TestGoogleHistoryRowsUseMessageMutationID(t *testing.T) {
+	service := New(Options{
+		Store:   corestore.New(),
+		BaseURL: "http://localhost:4016",
+		Seed: &SeedConfig{
+			Users: []UserSeed{{Email: "testuser@example.com", Name: "Test User"}},
+		},
+	})
+	message := service.createStoredMessage(messageInput{
+		GmailID:   "msg_history",
+		ThreadID:  "thread_history",
+		UserEmail: "testuser@example.com",
+		From:      "sender@example.com",
+		To:        "testuser@example.com",
+		Subject:   "History",
+		BodyText:  "Body",
+		LabelIDs:  []string{"INBOX", "UNREAD"},
+	})
+	createHistoryID := stringField(message, "history_id")
+	if createHistoryID == "" {
+		t.Fatalf("missing create history ID: %#v", message)
+	}
+	createHistory := firstRecord(service.store.History.FindBy("message_gmail_id", "msg_history"))
+	if stringField(createHistory, "gmail_id") != createHistoryID || stringField(createHistory, "change_type") != "messageAdded" {
+		t.Fatalf("create history row does not match message history ID: message=%#v history=%#v", message, createHistory)
+	}
+
+	updated := service.updateMessageLabels(message, []string{"SENT"})
+	updateHistoryID := stringField(updated, "history_id")
+	if updateHistoryID == "" || updateHistoryID == createHistoryID {
+		t.Fatalf("unexpected update history ID: create=%s update=%s", createHistoryID, updateHistoryID)
+	}
+	matchedUpdateRows := 0
+	for _, row := range service.store.History.FindBy("message_gmail_id", "msg_history") {
+		switch stringField(row, "change_type") {
+		case "labelAdded", "labelRemoved":
+			matchedUpdateRows++
+			if stringField(row, "gmail_id") != updateHistoryID {
+				t.Fatalf("update history row does not match message history ID: message=%#v history=%#v", updated, row)
+			}
+		}
+	}
+	if matchedUpdateRows != 2 {
+		t.Fatalf("expected label add and remove rows, got %d", matchedUpdateRows)
+	}
+}
+
 func TestGoogleHistoryIDsAreDecimalAndMonotonic(t *testing.T) {
 	var previous int64
 	for i := 0; i < 1000; i++ {
@@ -462,6 +560,36 @@ func TestGoogleHistoryListUsesNumericStartHistoryID(t *testing.T) {
 	mustDecodeGoogleJSON(t, res.Body.Bytes(), &body)
 	if len(body.History) != 1 || body.History[0].ID != "10" {
 		t.Fatalf("unexpected history response: %#v", body)
+	}
+}
+
+func TestGoogleCalendarAttendeesUseAPICasing(t *testing.T) {
+	handler := newGoogleTestHandler()
+	res := googleRequest(handler, http.MethodPost, "/calendar/v3/calendars/primary/events", `{
+		"summary":"Focus Time",
+		"start":{"dateTime":"2025-01-11T09:00:00.000Z"},
+		"end":{"dateTime":"2025-01-11T09:30:00.000Z"},
+		"attendees":[{"email":"teammate@example.com","displayName":"Team Mate","responseStatus":"accepted","organizer":true,"self":false}]
+	}`, true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create event status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Attendees []map[string]any `json:"attendees"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &body)
+	if len(body.Attendees) != 1 {
+		t.Fatalf("unexpected attendees: %#v", body.Attendees)
+	}
+	attendee := body.Attendees[0]
+	if attendee["displayName"] != "Team Mate" || attendee["responseStatus"] != "accepted" {
+		t.Fatalf("attendee did not use API field names: %#v", attendee)
+	}
+	if _, ok := attendee["display_name"]; ok {
+		t.Fatalf("attendee leaked internal display_name field: %#v", attendee)
+	}
+	if _, ok := attendee["response_status"]; ok {
+		t.Fatalf("attendee leaked internal response_status field: %#v", attendee)
 	}
 }
 
