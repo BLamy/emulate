@@ -198,6 +198,31 @@ func TestNewHandlerDoesNotMountResendWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestNewHandlerMountsAppleWhenEnabled(t *testing.T) {
+	handler := NewHandler(ServerOptions{Services: []string{"apple"}, BaseURL: "http://localhost:4014"})
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil))
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"issuer":"http://localhost:4014"`) || !strings.Contains(res.Body.String(), `"jwks_uri":"http://localhost:4014/auth/keys"`) {
+		t.Fatalf("unexpected body: %s", res.Body.String())
+	}
+}
+
+func TestNewHandlerDoesNotMountAppleWhenDisabled(t *testing.T) {
+	handler := NewHandler(ServerOptions{Services: []string{"resend"}})
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/auth/keys", nil))
+
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
 func TestNewHandlerMountsVercelWhenEnabled(t *testing.T) {
 	handler := NewHandler(ServerOptions{Services: []string{"vercel"}, BaseURL: "http://localhost:4010"})
 

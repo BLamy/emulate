@@ -20,6 +20,7 @@ import (
 
 	coreconfig "github.com/vercel-labs/emulate/internal/core/config"
 	emuruntime "github.com/vercel-labs/emulate/internal/runtime"
+	"github.com/vercel-labs/emulate/internal/services/apple"
 	"github.com/vercel-labs/emulate/internal/services/github"
 	"github.com/vercel-labs/emulate/internal/services/resend"
 	"github.com/vercel-labs/emulate/internal/services/vercel"
@@ -105,6 +106,7 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		return 1
 	}
 	var seedServices []string
+	var appleSeed *apple.SeedConfig
 	var githubSeed *github.SeedConfig
 	var resendSeed *resend.SeedConfig
 	var vercelSeed *vercel.SeedConfig
@@ -115,7 +117,7 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 			return 1
 		}
 		if unsupported := unsupportedNativeSeedServices(loaded.Data); len(unsupported) > 0 {
-			fmt.Fprintf(stderr, "The native Go runtime only supports --seed for github, resend, and vercel. Unsupported seed config services: %s\n", strings.Join(unsupported, ", "))
+			fmt.Fprintf(stderr, "The native Go runtime only supports --seed for apple, github, resend, and vercel. Unsupported seed config services: %s\n", strings.Join(unsupported, ", "))
 			return 1
 		}
 		seedServices = coreconfig.InferServices(loaded.Data, nativeSeedServiceNames())
@@ -142,6 +144,14 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 			for token, user := range tokens {
 				githubSeed.Tokens[token] = user
 			}
+		}
+		if raw, ok := loaded.Data["apple"]; ok {
+			var cfg apple.SeedConfig
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				fmt.Fprintf(stderr, "Failed to parse apple seed config: %v\n", err)
+				return 1
+			}
+			appleSeed = &cfg
 		}
 		if raw, ok := loaded.Data["resend"]; ok {
 			var cfg resend.SeedConfig
@@ -177,6 +187,7 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		Version:    version,
 		BaseURL:    baseURL,
 		Services:   services,
+		AppleSeed:  appleSeed,
 		GitHubSeed: githubSeed,
 		ResendSeed: resendSeed,
 		VercelSeed: vercelSeed,
@@ -191,7 +202,7 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "emulate %s native Go runtime is experimental.\n", version)
+	fmt.Fprintf(stdout, "emulate %s native Go runtime.\n", version)
 	fmt.Fprintf(stdout, "Listening on %s\n", baseURL)
 	fmt.Fprintf(stdout, "Health check: %s%s\n", strings.TrimRight(baseURL, "/"), emuruntime.HealthPath)
 
@@ -306,7 +317,7 @@ func runList(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func printHelp(w io.Writer) {
-	fmt.Fprintf(w, "emulate %s native Go runtime experimental\n\n", version)
+	fmt.Fprintf(w, "emulate %s native Go runtime\n\n", version)
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  npx emulate [start] [options]")
 	fmt.Fprintln(w, "  npx emulate init [--service <service>]")
@@ -317,8 +328,6 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "      --seed <file>          Path to JSON seed config file (YAML not supported in native Go yet)")
 	fmt.Fprintln(w, "      --base-url <url>       Override advertised base URL")
 	fmt.Fprintln(w, "      --portless             Serve over HTTPS via portless (not supported in native Go yet)")
-	fmt.Fprintln(w, "\nThe published TypeScript CLI remains the default user-facing runtime.")
-	fmt.Fprintln(w, "Use npx emulate for current production behavior.")
 }
 
 func printStartHelp(w io.Writer) {
@@ -368,7 +377,7 @@ func parseServices(value string) ([]string, error) {
 }
 
 func nativeSeedServiceNames() []string {
-	return []string{"github", "resend", "vercel"}
+	return []string{"apple", "github", "resend", "vercel"}
 }
 
 func unsupportedNativeSeedServices(data map[string]json.RawMessage) []string {

@@ -8,6 +8,8 @@ allowed-tools: Bash(npx emulate:*), Bash(curl:*)
 
 Sign in with Apple emulation with authorization code flow, PKCE support, RS256 ID tokens, and OIDC discovery.
 
+The native Go runtime implements this Apple OIDC flow for local CLI runs and Vercel Go Function previews. To expose Apple on a Vercel preview without separate infrastructure, run `npx emulate vercel init --service apple`; the generated route serves Apple at `/emulate/apple/*`.
+
 ## Start
 
 ```bash

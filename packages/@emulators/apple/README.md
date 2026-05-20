@@ -4,6 +4,8 @@ Sign in with Apple emulation with authorization code flow, PKCE support, RS256 I
 
 Part of [emulate](https://github.com/vercel-labs/emulate) — local drop-in replacement services for CI and no-network sandboxes.
 
+The native Go runtime implements this Apple OIDC flow for local CLI runs and Vercel Go Function previews. To expose Apple on a Vercel preview without separate infrastructure, run `npx emulate vercel init --service apple`.
+
 ## Install
 
 ```bash

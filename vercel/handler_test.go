@@ -35,7 +35,7 @@ func TestHandlerServesPreviewHealth(t *testing.T) {
 	if !body.OK || body.Adapter != "vercel" || body.Runtime != "go" || body.Version != "test" || body.RoutePrefix != "/emulate" {
 		t.Fatalf("unexpected body: %#v", body)
 	}
-	if strings.Join(body.Services, ",") != "aws,github,resend,vercel" {
+	if strings.Join(body.Services, ",") != "apple,aws,github,resend,vercel" {
 		t.Fatalf("services = %#v", body.Services)
 	}
 }
@@ -119,6 +119,23 @@ func TestHandlerForwardsGitHubService(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
 	}
 	if !strings.Contains(res.Body.String(), `"login":"admin"`) {
+		t.Fatalf("unexpected body: %s", res.Body.String())
+	}
+}
+
+func TestHandlerForwardsAppleService(t *testing.T) {
+	handler := NewHandler(Options{Services: []string{"apple"}})
+	req := httptest.NewRequest(http.MethodGet, "https://preview.example.com/emulate/apple/.well-known/openid-configuration", nil)
+	req.Host = "preview.example.com"
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"issuer":"https://preview.example.com/emulate/apple"`) ||
+		!strings.Contains(res.Body.String(), `"jwks_uri":"https://preview.example.com/emulate/apple/auth/keys"`) {
 		t.Fatalf("unexpected body: %s", res.Body.String())
 	}
 }

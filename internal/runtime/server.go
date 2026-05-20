@@ -7,6 +7,7 @@ import (
 	corehttp "github.com/vercel-labs/emulate/internal/core/http"
 	"github.com/vercel-labs/emulate/internal/core/store"
 	"github.com/vercel-labs/emulate/internal/core/ui"
+	"github.com/vercel-labs/emulate/internal/services/apple"
 	"github.com/vercel-labs/emulate/internal/services/aws"
 	"github.com/vercel-labs/emulate/internal/services/github"
 	"github.com/vercel-labs/emulate/internal/services/resend"
@@ -21,6 +22,7 @@ type ServerOptions struct {
 	Services   []string
 	Store      *store.Store
 	AssetStore *coreassets.Store
+	AppleSeed  *apple.SeedConfig
 	GitHubSeed *github.SeedConfig
 	ResendSeed *resend.SeedConfig
 	VercelSeed *vercel.SeedConfig
@@ -101,6 +103,13 @@ func NewServer(options ServerOptions) *Server {
 			Store:   runtimeStore,
 			BaseURL: options.BaseURL,
 			Seed:    options.GitHubSeed,
+		})
+	}
+	if serviceEnabled(services, "apple") {
+		apple.Register(router, apple.Options{
+			Store:   runtimeStore,
+			BaseURL: options.BaseURL,
+			Seed:    options.AppleSeed,
 		})
 	}
 	router.NotFound(func(c *corehttp.Context) {
