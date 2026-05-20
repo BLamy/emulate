@@ -929,6 +929,119 @@ func TestServiceHandlesDynamoDBTableAndItemLifecycle(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsDynamoDBUnsupportedExpressionsWithoutMutation(t *testing.T) {
+	handler := newTestHandler()
+
+	res := executeAWSDynamoDBRequest(t, handler, "CreateTable", map[string]any{
+		"TableName": "guards",
+		"AttributeDefinitions": []map[string]any{
+			{"AttributeName": "pk", "AttributeType": "S"},
+		},
+		"KeySchema": []map[string]any{
+			{"AttributeName": "pk", "KeyType": "HASH"},
+		},
+		"BillingMode": "PAY_PER_REQUEST",
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "PutItem", map[string]any{
+		"TableName": "guards",
+		"Item": map[string]any{
+			"pk":   map[string]any{"S": "acct#1"},
+			"name": map[string]any{"S": "Ada"},
+		},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("seed put status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "PutItem", map[string]any{
+		"TableName":           "guards",
+		"ConditionExpression": "attribute_not_exists(pk)",
+		"Item": map[string]any{
+			"pk":   map[string]any{"S": "acct#1"},
+			"name": map[string]any{"S": "Grace"},
+		},
+	})
+	if res.Code != http.StatusBadRequest || res.Header().Get("x-amzn-errortype") != "ValidationException" || !strings.Contains(res.Body.String(), "ConditionExpression") {
+		t.Fatalf("condition put status = %d, headers = %#v, body = %s", res.Code, res.Header(), res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "GetItem", map[string]any{
+		"TableName": "guards",
+		"Key": map[string]any{
+			"pk": map[string]any{"S": "acct#1"},
+		},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("get after condition put status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var getBody map[string]map[string]map[string]any
+	decodeJSONBody(t, res, &getBody)
+	if getBody["Item"]["name"]["S"] != "Ada" {
+		t.Fatalf("condition put mutated item: %#v", getBody)
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "DeleteItem", map[string]any{
+		"TableName":           "guards",
+		"ConditionExpression": "attribute_exists(missing)",
+		"Key": map[string]any{
+			"pk": map[string]any{"S": "acct#1"},
+		},
+	})
+	if res.Code != http.StatusBadRequest || res.Header().Get("x-amzn-errortype") != "ValidationException" || !strings.Contains(res.Body.String(), "ConditionExpression") {
+		t.Fatalf("condition delete status = %d, headers = %#v, body = %s", res.Code, res.Header(), res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "GetItem", map[string]any{
+		"TableName": "guards",
+		"Key": map[string]any{
+			"pk": map[string]any{"S": "acct#1"},
+		},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("get after condition delete status = %d, body = %s", res.Code, res.Body.String())
+	}
+	getBody = nil
+	decodeJSONBody(t, res, &getBody)
+	if getBody["Item"]["name"]["S"] != "Ada" {
+		t.Fatalf("condition delete mutated item: %#v", getBody)
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "Scan", map[string]any{
+		"TableName":        "guards",
+		"FilterExpression": "#name = :name",
+		"ExpressionAttributeNames": map[string]any{
+			"#name": "name",
+		},
+		"ExpressionAttributeValues": map[string]any{
+			":name": map[string]any{"S": "Ada"},
+		},
+	})
+	if res.Code != http.StatusBadRequest || res.Header().Get("x-amzn-errortype") != "ValidationException" || !strings.Contains(res.Body.String(), "FilterExpression") {
+		t.Fatalf("scan filter status = %d, headers = %#v, body = %s", res.Code, res.Header(), res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "Query", map[string]any{
+		"TableName":              "guards",
+		"KeyConditionExpression": "#pk = :pk",
+		"FilterExpression":       "#name = :name",
+		"ExpressionAttributeNames": map[string]any{
+			"#pk":   "pk",
+			"#name": "name",
+		},
+		"ExpressionAttributeValues": map[string]any{
+			":pk":   map[string]any{"S": "acct#1"},
+			":name": map[string]any{"S": "Ada"},
+		},
+	})
+	if res.Code != http.StatusBadRequest || res.Header().Get("x-amzn-errortype") != "ValidationException" || !strings.Contains(res.Body.String(), "FilterExpression") {
+		t.Fatalf("query filter status = %d, headers = %#v, body = %s", res.Code, res.Header(), res.Body.String())
+	}
+}
+
 func TestServiceHandlesDynamoDBBatchOperations(t *testing.T) {
 	handler := newTestHandler()
 	res := executeAWSDynamoDBRequest(t, handler, "CreateTable", map[string]any{

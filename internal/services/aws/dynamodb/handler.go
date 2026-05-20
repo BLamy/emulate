@@ -188,6 +188,9 @@ func (h *Handler) putItem(ctx gateway.AwsRequestContext) protocols.ErrorResponse
 	if !ok {
 		return response
 	}
+	if response, ok := h.rejectUnsupportedExpression(ctx, "ConditionExpression"); ok {
+		return response
+	}
 	item, err := normalizeItem(ctx.Input["Item"])
 	if err != nil {
 		return h.validation(err.Error(), ctx.RequestID)
@@ -239,6 +242,9 @@ func (h *Handler) deleteItem(ctx gateway.AwsRequestContext) protocols.ErrorRespo
 	if !ok {
 		return response
 	}
+	if response, ok := h.rejectUnsupportedExpression(ctx, "ConditionExpression"); ok {
+		return response
+	}
 	parts, err := normalizeKey(table, ctx.Input["Key"])
 	if err != nil {
 		return h.validation(err.Error(), ctx.RequestID)
@@ -257,6 +263,9 @@ func (h *Handler) deleteItem(ctx gateway.AwsRequestContext) protocols.ErrorRespo
 func (h *Handler) scan(ctx gateway.AwsRequestContext) protocols.ErrorResponse {
 	table, response, ok := h.requireTable(ctx)
 	if !ok {
+		return response
+	}
+	if response, ok := h.rejectUnsupportedExpression(ctx, "FilterExpression"); ok {
 		return response
 	}
 	items := h.tableItems(table)
@@ -284,6 +293,9 @@ func (h *Handler) scan(ctx gateway.AwsRequestContext) protocols.ErrorResponse {
 func (h *Handler) query(ctx gateway.AwsRequestContext) protocols.ErrorResponse {
 	table, response, ok := h.requireTable(ctx)
 	if !ok {
+		return response
+	}
+	if response, ok := h.rejectUnsupportedExpression(ctx, "FilterExpression"); ok {
 		return response
 	}
 	matcher, response, ok := h.queryMatcher(table, ctx.Input, ctx.RequestID)
@@ -448,6 +460,13 @@ func (h *Handler) listTagsOfResource(ctx gateway.AwsRequestContext) protocols.Er
 		return h.tableNotFound(ctx.RequestID)
 	}
 	return jsonResponse(http.StatusOK, map[string]any{"Tags": recordList(table["tags"])})
+}
+
+func (h *Handler) rejectUnsupportedExpression(ctx gateway.AwsRequestContext, name string) (protocols.ErrorResponse, bool) {
+	if strings.TrimSpace(stringInput(ctx.Input, name)) == "" {
+		return protocols.ErrorResponse{}, false
+	}
+	return h.validation(name+" is not supported in the native Go runtime yet.", ctx.RequestID), true
 }
 
 func (h *Handler) queryMatcher(table corestore.Record, input map[string]any, requestID string) (func(map[string]any) bool, protocols.ErrorResponse, bool) {
