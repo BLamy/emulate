@@ -167,6 +167,7 @@ func (s *Service) handlePatchIssue(c *corehttp.Context) {
 		patch["body"] = nullableIssueBody(value)
 	}
 	oldState := stringField(issue, "state")
+	openIssuesDelta := 0
 	if state := stringValue(body["state"]); state == "open" || state == "closed" {
 		patch["state"] = state
 		if state == "closed" && oldState == "open" {
@@ -175,7 +176,7 @@ func (s *Service) handlePatchIssue(c *corehttp.Context) {
 			if _, exists := body["state_reason"]; !exists {
 				patch["state_reason"] = "completed"
 			}
-			s.adjustOpenIssues(intField(repo, "id"), -1)
+			openIssuesDelta = -1
 		}
 		if state == "open" && oldState == "closed" {
 			patch["closed_at"] = nil
@@ -183,7 +184,7 @@ func (s *Service) handlePatchIssue(c *corehttp.Context) {
 			if _, exists := body["state_reason"]; !exists {
 				patch["state_reason"] = "reopened"
 			}
-			s.adjustOpenIssues(intField(repo, "id"), 1)
+			openIssuesDelta = 1
 		}
 	}
 	if reason, exists := body["state_reason"]; exists {
@@ -208,6 +209,9 @@ func (s *Service) handlePatchIssue(c *corehttp.Context) {
 		patch["label_ids"] = labelIDs
 	}
 	updated, _ := s.store.Issues.Update(intField(issue, "id"), patch)
+	if openIssuesDelta != 0 {
+		s.adjustOpenIssues(intField(repo, "id"), openIssuesDelta)
+	}
 	c.JSON(http.StatusOK, s.formatIssue(updated))
 }
 

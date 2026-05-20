@@ -375,6 +375,29 @@ func (s *Service) assertRepoRead(c *corehttp.Context, repo corestore.Record) boo
 	return false
 }
 
+func (s *Service) viewerID(c *corehttp.Context) int {
+	auth, ok := s.authUser(c)
+	if !ok {
+		return 0
+	}
+	return auth.ID
+}
+
+func (s *Service) filterReadableRepos(c *corehttp.Context, repos []corestore.Record) []corestore.Record {
+	auth, authenticated := s.authUser(c)
+	out := make([]corestore.Record, 0, len(repos))
+	for _, repo := range repos {
+		if !boolField(repo, "private") {
+			out = append(out, repo)
+			continue
+		}
+		if authenticated && s.canAccessRepo(auth, repo) {
+			out = append(out, repo)
+		}
+	}
+	return out
+}
+
 func (s *Service) assertRepoWrite(c *corehttp.Context, repo corestore.Record) (corestore.Record, bool) {
 	user, ok := s.currentUser(c)
 	if !ok {

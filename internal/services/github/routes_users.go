@@ -92,7 +92,7 @@ func (s *Service) handleListUserRepos(c *corehttp.Context) {
 		return
 	}
 	repos := s.reposForUser(user, listType)
-	s.respondRepoList(c, repos, 0)
+	s.respondRepoList(c, s.filterReadableRepos(c, repos), s.viewerID(c))
 }
 
 func (s *Service) handleListOrgRepos(c *corehttp.Context) {
@@ -107,7 +107,7 @@ func (s *Service) handleListOrgRepos(c *corehttp.Context) {
 			repos = append(repos, repo)
 		}
 	}
-	s.respondRepoList(c, repos, 0)
+	s.respondRepoList(c, s.filterReadableRepos(c, repos), s.viewerID(c))
 }
 
 func (s *Service) respondRepoList(c *corehttp.Context, repos []corestore.Record, viewerID int) {

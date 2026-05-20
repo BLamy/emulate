@@ -203,7 +203,13 @@ func (s *Service) formatRepo(repo corestore.Record, viewerID int) map[string]any
 
 func (s *Service) repoPermissions(repo corestore.Record, viewerID int) map[string]bool {
 	if viewerID > 0 {
+		if user, ok := s.store.Users.Get(viewerID); ok && boolField(user, "site_admin") {
+			return map[string]bool{"admin": true, "maintain": true, "push": true, "triage": true, "pull": true}
+		}
 		if stringField(repo, "owner_type") == "User" && intField(repo, "owner_id") == viewerID {
+			return map[string]bool{"admin": true, "maintain": true, "push": true, "triage": true, "pull": true}
+		}
+		if stringField(repo, "owner_type") == "Organization" && s.isOrgMember(viewerID, intField(repo, "owner_id")) {
 			return map[string]bool{"admin": true, "maintain": true, "push": true, "triage": true, "pull": true}
 		}
 		for _, collab := range s.store.Collaborators.FindBy("repo_id", intField(repo, "id")) {
@@ -216,7 +222,10 @@ func (s *Service) repoPermissions(repo corestore.Record, viewerID int) map[strin
 			return map[string]bool{"admin": false, "maintain": false, "push": false, "triage": false, "pull": true}
 		}
 	}
-	return map[string]bool{"admin": true, "maintain": true, "push": true, "triage": true, "pull": true}
+	if !boolField(repo, "private") {
+		return map[string]bool{"admin": false, "maintain": false, "push": false, "triage": false, "pull": true}
+	}
+	return map[string]bool{"admin": false, "maintain": false, "push": false, "triage": false, "pull": false}
 }
 
 func permissionsFromLevel(level string) map[string]bool {

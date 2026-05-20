@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -185,6 +186,49 @@ func TestGitHubPullFilesRequirePrivateRepoReadAccess(t *testing.T) {
 	}
 }
 
+func TestGitHubPublicRepoListsHidePrivateRepos(t *testing.T) {
+	handler := newGitHubTestHandler(&SeedConfig{
+		Users: []UserSeed{{Login: "octocat", Email: "octocat@github.com"}},
+		Orgs:  []OrgSeed{{Login: "my-org", Name: "My Org"}},
+		Repos: []RepoSeed{
+			{Owner: "octocat", Name: "public-repo"},
+			{Owner: "octocat", Name: "private-repo", Private: true},
+			{Owner: "my-org", Name: "public-org-repo"},
+			{Owner: "my-org", Name: "private-org-repo", Private: true},
+		},
+	})
+
+	userRepos := doGitHubJSON(handler, http.MethodGet, "/users/octocat/repos", "", "")
+	if userRepos.Code != http.StatusOK {
+		t.Fatalf("user repos status = %d, body = %s", userRepos.Code, userRepos.Body.String())
+	}
+	var userBody []struct {
+		FullName    string          `json:"full_name"`
+		Private     bool            `json:"private"`
+		Permissions map[string]bool `json:"permissions"`
+	}
+	decodeGitHubBody(t, userRepos, &userBody)
+	if len(userBody) != 1 || userBody[0].FullName != "octocat/public-repo" || userBody[0].Private {
+		t.Fatalf("unexpected user repos: %#v, body = %s", userBody, userRepos.Body.String())
+	}
+	if userBody[0].Permissions["admin"] || !userBody[0].Permissions["pull"] {
+		t.Fatalf("unexpected public permissions: %#v", userBody[0].Permissions)
+	}
+
+	orgRepos := doGitHubJSON(handler, http.MethodGet, "/orgs/my-org/repos", "", "")
+	if orgRepos.Code != http.StatusOK {
+		t.Fatalf("org repos status = %d, body = %s", orgRepos.Code, orgRepos.Body.String())
+	}
+	var orgBody []struct {
+		FullName string `json:"full_name"`
+		Private  bool   `json:"private"`
+	}
+	decodeGitHubBody(t, orgRepos, &orgBody)
+	if len(orgBody) != 1 || orgBody[0].FullName != "my-org/public-org-repo" || orgBody[0].Private {
+		t.Fatalf("unexpected org repos: %#v, body = %s", orgBody, orgRepos.Body.String())
+	}
+}
+
 func TestGitHubPatchRepoPrivateSyncsVisibility(t *testing.T) {
 	handler := newGitHubTestHandler(&SeedConfig{
 		Users: []UserSeed{{Login: "octocat", Email: "octocat@github.com"}},
@@ -226,6 +270,105 @@ func TestGitHubRejectsPublicRepoMutationByNonCollaborator(t *testing.T) {
 	res := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/git/refs", `{"ref":"refs/heads/intruder","sha":"`+mainSha+`"}`, "Bearer intruder_token")
 	if res.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestGitHubFailedIssuePatchDoesNotAdjustOpenIssueCount(t *testing.T) {
+	handler := newGitHubTestHandler(&SeedConfig{
+		Users: []UserSeed{{Login: "octocat", Email: "octocat@github.com"}},
+		Repos: []RepoSeed{{Owner: "octocat", Name: "hello-world"}},
+	})
+
+	issue := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/issues", `{"title":"Bug"}`, "Bearer test_token_user1")
+	if issue.Code != http.StatusCreated {
+		t.Fatalf("issue status = %d, body = %s", issue.Code, issue.Body.String())
+	}
+
+	failedPatch := doGitHubJSON(handler, http.MethodPatch, "/repos/octocat/hello-world/issues/1", `{"state":"closed","labels":[999]}`, "Bearer test_token_user1")
+	if failedPatch.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("patch status = %d, body = %s", failedPatch.Code, failedPatch.Body.String())
+	}
+
+	repo := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world", "", "Bearer test_token_user1")
+	if repo.Code != http.StatusOK {
+		t.Fatalf("repo status = %d, body = %s", repo.Code, repo.Body.String())
+	}
+	var repoBody struct {
+		OpenIssuesCount int `json:"open_issues_count"`
+	}
+	decodeGitHubBody(t, repo, &repoBody)
+	if repoBody.OpenIssuesCount != 1 {
+		t.Fatalf("open_issues_count = %d, body = %s", repoBody.OpenIssuesCount, repo.Body.String())
+	}
+
+	gotIssue := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world/issues/1", "", "Bearer test_token_user1")
+	if gotIssue.Code != http.StatusOK {
+		t.Fatalf("get issue status = %d, body = %s", gotIssue.Code, gotIssue.Body.String())
+	}
+	var issueBody struct {
+		State string `json:"state"`
+	}
+	decodeGitHubBody(t, gotIssue, &issueBody)
+	if issueBody.State != "open" {
+		t.Fatalf("issue state = %s, body = %s", issueBody.State, gotIssue.Body.String())
+	}
+}
+
+func TestGitHubPullIssueCommentsSyncPullCommentCount(t *testing.T) {
+	handler := newGitHubTestHandler(&SeedConfig{
+		Users: []UserSeed{{Login: "octocat", Email: "octocat@github.com"}},
+		Repos: []RepoSeed{{Owner: "octocat", Name: "hello-world"}},
+	})
+
+	branches := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world/branches", "", "Bearer test_token_user1")
+	if branches.Code != http.StatusOK {
+		t.Fatalf("branches status = %d, body = %s", branches.Code, branches.Body.String())
+	}
+	mainSha := defaultBranchSha(t, branches, "main")
+
+	ref := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/git/refs", `{"ref":"refs/heads/feature","sha":"`+mainSha+`"}`, "Bearer test_token_user1")
+	if ref.Code != http.StatusCreated {
+		t.Fatalf("ref status = %d, body = %s", ref.Code, ref.Body.String())
+	}
+
+	pr := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/pulls", `{"title":"Feature","head":"feature","base":"main"}`, "Bearer test_token_user1")
+	if pr.Code != http.StatusCreated {
+		t.Fatalf("pull status = %d, body = %s", pr.Code, pr.Body.String())
+	}
+
+	comment := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/issues/1/comments", `{"body":"looks good"}`, "Bearer test_token_user1")
+	if comment.Code != http.StatusCreated {
+		t.Fatalf("comment status = %d, body = %s", comment.Code, comment.Body.String())
+	}
+	var commentBody struct {
+		ID int `json:"id"`
+	}
+	decodeGitHubBody(t, comment, &commentBody)
+
+	pull := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world/pulls/1", "", "Bearer test_token_user1")
+	if pull.Code != http.StatusOK {
+		t.Fatalf("pull status = %d, body = %s", pull.Code, pull.Body.String())
+	}
+	var pullBody struct {
+		Comments int `json:"comments"`
+	}
+	decodeGitHubBody(t, pull, &pullBody)
+	if pullBody.Comments != 1 {
+		t.Fatalf("pull comments after create = %d, body = %s", pullBody.Comments, pull.Body.String())
+	}
+
+	deleted := doGitHubJSON(handler, http.MethodDelete, "/repos/octocat/hello-world/issues/comments/"+strconv.Itoa(commentBody.ID), "", "Bearer test_token_user1")
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, body = %s", deleted.Code, deleted.Body.String())
+	}
+
+	pull = doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world/pulls/1", "", "Bearer test_token_user1")
+	if pull.Code != http.StatusOK {
+		t.Fatalf("pull status = %d, body = %s", pull.Code, pull.Body.String())
+	}
+	decodeGitHubBody(t, pull, &pullBody)
+	if pullBody.Comments != 0 {
+		t.Fatalf("pull comments after delete = %d, body = %s", pullBody.Comments, pull.Body.String())
 	}
 }
 

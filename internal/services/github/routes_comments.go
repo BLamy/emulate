@@ -118,6 +118,9 @@ func (s *Service) handleCreateIssueComment(c *corehttp.Context) {
 	})
 	comment, _ := s.store.Comments.Update(intField(row, "id"), corestore.Record{"node_id": generateNodeID("IssueComment", intField(row, "id"))})
 	s.store.Issues.Update(intField(issue, "id"), corestore.Record{"comments": intField(issue, "comments") + 1})
+	if boolField(issue, "is_pull_request") {
+		s.adjustPullIssueCommentCount(intField(repo, "id"), intField(issue, "number"), 1)
+	}
 	c.JSON(http.StatusCreated, s.formatComment(comment))
 }
 
@@ -170,9 +173,26 @@ func (s *Service) handleDeleteIssueComment(c *corehttp.Context) {
 				next = 0
 			}
 			s.store.Issues.Update(intField(issue, "id"), corestore.Record{"comments": next})
+			if boolField(issue, "is_pull_request") {
+				s.adjustPullIssueCommentCount(intField(repo, "id"), intField(issue, "number"), -1)
+			}
 		}
 	}
 	c.Writer.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Service) adjustPullIssueCommentCount(repoID int, number int, delta int) {
+	for _, pr := range s.store.PullRequests.FindBy("repo_id", repoID) {
+		if intField(pr, "number") != number {
+			continue
+		}
+		next := intField(pr, "comments") + delta
+		if next < 0 {
+			next = 0
+		}
+		s.store.PullRequests.Update(intField(pr, "id"), corestore.Record{"comments": next})
+		return
+	}
 }
 
 func (s *Service) issueCommentFromRequest(c *corehttp.Context) (corestore.Record, corestore.Record, bool) {
