@@ -20,7 +20,6 @@ func (s *Service) registerOAuthRoutes(router *corehttp.Router) {
 	router.Get("/login/oauth/authorize", s.handleOAuthAuthorize)
 	router.Post("/login/oauth/callback", s.handleOAuthCallback)
 	router.Post("/login/oauth/access_token", s.handleOAuthToken)
-	router.Get("/login/oauth/userinfo", s.handleOAuthUserinfo)
 	router.Get("/userinfo", s.handleOAuthUserinfo)
 	router.Get("/user/emails", s.handleUserEmails)
 }

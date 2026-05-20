@@ -33,6 +33,23 @@ func TestGitHubCurrentUserUsesDefaultToken(t *testing.T) {
 	}
 }
 
+func TestGitHubDefaultUserTokenUsesDefaultOctocat(t *testing.T) {
+	handler := newGitHubTestHandler(nil)
+	res := doGitHubJSON(handler, http.MethodGet, "/user", "", "Bearer test_token_user1")
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Login string `json:"login"`
+		Email string `json:"email"`
+	}
+	decodeGitHubBody(t, res, &body)
+	if body.Login != "octocat" || body.Email != "octocat@github.com" {
+		t.Fatalf("unexpected user: %#v", body)
+	}
+}
+
 func TestGitHubConfiguredTokensReplaceDefaultTokens(t *testing.T) {
 	handler := newGitHubTestHandler(&SeedConfig{
 		Users: []UserSeed{{Login: "octocat", Email: "octocat@github.com"}},
@@ -425,6 +442,14 @@ func TestGitHubMergeCreatesResolvableCommit(t *testing.T) {
 		t.Fatalf("pull status = %d, body = %s", pr.Code, pr.Body.String())
 	}
 
+	stale := doGitHubJSON(handler, http.MethodPut, "/repos/octocat/hello-world/pulls/1/merge", `{"sha":"deadbeef"}`, "Bearer test_token_user1")
+	if stale.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("stale merge status = %d, body = %s", stale.Code, stale.Body.String())
+	}
+	if !strings.Contains(stale.Body.String(), "Head sha is out of date") {
+		t.Fatalf("unexpected stale merge body: %s", stale.Body.String())
+	}
+
 	merge := doGitHubJSON(handler, http.MethodPut, "/repos/octocat/hello-world/pulls/1/merge", `{}`, "Bearer test_token_user1")
 	if merge.Code != http.StatusOK {
 		t.Fatalf("merge status = %d, body = %s", merge.Code, merge.Body.String())
@@ -466,6 +491,50 @@ func TestGitHubMergeCreatesResolvableCommit(t *testing.T) {
 	decodeGitHubBody(t, pull, &pullBody)
 	if pullBody.MergedBy == nil || pullBody.MergedBy.Login != "octocat" {
 		t.Fatalf("unexpected merged_by: %#v, body = %s", pullBody.MergedBy, pull.Body.String())
+	}
+}
+
+func TestGitHubMergeRejectsDraftPull(t *testing.T) {
+	handler := newGitHubTestHandler(&SeedConfig{
+		Users: []UserSeed{{Login: "octocat", Email: "octocat@github.com"}},
+		Repos: []RepoSeed{{Owner: "octocat", Name: "hello-world"}},
+	})
+
+	branches := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world/branches", "", "Bearer test_token_user1")
+	if branches.Code != http.StatusOK {
+		t.Fatalf("branches status = %d, body = %s", branches.Code, branches.Body.String())
+	}
+	mainSha := defaultBranchSha(t, branches, "main")
+
+	ref := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/git/refs", `{"ref":"refs/heads/feature","sha":"`+mainSha+`"}`, "Bearer test_token_user1")
+	if ref.Code != http.StatusCreated {
+		t.Fatalf("ref status = %d, body = %s", ref.Code, ref.Body.String())
+	}
+
+	pr := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/pulls", `{"title":"Feature","head":"feature","base":"main","draft":true}`, "Bearer test_token_user1")
+	if pr.Code != http.StatusCreated {
+		t.Fatalf("pull status = %d, body = %s", pr.Code, pr.Body.String())
+	}
+
+	merge := doGitHubJSON(handler, http.MethodPut, "/repos/octocat/hello-world/pulls/1/merge", `{}`, "Bearer test_token_user1")
+	if merge.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("merge status = %d, body = %s", merge.Code, merge.Body.String())
+	}
+	if !strings.Contains(merge.Body.String(), "Draft pull requests cannot be merged.") {
+		t.Fatalf("unexpected merge body: %s", merge.Body.String())
+	}
+
+	pull := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world/pulls/1", "", "Bearer test_token_user1")
+	if pull.Code != http.StatusOK {
+		t.Fatalf("pull status = %d, body = %s", pull.Code, pull.Body.String())
+	}
+	var body struct {
+		State  string `json:"state"`
+		Merged bool   `json:"merged"`
+	}
+	decodeGitHubBody(t, pull, &body)
+	if body.State != "open" || body.Merged {
+		t.Fatalf("draft pull was merged: %#v, body = %s", body, pull.Body.String())
 	}
 }
 
@@ -837,6 +906,23 @@ func TestGitHubOAuthIssuesUsableToken(t *testing.T) {
 	user := doGitHubJSON(handler, http.MethodGet, "/user", "", "Bearer "+tokenBody.AccessToken)
 	if user.Code != http.StatusOK || !strings.Contains(user.Body.String(), `"login":"octocat"`) {
 		t.Fatalf("user status = %d, body = %s", user.Code, user.Body.String())
+	}
+}
+
+func TestGitHubDoesNotRegisterConflictingLoginOAuthUserinfo(t *testing.T) {
+	handler := newGitHubTestHandler(nil)
+
+	conflicting := doGitHubJSON(handler, http.MethodGet, "/login/oauth/userinfo", "", "Bearer test_token_admin")
+	if conflicting.Code != http.StatusNotFound {
+		t.Fatalf("conflicting userinfo status = %d, body = %s", conflicting.Code, conflicting.Body.String())
+	}
+
+	userinfo := doGitHubJSON(handler, http.MethodGet, "/userinfo", "", "Bearer test_token_admin")
+	if userinfo.Code != http.StatusOK {
+		t.Fatalf("userinfo status = %d, body = %s", userinfo.Code, userinfo.Body.String())
+	}
+	if !strings.Contains(userinfo.Body.String(), `"preferred_username":"admin"`) {
+		t.Fatalf("unexpected userinfo body: %s", userinfo.Body.String())
 	}
 }
 

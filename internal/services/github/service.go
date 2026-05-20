@@ -93,11 +93,11 @@ func New(options Options) *Service {
 		baseURL: baseURL,
 	}
 	service.SeedDefaults()
-	if options.Seed == nil || options.Seed.Tokens == nil {
-		service.SeedDefaultTokens()
-	}
 	if options.Seed != nil {
 		service.SeedFromConfig(*options.Seed)
+	}
+	if options.Seed == nil || options.Seed.Tokens == nil {
+		service.SeedDefaultTokens()
 	}
 	return service
 }
@@ -140,6 +140,10 @@ func (s *Service) SeedDefaultTokens() {
 		})
 	}
 	if firstRecord(s.store.Tokens.FindBy("tokenString", "test_token_user1")) == nil {
+		if firstRecord(s.store.Users.FindBy("login", "octocat")) == nil {
+			octocat := s.store.Users.Insert(defaultUserRecord("octocat", "The Octocat", "octocat@github.com", false))
+			s.store.Users.Update(intField(octocat, "id"), corestore.Record{"node_id": generateNodeID("User", intField(octocat, "id"))})
+		}
 		s.store.Tokens.Insert(corestore.Record{
 			"tokenString": "test_token_user1",
 			"login":       "octocat",

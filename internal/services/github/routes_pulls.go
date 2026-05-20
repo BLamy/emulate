@@ -253,6 +253,19 @@ func (s *Service) handleMergePull(c *corehttp.Context) {
 		writeValidation(c, "Pull Request is not mergeable")
 		return
 	}
+	body, err := parseJSONBody(c.Request)
+	if err != nil {
+		writeValidation(c, "Invalid JSON body")
+		return
+	}
+	if boolField(pr, "draft") {
+		writeValidation(c, "Draft pull requests cannot be merged.")
+		return
+	}
+	if sha := strings.TrimSpace(stringValue(body["sha"])); sha != "" && sha != stringField(pr, "head_sha") {
+		writeValidation(c, "Head sha is out of date")
+		return
+	}
 	baseRepo, ok := s.store.Repos.Get(intField(pr, "base_repo_id"))
 	if !ok {
 		writeValidation(c, "Base repository not found")
