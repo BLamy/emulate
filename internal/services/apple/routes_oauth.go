@@ -193,14 +193,16 @@ func (s *Service) handleAuthorizeCallback(c *corehttp.Context) {
 		writeOAuthError(c, http.StatusBadRequest, "invalid_request", "Invalid redirect_uri.")
 		return
 	}
+	if responseMode == "fragment" {
+		fragment, _ := url.ParseQuery(target.Fragment)
+		addAuthorizationResponseValues(fragment, code, state, userJSON)
+		target.Fragment = fragment.Encode()
+		target.RawFragment = ""
+		c.Redirect(http.StatusFound, target.String())
+		return
+	}
 	query := target.Query()
-	query.Set("code", code)
-	if state != "" {
-		query.Set("state", state)
-	}
-	if userJSON != "" {
-		query.Set("user", userJSON)
-	}
+	addAuthorizationResponseValues(query, code, state, userJSON)
 	target.RawQuery = query.Encode()
 	c.Redirect(http.StatusFound, target.String())
 }
@@ -230,6 +232,16 @@ func (s *Service) handleAuthorizationCodeToken(c *corehttp.Context) {
 	}
 	if time.Since(pendingCodeCreatedAt(pending)) > pendingCodeTTL {
 		s.deleteOAuthCode(code)
+		writeOAuthError(c, http.StatusBadRequest, "invalid_grant", "The code is incorrect or expired.")
+		return
+	}
+	clientID := c.Request.Form.Get("client_id")
+	redirectURI := c.Request.Form.Get("redirect_uri")
+	if pendingClientID := stringField(pending, "client_id"); pendingClientID != "" && clientID != pendingClientID {
+		writeOAuthError(c, http.StatusBadRequest, "invalid_grant", "The code is incorrect or expired.")
+		return
+	}
+	if pendingRedirectURI := stringField(pending, "redirect_uri"); pendingRedirectURI != "" && redirectURI != "" && redirectURI != pendingRedirectURI {
 		writeOAuthError(c, http.StatusBadRequest, "invalid_grant", "The code is incorrect or expired.")
 		return
 	}
@@ -317,6 +329,16 @@ func pendingCodeCreatedAt(row corestore.Record) time.Time {
 		return time.Now()
 	}
 	return time.UnixMilli(int64(millis))
+}
+
+func addAuthorizationResponseValues(values url.Values, code string, state string, userJSON string) {
+	values.Set("code", code)
+	if state != "" {
+		values.Set("state", state)
+	}
+	if userJSON != "" {
+		values.Set("user", userJSON)
+	}
 }
 
 func writeOAuthError(c *corehttp.Context, status int, code string, description string) {

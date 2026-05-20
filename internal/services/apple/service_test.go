@@ -166,6 +166,37 @@ func TestFormPostResponseMode(t *testing.T) {
 	}
 }
 
+func TestFragmentResponseMode(t *testing.T) {
+	handler := newTestHandler()
+	code, state, userJSON := getAuthCode(t, handler, authCodeOptions{ResponseMode: "fragment"})
+	if code == "" || state != "test-state" {
+		t.Fatalf("unexpected fragment values: code=%q state=%q", code, state)
+	}
+	if userJSON == "" {
+		t.Fatalf("missing first authorization user JSON")
+	}
+}
+
+func TestAuthorizationCodeRejectsMismatchedClientID(t *testing.T) {
+	handler := newTestHandler()
+	code, _, _ := getAuthCode(t, handler, authCodeOptions{})
+
+	res, body := exchangeCode(t, handler, code, tokenExchangeOptions{ClientID: "other-client"})
+	if res.Code != http.StatusBadRequest || body["error"] != "invalid_grant" {
+		t.Fatalf("unexpected mismatched client response: status=%d body=%#v", res.Code, body)
+	}
+}
+
+func TestAuthorizationCodeRejectsMismatchedRedirectURI(t *testing.T) {
+	handler := newTestHandler()
+	code, _, _ := getAuthCode(t, handler, authCodeOptions{})
+
+	res, body := exchangeCode(t, handler, code, tokenExchangeOptions{RedirectURI: "http://localhost:3000/other"})
+	if res.Code != http.StatusBadRequest || body["error"] != "invalid_grant" {
+		t.Fatalf("unexpected mismatched redirect response: status=%d body=%#v", res.Code, body)
+	}
+}
+
 func TestUnsupportedGrantType(t *testing.T) {
 	handler := newTestHandler()
 	form := url.Values{
@@ -248,17 +279,33 @@ func getAuthCode(t *testing.T, handler http.Handler, opts authCodeOptions) (stri
 	if err != nil {
 		t.Fatalf("invalid redirect location: %v", err)
 	}
+	if responseMode == "fragment" {
+		fragment, err := url.ParseQuery(target.Fragment)
+		if err != nil {
+			t.Fatalf("invalid redirect fragment: %v", err)
+		}
+		return fragment.Get("code"), fragment.Get("state"), fragment.Get("user")
+	}
 	return target.Query().Get("code"), target.Query().Get("state"), target.Query().Get("user")
 }
 
-func exchangeCode(t *testing.T, handler http.Handler, code string) (*httptest.ResponseRecorder, map[string]any) {
+type tokenExchangeOptions struct {
+	ClientID    string
+	RedirectURI string
+}
+
+func exchangeCode(t *testing.T, handler http.Handler, code string, opts ...tokenExchangeOptions) (*httptest.ResponseRecorder, map[string]any) {
 	t.Helper()
+	options := tokenExchangeOptions{}
+	if len(opts) > 0 {
+		options = opts[0]
+	}
 	form := url.Values{
 		"grant_type":    []string{"authorization_code"},
 		"code":          []string{code},
-		"client_id":     []string{"test-client"},
+		"client_id":     []string{firstNonEmpty(options.ClientID, "test-client")},
 		"client_secret": []string{"fake"},
-		"redirect_uri":  []string{"http://localhost:3000/callback"},
+		"redirect_uri":  []string{firstNonEmpty(options.RedirectURI, "http://localhost:3000/callback")},
 	}
 	return requestJSON(t, handler, http.MethodPost, "/auth/token", form.Encode())
 }
