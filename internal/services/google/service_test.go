@@ -372,6 +372,32 @@ func TestGoogleUploadDraftRoutes(t *testing.T) {
 	}
 }
 
+func TestGoogleUpdateDraftRawMIMEReplacesAttachments(t *testing.T) {
+	handler := newGoogleTestHandler()
+	createRaw := rawGoogleMessageWithAttachment("testuser@example.com", "partner@example.com", "original.txt", "original attachment")
+	res := googleRequest(handler, http.MethodPost, "/gmail/v1/users/me/drafts", `{"message":{"raw":"`+createRaw+`"}}`, true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("create draft status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var draft struct {
+		ID string `json:"id"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &draft)
+	if draft.ID == "" {
+		t.Fatalf("missing draft ID: %s", res.Body.String())
+	}
+
+	updateRaw := rawGoogleMessageWithAttachment("testuser@example.com", "partner@example.com", "updated.txt", "updated attachment")
+	res = googleRequest(handler, http.MethodPut, "/gmail/v1/users/me/drafts/"+draft.ID, `{"message":{"raw":"`+updateRaw+`"}}`, true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("update draft status = %d, body = %s", res.Code, res.Body.String())
+	}
+	filenames := draftAttachmentFilenames(t, res.Body.Bytes())
+	if !containsString(filenames, "updated.txt") || containsString(filenames, "original.txt") {
+		t.Fatalf("unexpected attachment filenames after update: %#v", filenames)
+	}
+}
+
 func TestGoogleRejectsUnknownMutationLabels(t *testing.T) {
 	handler := newGoogleTestHandler()
 	cases := []struct {
@@ -670,6 +696,37 @@ func TestGoogleDriveParentQueryIgnoresEarlierQuotedTerms(t *testing.T) {
 	t.Fatalf("missing handbook from drive query: %#v", body.Files)
 }
 
+func TestGoogleDriveSimpleMediaUploadPersistsBytes(t *testing.T) {
+	handler := newGoogleTestHandler()
+	content := "plain upload body\n"
+	req := httptest.NewRequest(http.MethodPost, "http://localhost:4016/upload/drive/v3/files?uploadType=media", strings.NewReader(content))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("upload status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var uploaded struct {
+		ID       string `json:"id"`
+		MIMEType string `json:"mimeType"`
+		Size     string `json:"size"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &uploaded)
+	if uploaded.ID == "" || uploaded.MIMEType != "text/plain" || uploaded.Size != strconv.Itoa(len(content)) {
+		t.Fatalf("unexpected uploaded file: %#v", uploaded)
+	}
+
+	res = googleRequest(handler, http.MethodGet, "/drive/v3/files/"+uploaded.ID+"?alt=media", "", true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("download status = %d, body = %s", res.Code, res.Body.String())
+	}
+	body, _ := io.ReadAll(res.Result().Body)
+	if string(body) != content {
+		t.Fatalf("download body = %q, want %q", string(body), content)
+	}
+}
+
 func TestGoogleAttachmentsAndDraftCleanupAreScopedByUser(t *testing.T) {
 	service := New(Options{
 		Store:   corestore.New(),
@@ -808,6 +865,27 @@ func rawGoogleMessageWithAttachment(from string, to string, filename string, con
 		"",
 	}, "\r\n")
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+func draftAttachmentFilenames(t *testing.T, raw []byte) []string {
+	t.Helper()
+	var body struct {
+		Message struct {
+			Payload struct {
+				Parts []struct {
+					Filename string `json:"filename"`
+				} `json:"parts"`
+			} `json:"payload"`
+		} `json:"message"`
+	}
+	mustDecodeGoogleJSON(t, raw, &body)
+	filenames := []string{}
+	for _, part := range body.Message.Payload.Parts {
+		if part.Filename != "" {
+			filenames = append(filenames, part.Filename)
+		}
+	}
+	return filenames
 }
 
 func googleRequest(handler http.Handler, method string, path string, body string, auth bool) *httptest.ResponseRecorder {

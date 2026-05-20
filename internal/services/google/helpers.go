@@ -1033,6 +1033,26 @@ func (s *Service) listAttachmentsForMessage(message corestore.Record) []corestor
 	return attachments
 }
 
+func (s *Service) replaceMessageAttachments(message corestore.Record, attachments []parsedAttachment) {
+	for _, attachment := range s.listAttachmentsForMessage(message) {
+		s.store.Attachments.Delete(intField(attachment, "id"))
+	}
+	for _, attachment := range attachments {
+		s.store.Attachments.Insert(corestore.Record{
+			"gmail_id":          "att_" + generateUID(""),
+			"user_email":        stringField(message, "user_email"),
+			"message_gmail_id":  stringField(message, "gmail_id"),
+			"filename":          attachment.Filename,
+			"mime_type":         attachment.MIMEType,
+			"disposition":       nullableString(attachment.Disposition),
+			"content_id":        nullableString(attachment.ContentID),
+			"transfer_encoding": nullableString(attachment.TransferEncoding),
+			"data":              base64URLString(attachment.Body),
+			"size":              len(attachment.Body),
+		})
+	}
+}
+
 func buildMessageText(message corestore.Record) string {
 	headers := []string{
 		"From: " + stringField(message, "from"),

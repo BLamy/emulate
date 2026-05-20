@@ -369,6 +369,9 @@ func (s *Service) handleUpdateDraft(c *corehttp.Context) {
 	patch["label_ids"] = applyLabelMutation(stringSliceValue(message["label_ids"]), []string{"DRAFT"}, nil)
 	patch["history_id"] = generateHistoryID()
 	updated, _ := s.store.Messages.Update(intField(message, "id"), patch)
+	if input.Raw != nil {
+		s.replaceMessageAttachments(updated, parseRawMessage(stringValue(input.Raw)).Attachments)
+	}
 	c.JSON(http.StatusOK, s.formatDraft(draft, updated, "full"))
 }
 

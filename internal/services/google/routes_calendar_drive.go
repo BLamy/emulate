@@ -3,6 +3,7 @@ package google
 import (
 	"encoding/base64"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -193,6 +194,10 @@ func (s *Service) handleCreateDriveFile(c *corehttp.Context) {
 	if strings.Contains(contentType, "multipart/related") {
 		raw, _ := io.ReadAll(c.Request.Body)
 		body, mimeType, media = parseDriveMultipartUpload(contentType, raw)
+	} else if strings.HasPrefix(c.Request.URL.Path, "/upload/drive/v3/files") && c.Query("uploadType") == "media" {
+		media, _ = io.ReadAll(c.Request.Body)
+		mimeType = driveUploadContentType(contentType)
+		body = map[string]any{}
 	} else {
 		body = parseJSONBody(c.Request)
 	}
@@ -218,6 +223,17 @@ func (s *Service) handleCreateDriveFile(c *corehttp.Context) {
 		Size:            size,
 	})
 	c.JSON(http.StatusOK, formatDriveItemResource(item))
+}
+
+func driveUploadContentType(contentType string) string {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err == nil && mediaType != "" {
+		return mediaType
+	}
+	if strings.TrimSpace(contentType) != "" {
+		return strings.TrimSpace(contentType)
+	}
+	return "application/octet-stream"
 }
 
 func (s *Service) handleGetDriveFile(c *corehttp.Context) {

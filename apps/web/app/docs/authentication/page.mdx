@@ -60,6 +60,8 @@ The Google emulator uses the standard OAuth 2.0 authorization code flow. Configu
 curl http://localhost:4002/.well-known/openid-configuration
 ```
 
+When more than one of Apple, Google, and Microsoft is enabled on one native Go server, use `/google/.well-known/openid-configuration`, `/apple/.well-known/openid-configuration`, or `/microsoft/.well-known/openid-configuration` to avoid the shared root discovery path.
+
 ## Slack OAuth
 
 The Slack emulator supports OAuth v2 with a user picker UI. Configure OAuth apps in the seed config for strict client validation. Point your Slack SDK at the emulator URL:

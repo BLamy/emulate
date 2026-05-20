@@ -195,6 +195,8 @@ To override the derived value, set `hd` on a seeded user. To suppress the claim 
 curl http://localhost:4002/.well-known/openid-configuration
 ```
 
+When more than one of Apple, Google, and Microsoft is enabled on one native Go server, use `/google/.well-known/openid-configuration` to avoid the shared root discovery path.
+
 ### JWKS
 
 ```bash
