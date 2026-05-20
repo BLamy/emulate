@@ -582,6 +582,8 @@ The native Go runtime implements the core SDK-facing GitHub surface for local CL
 
 OAuth 2.0, OpenID Connect, and mutable Google Workspace-style surfaces for local inbox, calendar, and drive flows.
 
+The native Go runtime implements the OAuth/OIDC flow plus Gmail messages, drafts, threads, labels, history, settings filters, Calendar list/events/freebusy, and Drive file list/upload/download routes for local CLI runs and Vercel Go Function previews. To expose Google on a Vercel preview without separate infrastructure, run `npx emulate vercel init --service google`. The generated route serves Google at `/emulate/google/*`.
+
 - `GET /o/oauth2/v2/auth` - authorization endpoint
 - `POST /oauth2/token` - token exchange
 - `GET /oauth2/v2/userinfo` - get user info
@@ -765,7 +767,7 @@ This creates:
 - `vercel.json`, with `/emulate/:path*` rewritten to `/api/emulate?path=:path*`
 - `go.mod`, pinned to the installed `emulate` package version
 
-The scaffold currently enables the native `apple`, `aws`, `github`, `microsoft`, `resend`, and `vercel` handlers. Use `npx emulate vercel init --service github` to limit the function to one service.
+The scaffold currently enables the native `apple`, `aws`, `github`, `google`, `microsoft`, `resend`, and `vercel` handlers. Use `npx emulate vercel init --service github` to limit the function to one service.
 
 State uses warm memory by default: cold starts reset to a fresh store, warm invocations reuse mutations, and concurrent function instances can diverge. For snapshots across cold starts, implement `vercel.Persistence` in `api/emulate.go` and pass it to `emulate.NewHandler`.
 
@@ -806,7 +808,7 @@ export const { GET, POST, PUT, PATCH, DELETE } = createEmulateHandler({
 })
 ```
 
-Embedded mode is the broadest zero infra path for JavaScript emulator packages on Vercel preview deployments. The emulator code runs in the Next.js function, so OAuth callback URLs can point at the preview origin. For native Go `apple`, `aws`, `github`, `microsoft`, `resend`, and `vercel` previews, use `npx emulate vercel init`.
+Embedded mode is the broadest zero infra path for JavaScript emulator packages on Vercel preview deployments. The emulator code runs in the Next.js function, so OAuth callback URLs can point at the preview origin. For native Go `apple`, `aws`, `github`, `google`, `microsoft`, `resend`, and `vercel` previews, use `npx emulate vercel init`.
 
 ### Native runtime proxy
 

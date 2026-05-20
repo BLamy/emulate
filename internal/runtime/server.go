@@ -10,6 +10,7 @@ import (
 	"github.com/vercel-labs/emulate/internal/services/apple"
 	"github.com/vercel-labs/emulate/internal/services/aws"
 	"github.com/vercel-labs/emulate/internal/services/github"
+	"github.com/vercel-labs/emulate/internal/services/google"
 	"github.com/vercel-labs/emulate/internal/services/microsoft"
 	"github.com/vercel-labs/emulate/internal/services/resend"
 	"github.com/vercel-labs/emulate/internal/services/vercel"
@@ -25,6 +26,7 @@ type ServerOptions struct {
 	AssetStore    *coreassets.Store
 	AppleSeed     *apple.SeedConfig
 	GitHubSeed    *github.SeedConfig
+	GoogleSeed    *google.SeedConfig
 	MicrosoftSeed *microsoft.SeedConfig
 	ResendSeed    *resend.SeedConfig
 	VercelSeed    *vercel.SeedConfig
@@ -105,6 +107,13 @@ func NewServer(options ServerOptions) *Server {
 			Store:   runtimeStore,
 			BaseURL: options.BaseURL,
 			Seed:    options.GitHubSeed,
+		})
+	}
+	if serviceEnabled(services, "google") {
+		google.Register(router, google.Options{
+			Store:   runtimeStore,
+			BaseURL: options.BaseURL,
+			Seed:    options.GoogleSeed,
 		})
 	}
 	if serviceEnabled(services, "apple") {

@@ -4,6 +4,8 @@ Google OAuth 2.0, OpenID Connect, and mutable Google Workspace-style surfaces fo
 
 Part of [emulate](https://github.com/vercel-labs/emulate) — local drop-in replacement services for CI and no-network sandboxes.
 
+The native Go runtime implements this OAuth/OIDC, Gmail, Calendar, and Drive foundation for local CLI runs and Vercel Go Function previews. To expose Google on a Vercel preview without separate infrastructure, run `npx emulate vercel init --service google`.
+
 ## Install
 
 ```bash

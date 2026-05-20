@@ -8,6 +8,8 @@ allowed-tools: Bash(npx emulate:*), Bash(curl:*)
 
 OAuth 2.0 and OpenID Connect emulation with authorization code flow, PKCE support, ID tokens, OIDC discovery, refresh tokens, plus Gmail, Google Calendar, and Google Drive REST API surfaces.
 
+The native Go runtime implements the Google OAuth/OIDC foundation plus Gmail messages, drafts, threads, labels, history, settings filters, Calendar list/events/freebusy, and Drive file list/upload/download routes. Use `npx emulate vercel init --service google` for zero infra Vercel preview deployments at `/emulate/google/*`.
+
 ## Start
 
 ```bash

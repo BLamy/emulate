@@ -387,7 +387,7 @@ func TestRunStartRejectsUnsupportedNativeSeedServices(t *testing.T) {
 				t.Fatal("start with unsupported seed service exited successfully")
 			}
 			errText := stderr.String()
-			if !strings.Contains(errText, "only supports --seed for apple, github, microsoft, resend, and vercel") || !strings.Contains(errText, "aws") {
+			if !strings.Contains(errText, "only supports --seed for apple, github, google, microsoft, resend, and vercel") || !strings.Contains(errText, "aws") {
 				t.Fatalf("unexpected stderr: %s", errText)
 			}
 		})
