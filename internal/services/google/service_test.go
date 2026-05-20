@@ -1050,6 +1050,92 @@ func TestGoogleRejectsDuplicateLabelNames(t *testing.T) {
 	}
 }
 
+func TestGoogleMessageListCanFilterDraftsByLabel(t *testing.T) {
+	handler := newGoogleTestHandler()
+
+	res := googleRequest(handler, http.MethodGet, "/gmail/v1/users/me/messages", "", true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("messages status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var defaultBody struct {
+		Messages []struct {
+			ID string `json:"id"`
+		} `json:"messages"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &defaultBody)
+	for _, message := range defaultBody.Messages {
+		if message.ID == "msg_draft" {
+			t.Fatalf("default message list included draft: %#v", defaultBody.Messages)
+		}
+	}
+
+	res = googleRequest(handler, http.MethodGet, "/gmail/v1/users/me/messages?labelIds=DRAFT", "", true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("draft messages status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var draftBody struct {
+		Messages []struct {
+			ID string `json:"id"`
+		} `json:"messages"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &draftBody)
+	if len(draftBody.Messages) != 1 || draftBody.Messages[0].ID != "msg_draft" {
+		t.Fatalf("draft label filter returned %#v, want msg_draft", draftBody.Messages)
+	}
+}
+
+func TestGoogleUntrashPreservesNonInboxMessageLabels(t *testing.T) {
+	handler := newGoogleTestHandler()
+
+	res := googleRequest(handler, http.MethodPost, "/gmail/v1/users/me/messages/msg_draft/trash", "", true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("trash draft status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = googleRequest(handler, http.MethodPost, "/gmail/v1/users/me/messages/msg_draft/untrash", "", true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("untrash draft status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var draft struct {
+		LabelIDs []string `json:"labelIds"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &draft)
+	if !containsString(draft.LabelIDs, "DRAFT") || containsString(draft.LabelIDs, "TRASH") || containsString(draft.LabelIDs, "INBOX") {
+		t.Fatalf("draft labels after untrash = %#v, want DRAFT without TRASH or INBOX", draft.LabelIDs)
+	}
+
+	res = googleRequest(handler, http.MethodPost, "/gmail/v1/users/me/messages/send", `{"to":"partner@example.com","subject":"Sent thread untrash","text":"Body","threadId":"thread_sent_untrash"}`, true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("send message status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var sent struct {
+		ID string `json:"id"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &sent)
+	if sent.ID == "" {
+		t.Fatalf("missing sent message id: %s", res.Body.String())
+	}
+
+	res = googleRequest(handler, http.MethodPost, "/gmail/v1/users/me/threads/thread_sent_untrash/trash", "", true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("trash thread status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = googleRequest(handler, http.MethodPost, "/gmail/v1/users/me/threads/thread_sent_untrash/untrash", "", true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("untrash thread status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = googleRequest(handler, http.MethodGet, "/gmail/v1/users/me/messages/"+sent.ID, "", true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("get sent message status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var sentMessage struct {
+		LabelIDs []string `json:"labelIds"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &sentMessage)
+	if !containsString(sentMessage.LabelIDs, "SENT") || containsString(sentMessage.LabelIDs, "TRASH") || containsString(sentMessage.LabelIDs, "INBOX") {
+		t.Fatalf("sent labels after thread untrash = %#v, want SENT without TRASH or INBOX", sentMessage.LabelIDs)
+	}
+}
+
 func TestGoogleMessageQueryFieldOperators(t *testing.T) {
 	handler := newGoogleTestHandler()
 

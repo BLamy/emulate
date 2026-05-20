@@ -248,7 +248,7 @@ func (s *Service) handleTrashMessage(c *corehttp.Context) {
 
 func (s *Service) handleUntrashMessage(c *corehttp.Context) {
 	s.mutateMessageLabels(c, func(labels []string) []string {
-		return applyLabelMutation(labels, []string{"INBOX"}, []string{"TRASH"})
+		return untrashLabelIDs(labels)
 	})
 }
 
@@ -611,7 +611,7 @@ func (s *Service) handleTrashThread(c *corehttp.Context) {
 
 func (s *Service) handleUntrashThread(c *corehttp.Context) {
 	s.mutateThreadLabels(c, func(labels []string) []string {
-		return applyLabelMutation(labels, []string{"INBOX"}, []string{"TRASH"})
+		return untrashLabelIDs(labels)
 	})
 }
 

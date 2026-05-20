@@ -813,6 +813,14 @@ func applyLabelMutation(current []string, add []string, remove []string) []strin
 	return out
 }
 
+func untrashLabelIDs(labels []string) []string {
+	next := applyLabelMutation(labels, nil, []string{"TRASH"})
+	if !containsString(next, "SENT") && !containsString(next, "DRAFT") {
+		next = applyLabelMutation(next, []string{"INBOX"}, nil)
+	}
+	return next
+}
+
 func diffLabels(before []string, after []string) ([]string, []string) {
 	beforeSet := map[string]struct{}{}
 	afterSet := map[string]struct{}{}
@@ -875,6 +883,9 @@ func (s *Service) listMessages(userEmail string, query url.Values) []corestore.R
 		if !includeSpamTrash && (containsString(labels, "TRASH") || containsString(labels, "SPAM")) {
 			continue
 		}
+		if search == "" && len(labelFilters) == 0 && containsString(labels, "DRAFT") {
+			continue
+		}
 		if len(labelFilters) > 0 && !containsAll(labels, labelFilters) {
 			continue
 		}
@@ -891,7 +902,7 @@ func (s *Service) listMessages(userEmail string, query url.Values) []corestore.R
 
 func matchesMessageQuery(s *Service, message corestore.Record, query string) bool {
 	if query == "" {
-		return !containsString(stringSliceValue(message["label_ids"]), "DRAFT")
+		return true
 	}
 	labels := stringSliceValue(message["label_ids"])
 	parts := strings.Fields(query)
