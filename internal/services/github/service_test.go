@@ -199,6 +199,141 @@ func TestGitHubPullRequestIsVisibleThroughIssuesAPI(t *testing.T) {
 	}
 }
 
+func TestGitHubListIssuesAppliesFilters(t *testing.T) {
+	handler := newGitHubTestHandler(&SeedConfig{
+		Users: []UserSeed{
+			{Login: "octocat", Email: "octocat@github.com"},
+			{Login: "alice", Email: "alice@example.com"},
+		},
+		Tokens: map[string]TokenSeed{
+			"octo_token":  {Login: "octocat", Scopes: []string{"repo", "user"}},
+			"alice_token": {Login: "alice", Scopes: []string{"repo", "user"}},
+		},
+		Repos: []RepoSeed{{Owner: "octocat", Name: "hello-world"}},
+	})
+
+	for _, request := range []struct {
+		body  string
+		token string
+	}{
+		{`{"title":"Bug","assignees":["octocat"],"labels":["bug"]}`, "octo_token"},
+		{`{"title":"Docs","assignees":["alice"],"labels":["docs"]}`, "octo_token"},
+		{`{"title":"No owner","labels":["bug"]}`, "alice_token"},
+	} {
+		res := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/issues", request.body, "Bearer "+request.token)
+		if res.Code != http.StatusCreated {
+			t.Fatalf("issue status = %d, body = %s", res.Code, res.Body.String())
+		}
+	}
+
+	assertIssueTitles := func(target string, want ...string) {
+		t.Helper()
+		res := doGitHubJSON(handler, http.MethodGet, target, "", "Bearer octo_token")
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body = %s", target, res.Code, res.Body.String())
+		}
+		var body []struct {
+			Title string `json:"title"`
+		}
+		decodeGitHubBody(t, res, &body)
+		if len(body) != len(want) {
+			t.Fatalf("%s returned %#v, want %#v, body = %s", target, body, want, res.Body.String())
+		}
+		for i, title := range want {
+			if body[i].Title != title {
+				t.Fatalf("%s returned %#v, want %#v, body = %s", target, body, want, res.Body.String())
+			}
+		}
+	}
+
+	assertIssueTitles("/repos/octocat/hello-world/issues?labels=docs", "Docs")
+	assertIssueTitles("/repos/octocat/hello-world/issues?assignee=alice", "Docs")
+	assertIssueTitles("/repos/octocat/hello-world/issues?assignee=none", "No owner")
+	assertIssueTitles("/repos/octocat/hello-world/issues?creator=alice", "No owner")
+	assertIssueTitles("/repos/octocat/hello-world/issues?since=9999-01-01T00:00:00Z")
+}
+
+func TestGitHubPullFormattingIncludesSyncedIssueMetadata(t *testing.T) {
+	service, handler := newGitHubTestServiceHandler(&SeedConfig{
+		Users: []UserSeed{
+			{Login: "octocat", Email: "octocat@github.com"},
+			{Login: "alice", Email: "alice@example.com"},
+		},
+		Repos: []RepoSeed{{Owner: "octocat", Name: "hello-world"}},
+	})
+
+	branches := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world/branches", "", "Bearer test_token_user1")
+	if branches.Code != http.StatusOK {
+		t.Fatalf("branches status = %d, body = %s", branches.Code, branches.Body.String())
+	}
+	mainSha := defaultBranchSha(t, branches, "main")
+	ref := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/git/refs", `{"ref":"refs/heads/feature","sha":"`+mainSha+`"}`, "Bearer test_token_user1")
+	if ref.Code != http.StatusCreated {
+		t.Fatalf("ref status = %d, body = %s", ref.Code, ref.Body.String())
+	}
+	pr := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/pulls", `{"title":"Feature","head":"feature","base":"main"}`, "Bearer test_token_user1")
+	if pr.Code != http.StatusCreated {
+		t.Fatalf("pull status = %d, body = %s", pr.Code, pr.Body.String())
+	}
+
+	patchIssue := doGitHubJSON(handler, http.MethodPatch, "/repos/octocat/hello-world/issues/1", `{"assignees":["alice"],"labels":["bug"]}`, "Bearer test_token_user1")
+	if patchIssue.Code != http.StatusOK {
+		t.Fatalf("issue patch status = %d, body = %s", patchIssue.Code, patchIssue.Body.String())
+	}
+
+	repo := service.lookupRepo("octocat", "hello-world")
+	alice := firstRecord(service.store.Users.FindBy("login", "alice"))
+	milestoneRow := service.store.Milestones.Insert(corestore.Record{
+		"node_id":       "",
+		"repo_id":       intField(repo, "id"),
+		"number":        1,
+		"title":         "v1",
+		"description":   nil,
+		"state":         "open",
+		"open_issues":   1,
+		"closed_issues": 0,
+		"due_on":        nil,
+		"closed_at":     nil,
+		"creator_id":    intField(alice, "id"),
+	})
+	milestone, _ := service.store.Milestones.Update(intField(milestoneRow, "id"), corestore.Record{"node_id": generateNodeID("Milestone", intField(milestoneRow, "id"))})
+	if issue := service.findPullIssue(intField(repo, "id"), 1); issue != nil {
+		service.store.Issues.Update(intField(issue, "id"), corestore.Record{"milestone_id": intField(milestone, "id")})
+	}
+	if pull := service.findPullByNumber(intField(repo, "id"), 1); pull != nil {
+		service.store.PullRequests.Update(intField(pull, "id"), corestore.Record{"milestone_id": intField(milestone, "id")})
+	}
+
+	pull := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world/pulls/1", "", "Bearer test_token_user1")
+	if pull.Code != http.StatusOK {
+		t.Fatalf("pull status = %d, body = %s", pull.Code, pull.Body.String())
+	}
+	var body struct {
+		Assignee *struct {
+			Login string `json:"login"`
+		} `json:"assignee"`
+		Assignees []struct {
+			Login string `json:"login"`
+		} `json:"assignees"`
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
+		Milestone *struct {
+			Title string `json:"title"`
+		} `json:"milestone"`
+	}
+	decodeGitHubBody(t, pull, &body)
+	if body.Assignee == nil || body.Assignee.Login != "alice" || len(body.Assignees) != 1 || body.Assignees[0].Login != "alice" {
+		t.Fatalf("unexpected assignees: %#v, body = %s", body, pull.Body.String())
+	}
+	if len(body.Labels) != 1 || body.Labels[0].Name != "bug" {
+		t.Fatalf("unexpected labels: %#v, body = %s", body.Labels, pull.Body.String())
+	}
+	if body.Milestone == nil || body.Milestone.Title != "v1" {
+		t.Fatalf("unexpected milestone: %#v, body = %s", body.Milestone, pull.Body.String())
+	}
+}
+
 func TestGitHubRepoWithoutTopicsReturnsEmptyArrays(t *testing.T) {
 	handler := newGitHubTestHandler(&SeedConfig{
 		Users: []UserSeed{{Login: "octocat", Email: "octocat@github.com"}},

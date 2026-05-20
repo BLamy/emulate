@@ -43,6 +43,143 @@ func (s *Service) handleListIssues(c *corehttp.Context) {
 		}
 		list = append(list, issue)
 	}
+	labelNames := issueLabelFilters(c.Query("labels"))
+	if len(labelNames) > 0 {
+		labelIDs := make([]int, 0, len(labelNames))
+		for _, name := range labelNames {
+			var labelID int
+			for _, label := range s.store.Labels.FindBy("repo_id", intField(repo, "id")) {
+				if stringField(label, "name") == name {
+					labelID = intField(label, "id")
+					break
+				}
+			}
+			if labelID == 0 {
+				list = nil
+				break
+			}
+			labelIDs = append(labelIDs, labelID)
+		}
+		if len(list) > 0 {
+			filtered := list[:0]
+			for _, issue := range list {
+				issueLabelIDs := intSliceValue(issue["label_ids"])
+				matches := true
+				for _, labelID := range labelIDs {
+					if !containsInt(issueLabelIDs, labelID) {
+						matches = false
+						break
+					}
+				}
+				if matches {
+					filtered = append(filtered, issue)
+				}
+			}
+			list = filtered
+		}
+	}
+	if milestone := c.Query("milestone"); milestone != "" {
+		switch milestone {
+		case "none":
+			filtered := list[:0]
+			for _, issue := range list {
+				if intField(issue, "milestone_id") == 0 {
+					filtered = append(filtered, issue)
+				}
+			}
+			list = filtered
+		case "*":
+			filtered := list[:0]
+			for _, issue := range list {
+				if intField(issue, "milestone_id") > 0 {
+					filtered = append(filtered, issue)
+				}
+			}
+			list = filtered
+		default:
+			number, err := strconv.Atoi(milestone)
+			if err != nil {
+				list = nil
+				break
+			}
+			var milestoneID int
+			for _, row := range s.store.Milestones.FindBy("repo_id", intField(repo, "id")) {
+				if intField(row, "number") == number {
+					milestoneID = intField(row, "id")
+					break
+				}
+			}
+			if milestoneID == 0 {
+				list = nil
+				break
+			}
+			filtered := list[:0]
+			for _, issue := range list {
+				if intField(issue, "milestone_id") == milestoneID {
+					filtered = append(filtered, issue)
+				}
+			}
+			list = filtered
+		}
+	}
+	if assignee := c.Query("assignee"); assignee != "" {
+		switch assignee {
+		case "none":
+			filtered := list[:0]
+			for _, issue := range list {
+				if len(intSliceValue(issue["assignee_ids"])) == 0 {
+					filtered = append(filtered, issue)
+				}
+			}
+			list = filtered
+		case "*":
+			filtered := list[:0]
+			for _, issue := range list {
+				if len(intSliceValue(issue["assignee_ids"])) > 0 {
+					filtered = append(filtered, issue)
+				}
+			}
+			list = filtered
+		default:
+			user := firstRecord(s.store.Users.FindBy("login", assignee))
+			if user == nil {
+				list = nil
+				break
+			}
+			userID := intField(user, "id")
+			filtered := list[:0]
+			for _, issue := range list {
+				if containsInt(intSliceValue(issue["assignee_ids"]), userID) {
+					filtered = append(filtered, issue)
+				}
+			}
+			list = filtered
+		}
+	}
+	if creator := c.Query("creator"); creator != "" {
+		user := firstRecord(s.store.Users.FindBy("login", creator))
+		if user == nil {
+			list = nil
+		} else {
+			userID := intField(user, "id")
+			filtered := list[:0]
+			for _, issue := range list {
+				if intField(issue, "user_id") == userID {
+					filtered = append(filtered, issue)
+				}
+			}
+			list = filtered
+		}
+	}
+	if since := c.Query("since"); since != "" {
+		filtered := list[:0]
+		for _, issue := range list {
+			if stringField(issue, "updated_at") >= since {
+				filtered = append(filtered, issue)
+			}
+		}
+		list = filtered
+	}
 	sortKey := c.Query("sort")
 	if sortKey == "" {
 		sortKey = "created"
@@ -370,4 +507,18 @@ func nullableIssueBody(value any) any {
 		return body
 	}
 	return nil
+}
+
+func issueLabelFilters(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if label := strings.TrimSpace(part); label != "" {
+			out = append(out, label)
+		}
+	}
+	return out
 }

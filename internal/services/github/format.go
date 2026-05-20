@@ -263,6 +263,12 @@ func (s *Service) formatIssue(issue corestore.Record) map[string]any {
 			labels = append(labels, s.formatLabel(label, repo))
 		}
 	}
+	var milestone any
+	if id := intField(issue, "milestone_id"); id > 0 {
+		if row, ok := s.store.Milestones.Get(id); ok {
+			milestone = s.formatMilestone(row, repo)
+		}
+	}
 	var closedBy any
 	if id := nullableIntField(issue, "closed_by_id"); id != nil && *id > 0 {
 		if u, ok := s.store.Users.Get(*id); ok {
@@ -288,7 +294,7 @@ func (s *Service) formatIssue(issue corestore.Record) map[string]any {
 		"active_lock_reason":       issue["active_lock_reason"],
 		"assignee":                 firstAny(assignees),
 		"assignees":                assignees,
-		"milestone":                nil,
+		"milestone":                milestone,
 		"comments":                 intField(issue, "comments"),
 		"created_at":               issue["created_at"],
 		"updated_at":               issue["updated_at"],
@@ -327,6 +333,24 @@ func (s *Service) formatPull(pr corestore.Record) map[string]any {
 	number := intField(pr, "number")
 	headRepo, _ := s.store.Repos.Get(intField(pr, "head_repo_id"))
 	baseRepo, _ := s.store.Repos.Get(intField(pr, "base_repo_id"))
+	assignees := make([]any, 0)
+	for _, id := range intSliceValue(pr["assignee_ids"]) {
+		if assignee, ok := s.store.Users.Get(id); ok {
+			assignees = append(assignees, s.formatUser(assignee))
+		}
+	}
+	labels := make([]any, 0)
+	for _, id := range intSliceValue(pr["label_ids"]) {
+		if label, ok := s.store.Labels.Get(id); ok {
+			labels = append(labels, s.formatLabel(label, repo))
+		}
+	}
+	var milestone any
+	if id := intField(pr, "milestone_id"); id > 0 {
+		if row, ok := s.store.Milestones.Get(id); ok {
+			milestone = s.formatMilestone(row, repo)
+		}
+	}
 	var mergedBy any
 	if mergedByID := nullableIntField(pr, "merged_by_id"); mergedByID != nil && *mergedByID > 0 {
 		if user, ok := s.store.Users.Get(*mergedByID); ok {
@@ -352,12 +376,12 @@ func (s *Service) formatPull(pr corestore.Record) map[string]any {
 		"closed_at":             pr["closed_at"],
 		"merged_at":             pr["merged_at"],
 		"merge_commit_sha":      pr["merge_commit_sha"],
-		"assignee":              nil,
-		"assignees":             []any{},
+		"assignee":              firstAny(assignees),
+		"assignees":             assignees,
 		"requested_reviewers":   []any{},
 		"requested_teams":       []any{},
-		"labels":                []any{},
-		"milestone":             nil,
+		"labels":                labels,
+		"milestone":             milestone,
 		"draft":                 boolField(pr, "draft"),
 		"commits_url":           repoURL + "/pulls/" + strconv.Itoa(number) + "/commits",
 		"review_comments_url":   repoURL + "/pulls/" + strconv.Itoa(number) + "/comments",
@@ -519,6 +543,35 @@ func (s *Service) formatLabel(label corestore.Record, repo corestore.Record) map
 		"description": label["description"],
 		"color":       stringField(label, "color"),
 		"default":     boolField(label, "default"),
+	}
+}
+
+func (s *Service) formatMilestone(milestone corestore.Record, repo corestore.Record) map[string]any {
+	repoURL := s.baseURL + "/repos/" + stringField(repo, "full_name")
+	number := intField(milestone, "number")
+	var creator any
+	if creatorID := intField(milestone, "creator_id"); creatorID > 0 {
+		if user, ok := s.store.Users.Get(creatorID); ok {
+			creator = s.formatUser(user)
+		}
+	}
+	return map[string]any{
+		"url":           repoURL + "/milestones/" + strconv.Itoa(number),
+		"html_url":      s.baseURL + "/" + stringField(repo, "full_name") + "/milestone/" + strconv.Itoa(number),
+		"labels_url":    repoURL + "/milestones/" + strconv.Itoa(number) + "/labels",
+		"id":            intField(milestone, "id"),
+		"node_id":       stringField(milestone, "node_id"),
+		"number":        number,
+		"title":         stringField(milestone, "title"),
+		"description":   milestone["description"],
+		"creator":       creator,
+		"open_issues":   intField(milestone, "open_issues"),
+		"closed_issues": intField(milestone, "closed_issues"),
+		"state":         stringField(milestone, "state"),
+		"created_at":    milestone["created_at"],
+		"updated_at":    milestone["updated_at"],
+		"due_on":        milestone["due_on"],
+		"closed_at":     milestone["closed_at"],
 	}
 }
 
