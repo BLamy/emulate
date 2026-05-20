@@ -1017,12 +1017,21 @@ func constantTimeEqual(left string, right string) bool {
 }
 
 func matchesRedirectURI(uri string, registered []string) bool {
+	normalized := normalizeRedirectURI(uri)
 	for _, candidate := range registered {
-		if uri == candidate {
+		if normalized == normalizeRedirectURI(candidate) {
 			return true
 		}
 	}
 	return false
+}
+
+func normalizeRedirectURI(uri string) string {
+	parsed, err := url.Parse(uri)
+	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		return parsed.Scheme + "://" + parsed.Host + strings.TrimRight(parsed.EscapedPath(), "/")
+	}
+	return strings.TrimRight(strings.Split(uri, "?")[0], "/")
 }
 
 func encodePKCES256(verifier string) string {

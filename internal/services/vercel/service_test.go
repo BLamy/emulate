@@ -220,6 +220,27 @@ func TestVercelOAuthIssuesUsableBearerToken(t *testing.T) {
 	}
 }
 
+func TestVercelOAuthAuthorizeNormalizesRegisteredRedirectURI(t *testing.T) {
+	handler := newVercelTestHandlerWithSeed(&SeedConfig{
+		Users: []UserSeed{{Username: "testuser", Email: "testuser@example.com", Name: "Test User"}},
+		Integrations: []IntegrationSeed{{
+			ClientID:     "client-id",
+			ClientSecret: "client-secret",
+			Name:         "Test Integration",
+			RedirectURIs: []string{"http://localhost:3000/callback"},
+		}},
+	})
+	target := "/oauth/authorize?client_id=client-id&redirect_uri=" + url.QueryEscape("http://localhost:3000/callback/?next=/dashboard")
+	res := doVercelJSON(handler, http.MethodGet, target, "", false)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("authorize status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "Test Integration") {
+		t.Fatalf("authorize page did not render integration name: %s", res.Body.String())
+	}
+}
+
 func TestVercelEnvRejectsMalformedArrays(t *testing.T) {
 	handler := newVercelTestHandler()
 	projectID := createVercelProject(t, handler, "env-validation-app")
@@ -371,12 +392,16 @@ func findTestFileTreeChild(children []testFileTreeNode, name string, nodeType st
 }
 
 func newVercelTestHandler() http.Handler {
+	return newVercelTestHandlerWithSeed(&SeedConfig{
+		Users: []UserSeed{{Username: "testuser", Email: "testuser@example.com", Name: "Test User"}},
+	})
+}
+
+func newVercelTestHandlerWithSeed(seed *SeedConfig) http.Handler {
 	router := corehttp.NewRouter()
 	Register(router, Options{
 		BaseURL: testBaseURL,
-		Seed: &SeedConfig{
-			Users: []UserSeed{{Username: "testuser", Email: "testuser@example.com", Name: "Test User"}},
-		},
+		Seed:    seed,
 	})
 	return router
 }
