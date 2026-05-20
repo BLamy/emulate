@@ -144,6 +144,9 @@ func (s *Service) createMessageFromRequest(c *corehttp.Context, mode string) {
 	case mode == "import" && len(defaultLabels) == 0:
 		defaultLabels = []string{"INBOX", "UNREAD"}
 	}
+	if !s.validateMutationLabelIDs(c, email, defaultLabels) {
+		return
+	}
 	messageBody := body
 	if nested, ok := body["message"].(map[string]any); ok {
 		messageBody = nested
@@ -308,6 +311,9 @@ func (s *Service) handleCreateDraft(c *corehttp.Context) {
 	}
 	input := s.messageInputFromBody(email, messageBody)
 	input.LabelIDs = dedupeStrings(append(input.LabelIDs, "DRAFT"))
+	if !s.validateMutationLabelIDs(c, email, input.LabelIDs) {
+		return
+	}
 	if input.Raw == nil && (input.From == "" || input.To == "") {
 		googleAPIError(c, http.StatusBadRequest, "A raw MIME message or explicit from/to fields are required.", "invalidArgument", "INVALID_ARGUMENT")
 		return
@@ -723,12 +729,16 @@ func (s *Service) handleDeleteLabel(c *corehttp.Context) {
 func (s *Service) formatLabel(email string, label corestore.Record) map[string]any {
 	total := 0
 	unread := 0
+	threadIDs := map[string]struct{}{}
+	unreadThreadIDs := map[string]struct{}{}
 	for _, message := range s.store.Messages.FindBy("user_email", email) {
 		labels := stringSliceValue(message["label_ids"])
 		if containsString(labels, stringField(label, "gmail_id")) {
 			total++
+			threadIDs[stringField(message, "thread_id")] = struct{}{}
 			if containsString(labels, "UNREAD") {
 				unread++
+				unreadThreadIDs[stringField(message, "thread_id")] = struct{}{}
 			}
 		}
 	}
@@ -740,8 +750,8 @@ func (s *Service) formatLabel(email string, label corestore.Record) map[string]a
 		"labelListVisibility":   stringField(label, "label_list_visibility"),
 		"messagesTotal":         total,
 		"messagesUnread":        unread,
-		"threadsTotal":          total,
-		"threadsUnread":         unread,
+		"threadsTotal":          len(threadIDs),
+		"threadsUnread":         len(unreadThreadIDs),
 	}
 	if stringField(label, "color_background") != "" || stringField(label, "color_text") != "" {
 		body["color"] = map[string]any{"backgroundColor": label["color_background"], "textColor": label["color_text"]}

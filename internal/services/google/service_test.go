@@ -366,6 +366,49 @@ func TestGoogleRejectsUnknownMutationLabels(t *testing.T) {
 	}
 }
 
+func TestGoogleRejectsUnknownCreateLabels(t *testing.T) {
+	handler := newGoogleTestHandler()
+	cases := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "send message",
+			path: "/gmail/v1/users/me/messages/send",
+			body: `{"to":"partner@example.com","subject":"Missing label","text":"Body","labelIds":["Label_missing"]}`,
+		},
+		{
+			name: "import message",
+			path: "/gmail/v1/users/me/messages/import",
+			body: `{"from":"sender@example.com","to":"testuser@example.com","subject":"Missing label","text":"Body","labelIds":["Label_missing"]}`,
+		},
+		{
+			name: "insert message",
+			path: "/gmail/v1/users/me/messages",
+			body: `{"from":"sender@example.com","to":"testuser@example.com","subject":"Missing label","text":"Body","labelIds":["Label_missing"]}`,
+		},
+		{
+			name: "create draft",
+			path: "/gmail/v1/users/me/drafts",
+			body: `{"message":{"to":"partner@example.com","subject":"Missing label","text":"Body","labelIds":["Label_missing"]}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := googleRequest(handler, http.MethodPost, tc.path, tc.body, true)
+			if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "Invalid label IDs: Label_missing") {
+				t.Fatalf("create status = %d, body = %s", res.Code, res.Body.String())
+			}
+		})
+	}
+
+	res := googleRequest(handler, http.MethodGet, "/gmail/v1/users/me/labels/Label_missing", "", true)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("missing label was created: status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
 func TestGoogleHistoryIDsAreDecimalAndMonotonic(t *testing.T) {
 	var previous int64
 	for i := 0; i < 1000; i++ {
@@ -497,6 +540,146 @@ func TestGoogleDriveParentQueryIgnoresEarlierQuotedTerms(t *testing.T) {
 		}
 	}
 	t.Fatalf("missing handbook from drive query: %#v", body.Files)
+}
+
+func TestGoogleAttachmentsAndDraftCleanupAreScopedByUser(t *testing.T) {
+	service := New(Options{
+		Store:   corestore.New(),
+		BaseURL: "http://localhost:4016",
+		Seed: &SeedConfig{
+			Users: []UserSeed{
+				{Email: "testuser@example.com", Name: "Test User"},
+				{Email: "other@example.com", Name: "Other User"},
+			},
+		},
+	})
+	service.createStoredMessage(messageInput{
+		GmailID:   "msg_shared",
+		ThreadID:  "thread_one",
+		UserEmail: "testuser@example.com",
+		Raw:       rawGoogleMessageWithAttachment("testuser@example.com", "recipient@example.com", "test.txt", "test attachment"),
+		LabelIDs:  []string{"INBOX"},
+	})
+	service.createStoredMessage(messageInput{
+		GmailID:   "msg_shared",
+		ThreadID:  "thread_two",
+		UserEmail: "other@example.com",
+		Raw:       rawGoogleMessageWithAttachment("other@example.com", "recipient@example.com", "other.txt", "other attachment"),
+		LabelIDs:  []string{"INBOX"},
+	})
+
+	message := service.getMessageByID("testuser@example.com", "msg_shared")
+	payload := service.messagePayload(message, "full", nil)
+	filenames := []string{}
+	for _, part := range recordSliceValue(payload["parts"]) {
+		if filename := stringValue(part["filename"]); filename != "" {
+			filenames = append(filenames, filename)
+		}
+	}
+	if len(filenames) != 1 || filenames[0] != "test.txt" {
+		t.Fatalf("attachments leaked across users: %#v", filenames)
+	}
+
+	service.store.Drafts.Insert(corestore.Record{
+		"gmail_id":         "draft_test",
+		"user_email":       "testuser@example.com",
+		"message_gmail_id": "msg_shared",
+	})
+	service.store.Drafts.Insert(corestore.Record{
+		"gmail_id":         "draft_other",
+		"user_email":       "other@example.com",
+		"message_gmail_id": "msg_shared",
+	})
+	service.deleteMessage(message)
+
+	if service.getMessageByID("other@example.com", "msg_shared") == nil {
+		t.Fatal("other user's shared message ID was deleted")
+	}
+	for _, draft := range service.store.Drafts.FindBy("message_gmail_id", "msg_shared") {
+		if stringField(draft, "user_email") != "other@example.com" {
+			t.Fatalf("unexpected draft remained after delete: %#v", draft)
+		}
+	}
+	attachments := service.store.Attachments.FindBy("message_gmail_id", "msg_shared")
+	if len(attachments) != 1 || stringField(attachments[0], "user_email") != "other@example.com" || stringField(attachments[0], "filename") != "other.txt" {
+		t.Fatalf("unexpected attachments after delete: %#v", attachments)
+	}
+}
+
+func TestGoogleLabelThreadStatsUseUniqueThreads(t *testing.T) {
+	service := New(Options{
+		Store:   corestore.New(),
+		BaseURL: "http://localhost:4016",
+		Seed: &SeedConfig{
+			Users: []UserSeed{{Email: "testuser@example.com", Name: "Test User"}},
+			Labels: []LabelSeed{
+				{ID: "Label_ops", UserEmail: "testuser@example.com", Name: "Ops"},
+			},
+			Messages: []MessageSeed{
+				{
+					ID:        "msg_one",
+					ThreadID:  "thread_shared",
+					UserEmail: "testuser@example.com",
+					From:      "sender@example.com",
+					To:        "testuser@example.com",
+					Subject:   "One",
+					BodyText:  "One",
+					LabelIDs:  []string{"Label_ops", "UNREAD"},
+				},
+				{
+					ID:        "msg_two",
+					ThreadID:  "thread_shared",
+					UserEmail: "testuser@example.com",
+					From:      "sender@example.com",
+					To:        "testuser@example.com",
+					Subject:   "Two",
+					BodyText:  "Two",
+					LabelIDs:  []string{"Label_ops"},
+				},
+			},
+		},
+	})
+	router := corehttp.NewRouter()
+	service.RegisterRoutes(router)
+
+	res := googleRequest(router, http.MethodGet, "/gmail/v1/users/me/labels/Label_ops", "", true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("label status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var body struct {
+		MessagesTotal  int `json:"messagesTotal"`
+		MessagesUnread int `json:"messagesUnread"`
+		ThreadsTotal   int `json:"threadsTotal"`
+		ThreadsUnread  int `json:"threadsUnread"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &body)
+	if body.MessagesTotal != 2 || body.MessagesUnread != 1 || body.ThreadsTotal != 1 || body.ThreadsUnread != 1 {
+		t.Fatalf("unexpected label stats: %#v", body)
+	}
+}
+
+func rawGoogleMessageWithAttachment(from string, to string, filename string, content string) string {
+	boundary := "emulate-boundary"
+	raw := strings.Join([]string{
+		"From: " + from,
+		"To: " + to,
+		"Subject: Attachment",
+		"Content-Type: multipart/mixed; boundary=" + boundary,
+		"",
+		"--" + boundary,
+		"Content-Type: text/plain",
+		"",
+		"Body",
+		"--" + boundary,
+		"Content-Type: text/plain; name=\"" + filename + "\"",
+		"Content-Disposition: attachment; filename=\"" + filename + "\"",
+		"Content-Transfer-Encoding: base64",
+		"",
+		base64.StdEncoding.EncodeToString([]byte(content)),
+		"--" + boundary + "--",
+		"",
+	}, "\r\n")
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
 func googleRequest(handler http.Handler, method string, path string, body string, auth bool) *httptest.ResponseRecorder {

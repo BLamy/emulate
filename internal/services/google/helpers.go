@@ -731,7 +731,13 @@ func (s *Service) deleteMessage(message corestore.Record) {
 	s.recordHistory("messageDeleted", message, nil)
 	s.store.Messages.Delete(intField(message, "id"))
 	for _, draft := range s.store.Drafts.FindBy("message_gmail_id", stringField(message, "gmail_id")) {
+		if stringField(draft, "user_email") != stringField(message, "user_email") {
+			continue
+		}
 		s.store.Drafts.Delete(intField(draft, "id"))
+	}
+	for _, attachment := range s.listAttachmentsForMessage(message) {
+		s.store.Attachments.Delete(intField(attachment, "id"))
 	}
 }
 
@@ -957,7 +963,7 @@ func (s *Service) messagePayload(message corestore.Record, format string, metada
 			"data": base64URLString([]byte(stringField(message, "body_text"))),
 		},
 	}
-	attachments := s.store.Attachments.FindBy("message_gmail_id", stringField(message, "gmail_id"))
+	attachments := s.listAttachmentsForMessage(message)
 	if len(attachments) > 0 || stringField(message, "body_html") != "" {
 		parts := []map[string]any{}
 		if stringField(message, "body_text") != "" {
@@ -1005,6 +1011,17 @@ func (s *Service) messagePayload(message corestore.Record, format string, metada
 		delete(payload, "parts")
 	}
 	return payload
+}
+
+func (s *Service) listAttachmentsForMessage(message corestore.Record) []corestore.Record {
+	attachments := []corestore.Record{}
+	for _, attachment := range s.store.Attachments.FindBy("message_gmail_id", stringField(message, "gmail_id")) {
+		if stringField(attachment, "user_email") != stringField(message, "user_email") {
+			continue
+		}
+		attachments = append(attachments, attachment)
+	}
+	return attachments
 }
 
 func buildMessageText(message corestore.Record) string {
