@@ -168,6 +168,30 @@ func TestGoogleOAuthAuthorizationCodeAndRefresh(t *testing.T) {
 	}
 }
 
+func TestGoogleOAuthRedirectURIMatchesNormalizedRegistration(t *testing.T) {
+	handler := newGoogleTestHandler()
+	form := url.Values{
+		"email":        {"testuser@example.com"},
+		"redirect_uri": {"http://localhost:3000/api/auth/callback/google/?next=dashboard"},
+		"scope":        {"openid email profile"},
+		"client_id":    {"emu_google_client_id"},
+	}
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://localhost:4016/o/oauth2/v2/auth/callback", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusFound {
+		t.Fatalf("authorize callback status = %d, body = %s", res.Code, res.Body.String())
+	}
+	location, err := url.Parse(res.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if location.Query().Get("code") == "" || location.Query().Get("next") != "dashboard" {
+		t.Fatalf("unexpected redirect location: %s", location.String())
+	}
+}
+
 func TestGoogleTokeninfoAcceptsIssuedIDToken(t *testing.T) {
 	handler := newGoogleTestHandler()
 	tokens := issueGoogleOAuthTokens(t, handler)
@@ -1369,6 +1393,9 @@ func TestGoogleMessageQueryFieldOperators(t *testing.T) {
 		{name: "from", q: "from:support", want: "msg_support_1"},
 		{name: "to", q: "to:testuser@example.com subject:invoice", want: "msg_invoice"},
 		{name: "subject", q: "subject:ticket", want: "msg_support_1"},
+		{name: "custom label id", q: "label:Label_ops", want: "msg_support_1"},
+		{name: "custom label name", q: "label:Ops/Review", want: "msg_support_1"},
+		{name: "negated custom label", q: "-label:Label_ops subject:invoice", want: "msg_invoice"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := googleRequest(handler, http.MethodGet, "/gmail/v1/users/me/messages?q="+url.QueryEscape(tc.q), "", true)

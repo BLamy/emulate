@@ -406,8 +406,21 @@ func constantTimeEqual(a string, b string) bool {
 }
 
 func matchesRedirectURI(value string, allowed []string) bool {
+	if value == "" {
+		return true
+	}
+	valueURL, err := url.Parse(value)
+	if err != nil {
+		return false
+	}
 	for _, candidate := range allowed {
-		if value == candidate {
+		candidateURL, err := url.Parse(candidate)
+		if err != nil {
+			continue
+		}
+		if valueURL.Scheme == candidateURL.Scheme &&
+			valueURL.Host == candidateURL.Host &&
+			strings.TrimRight(valueURL.Path, "/") == strings.TrimRight(candidateURL.Path, "/") {
 			return true
 		}
 	}
@@ -976,24 +989,20 @@ func matchesMessageQuery(s *Service, message corestore.Record, query string) boo
 	if query == "" {
 		return true
 	}
-	labels := stringSliceValue(message["label_ids"])
 	parts := strings.Fields(query)
 	for _, part := range parts {
 		lower := strings.ToLower(part)
 		switch {
 		case strings.HasPrefix(lower, "-label:"):
-			label := resolveLabelAlias(strings.TrimPrefix(lower, "-label:"))
-			if containsString(labels, label) {
+			if s.messageMatchesLabelQuery(message, part[len("-label:"):]) {
 				return false
 			}
 		case strings.HasPrefix(lower, "label:"):
-			label := resolveLabelAlias(strings.TrimPrefix(lower, "label:"))
-			if !containsString(labels, label) {
+			if !s.messageMatchesLabelQuery(message, part[len("label:"):]) {
 				return false
 			}
 		case strings.HasPrefix(lower, "in:"):
-			label := resolveLabelAlias(strings.TrimPrefix(lower, "in:"))
-			if !containsString(labels, label) {
+			if !s.messageMatchesLabelQuery(message, part[len("in:"):]) {
 				return false
 			}
 		case strings.HasPrefix(lower, "from:"):
@@ -1030,6 +1039,32 @@ func matchesMessageQuery(s *Service, message corestore.Record, query string) boo
 		}
 	}
 	return true
+}
+
+func (s *Service) messageMatchesLabelQuery(message corestore.Record, query string) bool {
+	labels := stringSliceValue(message["label_ids"])
+	cleaned := cleanQueryToken(query)
+	normalized := resolveLabelAlias(cleaned)
+	if containsString(labels, normalized) {
+		return true
+	}
+	lower := strings.ToLower(cleaned)
+	for _, labelID := range labels {
+		label := s.findLabelByID(stringField(message, "user_email"), labelID)
+		if label != nil && strings.ToLower(stringField(label, "name")) == lower {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanQueryToken(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, "()")
+	if len(value) >= 2 && strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) {
+		value = value[1 : len(value)-1]
+	}
+	return value
 }
 
 func resolveLabelAlias(value string) string {
