@@ -832,6 +832,156 @@ func TestServiceHandlesSNSLifecycleAndSQSPublish(t *testing.T) {
 	}
 }
 
+func TestServiceHandlesSNSUntagResourceTagKeys(t *testing.T) {
+	handler := newTestHandler()
+
+	values := url.Values{}
+	values.Set("Action", "CreateTopic")
+	values.Set("Name", "tagged")
+	values.Set("Tag.1.Key", "keep")
+	values.Set("Tag.1.Value", "yes")
+	values.Set("Tag.2.Key", "remove")
+	values.Set("Tag.2.Value", "yes")
+	res := executeAWSQueryRequest(handler, "sns", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create topic status = %d, body = %s", res.Code, res.Body.String())
+	}
+	topicARN := xmlElement(res.Body.String(), "TopicArn")
+
+	values = url.Values{}
+	values.Set("Action", "UntagResource")
+	values.Set("ResourceArn", topicARN)
+	values.Set("TagKeys.member.1", "remove")
+	res = executeAWSQueryRequest(handler, "sns", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("untag status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values = url.Values{}
+	values.Set("Action", "ListTagsForResource")
+	values.Set("ResourceArn", topicARN)
+	res = executeAWSQueryRequest(handler, "sns", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("list tags status = %d, body = %s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, "<Key>keep</Key><Value>yes</Value>") {
+		t.Fatalf("list tags missing kept tag in %s", body)
+	}
+	if strings.Contains(body, "<Key>remove</Key>") {
+		t.Fatalf("list tags included removed tag in %s", body)
+	}
+}
+
+func TestServiceRejectsSNSInvalidJSONMessageStructure(t *testing.T) {
+	handler := newTestHandler()
+
+	values := url.Values{}
+	values.Set("Action", "CreateTopic")
+	values.Set("Name", "json-validation")
+	res := executeAWSQueryRequest(handler, "sns", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create topic status = %d, body = %s", res.Code, res.Body.String())
+	}
+	topicARN := xmlElement(res.Body.String(), "TopicArn")
+
+	tests := []struct {
+		name    string
+		message string
+	}{
+		{name: "malformed", message: "not json"},
+		{name: "missing default", message: `{"sqs":"payload"}`},
+		{name: "non string default", message: `{"default":123}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values = url.Values{}
+			values.Set("Action", "Publish")
+			values.Set("TopicArn", topicARN)
+			values.Set("MessageStructure", "json")
+			values.Set("Message", test.message)
+			res = executeAWSQueryRequest(handler, "sns", values.Encode())
+			if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "<Code>InvalidParameter</Code>") {
+				t.Fatalf("publish status = %d, body = %s", res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
+func TestServiceHandlesSNSRawSQSPublishWithJSONMessageStructure(t *testing.T) {
+	handler := newTestHandler()
+
+	values := url.Values{}
+	values.Set("Action", "CreateTopic")
+	values.Set("Name", "raw-json")
+	res := executeAWSQueryRequest(handler, "sns", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create topic status = %d, body = %s", res.Code, res.Body.String())
+	}
+	topicARN := xmlElement(res.Body.String(), "TopicArn")
+
+	res = executeAWSQueryRequest(handler, "sqs", "Action=CreateQueue&QueueName=raw-json-queue")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create queue status = %d, body = %s", res.Code, res.Body.String())
+	}
+	queueURL := xmlElement(res.Body.String(), "QueueUrl")
+	values = url.Values{}
+	values.Set("Action", "GetQueueAttributes")
+	values.Set("QueueUrl", queueURL)
+	res = executeAWSQueryRequest(handler, "sqs", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("queue attrs status = %d, body = %s", res.Code, res.Body.String())
+	}
+	queueARN := xmlValueForName(res.Body.String(), "QueueArn")
+	if queueARN == "" {
+		t.Fatalf("missing queue arn in %s", res.Body.String())
+	}
+
+	values = url.Values{}
+	values.Set("Action", "Subscribe")
+	values.Set("TopicArn", topicARN)
+	values.Set("Protocol", "sqs")
+	values.Set("Endpoint", queueARN)
+	values.Set("Attributes.entry.1.key", "RawMessageDelivery")
+	values.Set("Attributes.entry.1.value", "true")
+	res = executeAWSQueryRequest(handler, "sns", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("subscribe status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values = url.Values{}
+	values.Set("Action", "Publish")
+	values.Set("TopicArn", topicARN)
+	values.Set("MessageStructure", "json")
+	values.Set("Message", `{"default":"default payload","sqs":"sqs payload"}`)
+	values.Set("MessageAttributes.entry.1.Name", "json-attrs")
+	values.Set("MessageAttributes.entry.1.Value.DataType", "String")
+	values.Set("MessageAttributes.entry.1.Value.StringValue", "not-delivered")
+	res = executeAWSQueryRequest(handler, "sns", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("publish status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values = url.Values{}
+	values.Set("Action", "ReceiveMessage")
+	values.Set("QueueUrl", queueURL)
+	values.Set("MaxNumberOfMessages", "1")
+	values.Set("MessageAttributeName.1", "All")
+	res = executeAWSQueryRequest(handler, "sqs", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("receive status = %d, body = %s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, "<Body>sqs payload</Body>") {
+		t.Fatalf("receive missing raw SQS payload in %s", body)
+	}
+	for _, unexpected := range []string{"default payload", "&quot;Type&quot;:&quot;Notification&quot;", "<MessageAttribute>", "json-attrs", "not-delivered"} {
+		if strings.Contains(body, unexpected) {
+			t.Fatalf("receive included unexpected value %q in %s", unexpected, body)
+		}
+	}
+}
+
 func TestServiceHandlesSNSTagsPermissionsAndErrors(t *testing.T) {
 	handler := newTestHandler()
 

@@ -196,7 +196,11 @@ func (h *Handler) untagResource(ctx gateway.AwsRequestContext, requestID string)
 	if !ok {
 		return h.notFound("Topic", requestID)
 	}
-	updated := removeTags(recordList(topic["tags"]), indexedNames(ctx.Query, "TagKey"))
+	tagKeys := indexedNames(ctx.Query, "TagKeys")
+	if len(tagKeys) == 0 {
+		tagKeys = indexedNames(ctx.Query, "TagKey")
+	}
+	updated := removeTags(recordList(topic["tags"]), tagKeys)
 	h.Topics.Update(intField(topic, "id"), corestore.Record{"tags": updated})
 	return h.emptyResponse("UntagResource", requestID)
 }
@@ -289,6 +293,15 @@ func (h *Handler) publish(ctx gateway.AwsRequestContext, requestID string) proto
 	if message == "" {
 		return h.queryError("InvalidParameter", "Message is required.", http.StatusBadRequest, requestID)
 	}
+	messageStructure := ctx.Query["MessageStructure"]
+	if messageStructure != "" {
+		if !strings.EqualFold(messageStructure, "json") {
+			return h.queryError("InvalidParameter", "MessageStructure must be json.", http.StatusBadRequest, requestID)
+		}
+		if _, err := parseJSONMessage(message); err != nil {
+			return h.queryError("InvalidParameter", err.Error(), http.StatusBadRequest, requestID)
+		}
+	}
 	messageID := h.generateID("")
 	subject := ctx.Query["Subject"]
 	attrs := parseMessageAttributes(ctx.Query)
@@ -297,7 +310,7 @@ func (h *Handler) publish(ctx gateway.AwsRequestContext, requestID string) proto
 		if !boolField(subscription, "confirmed") {
 			continue
 		}
-		if h.deliverToSubscription(ctx, topic, subscription, messageID, subject, message, ctx.Query["MessageStructure"], attrs) {
+		if h.deliverToSubscription(ctx, topic, subscription, messageID, subject, message, messageStructure, attrs) {
 			delivered++
 		}
 	}
@@ -431,6 +444,9 @@ func (h *Handler) deliverToSubscription(ctx gateway.AwsRequestContext, topic cor
 
 func (h *Handler) sqsBody(topic corestore.Record, subscription corestore.Record, messageID string, subject string, message string, messageStructure string, attrs corestore.Record) string {
 	if strings.EqualFold(stringMapField(subscription, "attributes")["RawMessageDelivery"], "true") {
+		if strings.EqualFold(messageStructure, "json") {
+			return jsonMessageForProtocol(message, "sqs")
+		}
 		return message
 	}
 	if strings.EqualFold(messageStructure, "json") {
@@ -895,17 +911,50 @@ func indexedNames(params map[string]string, prefix string) []string {
 }
 
 func jsonMessageForProtocol(raw string, protocol string) string {
-	var body map[string]any
-	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+	body, err := parseJSONMessage(raw)
+	if err != nil {
 		return raw
 	}
 	if value, ok := body[protocol]; ok {
-		return scalarString(value)
+		return value
 	}
 	if value, ok := body["default"]; ok {
-		return scalarString(value)
+		return value
 	}
 	return raw
+}
+
+func parseJSONMessage(raw string) (map[string]string, error) {
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		return nil, fmt.Errorf("MessageStructure json requires a valid JSON object.")
+	}
+	defaultRaw, ok := body["default"]
+	if !ok {
+		return nil, fmt.Errorf("MessageStructure json requires a default message.")
+	}
+	defaultValue, ok := jsonString(defaultRaw)
+	if !ok {
+		return nil, fmt.Errorf("MessageStructure json requires default to be a string.")
+	}
+	out := map[string]string{"default": defaultValue}
+	for key, rawValue := range body {
+		if key == "default" {
+			continue
+		}
+		if value, ok := jsonString(rawValue); ok {
+			out[key] = value
+		}
+	}
+	return out, nil
+}
+
+func jsonString(raw json.RawMessage) (string, bool) {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", false
+	}
+	return value, true
 }
 
 func stringMapField(record corestore.Record, name string) map[string]string {

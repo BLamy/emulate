@@ -65,6 +65,7 @@ import {
   SubscribeCommand,
   TagResourceCommand,
   UnsubscribeCommand,
+  UntagResourceCommand,
 } from "@aws-sdk/client-sns";
 import { STSClient, GetCallerIdentityCommand, AssumeRoleCommand } from "@aws-sdk/client-sts";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
@@ -480,6 +481,9 @@ describeExternalSnsE2E("AWS plugin - real @aws-sdk/client-sns E2E", () => {
     );
     const tags = await sns.send(new ListTagsForResourceCommand({ ResourceArn: created.TopicArn }));
     expect(tags.Tags).toEqual(expect.arrayContaining([{ Key: "team", Value: "platform" }]));
+    await sns.send(new UntagResourceCommand({ ResourceArn: created.TopicArn, TagKeys: ["team"] }));
+    const afterUntag = await sns.send(new ListTagsForResourceCommand({ ResourceArn: created.TopicArn }));
+    expect(afterUntag.Tags ?? []).not.toEqual(expect.arrayContaining([{ Key: "team", Value: "platform" }]));
 
     const queue = await sqs.send(new CreateSQSQueueCommand({ QueueName: "sdk-e2e-sns-target" }));
     const queueAttrs = await sqs.send(
