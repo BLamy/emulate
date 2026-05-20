@@ -944,7 +944,7 @@ func (s *Service) handleWatch(c *corehttp.Context) {
 	if !s.validateMutationLabelIDs(c, email, labelIDs) {
 		return
 	}
-	historyID := generateHistoryID()
+	historyID := s.currentHistoryID(email)
 	for _, row := range s.store.WatchRegistries.FindBy("user_email", email) {
 		s.store.WatchRegistries.Delete(intField(row, "id"))
 	}

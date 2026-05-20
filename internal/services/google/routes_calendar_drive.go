@@ -26,6 +26,8 @@ func (s *Service) registerDriveRoutes(router *corehttp.Router) {
 	router.Get("/drive/v3/files/:fileId", s.handleGetDriveFile)
 	router.Patch("/drive/v3/files/:fileId", s.handleUpdateDriveFile)
 	router.Put("/drive/v3/files/:fileId", s.handleUpdateDriveFile)
+	router.Patch("/upload/drive/v3/files/:fileId", s.handleUpdateDriveFile)
+	router.Put("/upload/drive/v3/files/:fileId", s.handleUpdateDriveFile)
 }
 
 func (s *Service) handleCalendarList(c *corehttp.Context) {
@@ -272,12 +274,28 @@ func (s *Service) handleUpdateDriveFile(c *corehttp.Context) {
 		googleAPIError(c, http.StatusNotFound, "Requested entity was not found.", "notFound", "NOT_FOUND")
 		return
 	}
-	if c.Request.Method == http.MethodPut {
+
+	if strings.HasPrefix(c.Request.URL.Path, "/upload/drive/v3/files/") {
+		contentType := c.Header("Content-Type")
+		if strings.Contains(contentType, "multipart/related") {
+			raw, _ := io.ReadAll(c.Request.Body)
+			body, mimeType, media := parseDriveMultipartUpload(contentType, raw)
+			updated := item
+			if media != nil {
+				updated = s.updateDriveItemContent(updated, mimeType, media)
+			}
+			addParents := splitCSV(c.Query("addParents"))
+			removeParents := splitCSV(c.Query("removeParents"))
+			updated = s.updateDriveItemRecord(updated, addParents, removeParents, stringValue(body["name"]))
+			c.JSON(http.StatusOK, formatDriveItemResource(updated))
+			return
+		}
 		media, _ := io.ReadAll(c.Request.Body)
-		updated := s.updateDriveItemContent(item, driveUploadContentType(c.Header("Content-Type")), media)
+		updated := s.updateDriveItemContent(item, driveUploadContentType(contentType), media)
 		c.JSON(http.StatusOK, formatDriveItemResource(updated))
 		return
 	}
+
 	body := parseJSONBody(c.Request)
 	addParents := splitCSV(c.Query("addParents"))
 	removeParents := splitCSV(c.Query("removeParents"))

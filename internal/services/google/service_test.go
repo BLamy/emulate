@@ -411,6 +411,21 @@ func TestGoogleFilterAndWatchValidation(t *testing.T) {
 	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"historyId"`) {
 		t.Fatalf("valid watch status = %d, body = %s", res.Code, res.Body.String())
 	}
+	var watchBody struct {
+		HistoryID string `json:"historyId"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &watchBody)
+	res = googleRequest(handler, http.MethodGet, "/gmail/v1/users/me/history?startHistoryId=0", "", true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("history status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var historyBody struct {
+		HistoryID string `json:"historyId"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &historyBody)
+	if watchBody.HistoryID == "" || watchBody.HistoryID != historyBody.HistoryID {
+		t.Fatalf("watch historyId = %q, history list current = %q", watchBody.HistoryID, historyBody.HistoryID)
+	}
 }
 
 func TestGoogleFilterAppliesToCreateResponse(t *testing.T) {
@@ -1513,10 +1528,10 @@ func TestGoogleDriveMultipartUploadPreservesTrailingNewline(t *testing.T) {
 	}
 }
 
-func TestGoogleDrivePutUpdatesMediaContent(t *testing.T) {
+func TestGoogleDriveUploadPathUpdatesMediaContent(t *testing.T) {
 	handler := newGoogleTestHandler()
 	content := "replacement handbook\n"
-	req := httptest.NewRequest(http.MethodPut, "http://localhost:4016/drive/v3/files/drv_handbook", strings.NewReader(content))
+	req := httptest.NewRequest(http.MethodPatch, "http://localhost:4016/upload/drive/v3/files/drv_handbook?uploadType=media", strings.NewReader(content))
 	req.Header.Set("Authorization", "Bearer test-token")
 	req.Header.Set("Content-Type", "text/plain")
 	res := httptest.NewRecorder()
@@ -1541,6 +1556,33 @@ func TestGoogleDrivePutUpdatesMediaContent(t *testing.T) {
 	body, _ := io.ReadAll(res.Result().Body)
 	if string(body) != content {
 		t.Fatalf("download body = %q, want %q", string(body), content)
+	}
+}
+
+func TestGoogleDriveMetadataUpdatePreservesMediaContent(t *testing.T) {
+	handler := newGoogleTestHandler()
+	res := googleRequest(handler, http.MethodPut, "/drive/v3/files/drv_handbook", `{"name":"Renamed Handbook.pdf"}`, true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("metadata update status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var updated struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		MIMEType string `json:"mimeType"`
+		Size     string `json:"size"`
+	}
+	mustDecodeGoogleJSON(t, res.Body.Bytes(), &updated)
+	if updated.ID != "drv_handbook" || updated.Name != "Renamed Handbook.pdf" || updated.MIMEType != "application/pdf" || updated.Size != strconv.Itoa(len("pdf-handbook-data")) {
+		t.Fatalf("unexpected updated file: %#v", updated)
+	}
+
+	res = googleRequest(handler, http.MethodGet, "/drive/v3/files/drv_handbook?alt=media", "", true)
+	if res.Code != http.StatusOK {
+		t.Fatalf("download status = %d, body = %s", res.Code, res.Body.String())
+	}
+	body, _ := io.ReadAll(res.Result().Body)
+	if string(body) != "pdf-handbook-data" {
+		t.Fatalf("download body = %q, want seeded media", string(body))
 	}
 }
 
