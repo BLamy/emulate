@@ -146,6 +146,18 @@ func TestGitHubPatchPullRejectsMissingBaseBranch(t *testing.T) {
 	if patch.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("patch status = %d, body = %s", patch.Code, patch.Body.String())
 	}
+
+	repo := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/hello-world", "", "Bearer test_token_user1")
+	if repo.Code != http.StatusOK {
+		t.Fatalf("repo status = %d, body = %s", repo.Code, repo.Body.String())
+	}
+	var repoBody struct {
+		OpenIssuesCount int `json:"open_issues_count"`
+	}
+	decodeGitHubBody(t, repo, &repoBody)
+	if repoBody.OpenIssuesCount != 1 {
+		t.Fatalf("open_issues_count = %d, body = %s", repoBody.OpenIssuesCount, repo.Body.String())
+	}
 }
 
 func TestGitHubMergeCreatesResolvableCommit(t *testing.T) {
@@ -346,6 +358,54 @@ func TestGitHubRepoScopeRequiredForPrivateReadAndRepoMutation(t *testing.T) {
 	ref := doGitHubJSON(handler, http.MethodPost, "/repos/octocat/hello-world/git/refs", `{"ref":"refs/heads/user-only","sha":"`+mainSha+`"}`, "Bearer user_only_token")
 	if ref.Code != http.StatusForbidden {
 		t.Fatalf("ref status = %d, body = %s", ref.Code, ref.Body.String())
+	}
+}
+
+func TestGitHubAdminCanReadPrivateRepo(t *testing.T) {
+	handler := newGitHubTestHandler(&SeedConfig{
+		Users: []UserSeed{{Login: "octocat", Email: "octocat@github.com"}},
+		Repos: []RepoSeed{{Owner: "octocat", Name: "private-repo", Private: true}},
+	})
+
+	res := doGitHubJSON(handler, http.MethodGet, "/repos/octocat/private-repo", "", "Bearer test_token_admin")
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestGitHubOrgMembershipDoesNotGrantPrivateUserRepoWithMatchingID(t *testing.T) {
+	service, handler := newGitHubTestServiceHandler(&SeedConfig{
+		Users: []UserSeed{{Login: "member", Email: "member@example.com"}},
+		Orgs:  []OrgSeed{{Login: "shared-id-org", Name: "Shared ID Org"}},
+		Tokens: map[string]TokenSeed{
+			"member_token": {Login: "member", Scopes: []string{"repo", "user"}},
+		},
+		Repos: []RepoSeed{{Owner: "ghost", Name: "private-repo", Private: true}},
+	})
+	ghost := firstRecord(service.store.Users.FindBy("login", "ghost"))
+	member := firstRecord(service.store.Users.FindBy("login", "member"))
+	org := firstRecord(service.store.Orgs.FindBy("login", "shared-id-org"))
+	if ghost == nil || member == nil || org == nil {
+		t.Fatal("missing seed records")
+	}
+	if intField(ghost, "id") != intField(org, "id") {
+		t.Fatalf("test setup expected matching user and org ids, got user=%d org=%d", intField(ghost, "id"), intField(org, "id"))
+	}
+	team := service.store.Teams.Insert(corestore.Record{
+		"org_id":     intField(org, "id"),
+		"slug":       "engineering",
+		"name":       "Engineering",
+		"permission": "pull",
+	})
+	service.store.TeamMembers.Insert(corestore.Record{
+		"team_id": intField(team, "id"),
+		"user_id": intField(member, "id"),
+		"role":    "member",
+	})
+
+	res := doGitHubJSON(handler, http.MethodGet, "/repos/ghost/private-repo", "", "Bearer member_token")
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
 	}
 }
 
@@ -568,12 +628,18 @@ func TestGitHubOAuthRejectsMismatchedRedirectURI(t *testing.T) {
 }
 
 func newGitHubTestHandler(seed *SeedConfig) http.Handler {
+	_, handler := newGitHubTestServiceHandler(seed)
+	return handler
+}
+
+func newGitHubTestServiceHandler(seed *SeedConfig) (*Service, http.Handler) {
 	router := corehttp.NewRouter()
-	Register(router, Options{Store: corestore.New(), BaseURL: testBaseURL, Seed: seed})
+	service := New(Options{Store: corestore.New(), BaseURL: testBaseURL, Seed: seed})
+	service.RegisterRoutes(router)
 	router.NotFound(func(c *corehttp.Context) {
 		c.JSON(http.StatusNotFound, map[string]any{"message": "Not Found"})
 	})
-	return router
+	return service, router
 }
 
 func doGitHubJSON(handler http.Handler, method string, target string, body string, authorization string) *httptest.ResponseRecorder {

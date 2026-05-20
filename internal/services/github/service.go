@@ -481,10 +481,13 @@ func (s *Service) canAccessRepo(user *authUser, repo corestore.Record) bool {
 		return false
 	}
 	userID := intField(userRecord, "id")
+	if boolField(userRecord, "site_admin") {
+		return true
+	}
 	if stringField(repo, "owner_type") == "User" && intField(repo, "owner_id") == userID {
 		return true
 	}
-	if s.isOrgMember(userID, intField(repo, "owner_id")) {
+	if stringField(repo, "owner_type") == "Organization" && s.isOrgMember(userID, intField(repo, "owner_id")) {
 		return true
 	}
 	for _, collab := range s.store.Collaborators.FindBy("repo_id", intField(repo, "id")) {

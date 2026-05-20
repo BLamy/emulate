@@ -186,6 +186,7 @@ func (s *Service) handlePatchPull(c *corehttp.Context) {
 	}
 	patch := corestore.Record{}
 	issuePatch := corestore.Record{}
+	openIssuesDelta := 0
 	if title, ok := body["title"].(string); ok {
 		patch["title"] = title
 		issuePatch["title"] = title
@@ -202,13 +203,13 @@ func (s *Service) handlePatchPull(c *corehttp.Context) {
 			patch["closed_at"] = now
 			issuePatch["closed_at"] = now
 			issuePatch["closed_by_id"] = intField(actor, "id")
-			s.adjustOpenIssues(intField(repo, "id"), -1)
+			openIssuesDelta = -1
 		}
 		if state == "open" && stringField(pr, "state") == "closed" {
 			patch["closed_at"] = nil
 			issuePatch["closed_at"] = nil
 			issuePatch["closed_by_id"] = nil
-			s.adjustOpenIssues(intField(repo, "id"), 1)
+			openIssuesDelta = 1
 		}
 	}
 	if draft, ok := body["draft"].(bool); ok {
@@ -226,6 +227,9 @@ func (s *Service) handlePatchPull(c *corehttp.Context) {
 	updated, _ := s.store.PullRequests.Update(intField(pr, "id"), patch)
 	if issue := s.findPullIssue(intField(repo, "id"), intField(pr, "number")); issue != nil {
 		s.store.Issues.Update(intField(issue, "id"), issuePatch)
+	}
+	if openIssuesDelta != 0 {
+		s.adjustOpenIssues(intField(repo, "id"), openIssuesDelta)
 	}
 	c.JSON(http.StatusOK, s.formatPull(updated))
 }
