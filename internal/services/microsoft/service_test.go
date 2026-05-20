@@ -228,6 +228,42 @@ func TestMicrosoftRefreshTokenRotates(t *testing.T) {
 	}
 }
 
+func TestMicrosoftRefreshTokenRejectsMismatchedClient(t *testing.T) {
+	seed := microsoftSeed()
+	seed.OAuthClients = append(seed.OAuthClients, OAuthClientSeed{
+		ClientID:     "other-client",
+		ClientSecret: "other-secret",
+		Name:         "Other App",
+		RedirectURIs: []string{"http://localhost:3000/callback"},
+		TenantID:     "tenant-1",
+	})
+	handler := newTestHandler(seed)
+	code := getAuthCode(t, handler, map[string]string{})
+	token := exchangeCode(t, handler, code)
+
+	wrongClient := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {token.RefreshToken},
+		"client_id":     {"other-client"},
+		"client_secret": {"other-secret"},
+	}
+	res := doFormRequest(handler, "/oauth2/v2.0/token", wrongClient, "")
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "invalid_grant") {
+		t.Fatalf("wrong client refresh status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	originalClient := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {token.RefreshToken},
+		"client_id":     {"test-client"},
+		"client_secret": {"test-secret"},
+	}
+	res = doFormRequest(handler, "/oauth2/v2.0/token", originalClient, "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("original client refresh status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
 func TestMicrosoftFormPostLogoutAndRevoke(t *testing.T) {
 	handler := newTestHandler(microsoftSeed())
 	code := getAuthCode(t, handler, map[string]string{"response_mode": "form_post"})

@@ -338,6 +338,11 @@ func (s *Service) handleRefreshToken(c *corehttp.Context, body map[string]string
 		writeOAuthError(c, http.StatusBadRequest, "invalid_grant", "The refresh_token is invalid.")
 		return
 	}
+	storedClientID := stringField(stored, "client_id")
+	if storedClientID != "" && clientID != storedClientID {
+		writeOAuthError(c, http.StatusBadRequest, "invalid_grant", "The refresh_token is invalid.")
+		return
+	}
 	user := firstRecord(s.store.Users.FindBy("email", stringField(stored, "email")))
 	if user == nil {
 		writeOAuthError(c, http.StatusBadRequest, "invalid_grant", "User not found.")
@@ -351,7 +356,6 @@ func (s *Service) handleRefreshToken(c *corehttp.Context, body map[string]string
 	if scope == "" {
 		scope = "openid email profile"
 	}
-	storedClientID := stringField(stored, "client_id")
 	if storedClientID == "" {
 		storedClientID = clientID
 	}
