@@ -8,6 +8,7 @@ import (
 	corehttp "github.com/vercel-labs/emulate/internal/core/http"
 	corestore "github.com/vercel-labs/emulate/internal/core/store"
 	"github.com/vercel-labs/emulate/internal/services/aws/auth"
+	awsdynamodb "github.com/vercel-labs/emulate/internal/services/aws/dynamodb"
 	"github.com/vercel-labs/emulate/internal/services/aws/gateway"
 	awsiam "github.com/vercel-labs/emulate/internal/services/aws/iam"
 	"github.com/vercel-labs/emulate/internal/services/aws/protocols"
@@ -39,6 +40,7 @@ type Service struct {
 	sqs              awssqs.Handler
 	iam              awsiam.Handler
 	sts              awssts.Handler
+	dynamodb         awsdynamodb.Handler
 }
 
 func Register(router *corehttp.Router, options Options) {
@@ -106,6 +108,12 @@ func New(options Options) *Service {
 			CredentialStore: credentialStore,
 			AccountID:       defaultAccountID,
 		},
+		dynamodb: awsdynamodb.Handler{
+			Tables:    awsStore.DynamoDBTables,
+			Items:     awsStore.DynamoDBItems,
+			AccountID: defaultAccountID,
+			Region:    defaultRegion,
+		},
 	}
 }
 
@@ -150,6 +158,10 @@ func (s *Service) handleAWS(c *corehttp.Context) {
 	}
 	if ctx.Service == "sts" && ctx.Protocol == protocols.ProtocolQuery {
 		writeErrorResponse(c, s.sts.Handle(c.Request, ctx))
+		return
+	}
+	if ctx.Service == "dynamodb" && ctx.Protocol == protocols.ProtocolJSONRPC {
+		writeErrorResponse(c, s.dynamodb.Handle(c.Request, ctx))
 		return
 	}
 

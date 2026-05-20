@@ -1,12 +1,12 @@
 ---
 name: aws
-description: Emulated AWS cloud services (S3, SQS, IAM, STS) for local development, testing, and native Vercel preview functions. Use when the user needs to interact with AWS API endpoints locally, test S3 bucket and object operations, emulate SQS queues and messages, manage IAM users/roles/access keys, test STS assume role, scaffold AWS through npx emulate vercel init, or work without hitting real AWS APIs. Triggers include "AWS emulator", "emulate AWS", "mock S3", "local SQS", "test IAM", "emulate S3", "AWS locally", "STS assume role", or any task requiring local AWS service emulation.
+description: Emulated AWS cloud services (S3, SQS, DynamoDB, IAM, STS) for local development, testing, and native Vercel preview functions. Use when the user needs to interact with AWS API endpoints locally, test S3 bucket and object operations, emulate SQS queues and messages, test DynamoDB tables and items, manage IAM users/roles/access keys, test STS assume role, scaffold AWS through npx emulate vercel init, or work without hitting real AWS APIs. Triggers include "AWS emulator", "emulate AWS", "mock S3", "local SQS", "local DynamoDB", "test IAM", "emulate S3", "AWS locally", "STS assume role", or any task requiring local AWS service emulation.
 allowed-tools: Bash(npx emulate:*), Bash(curl:*)
 ---
 
 # AWS Emulator
 
-S3, SQS, IAM, and STS emulation with AWS SDK-compatible S3 paths and AWS Query endpoints for SQS/IAM/STS. All state is in-memory. Query and REST XML operations return AWS-compatible XML. The native Go runtime is verified against current AWS SDK v3 clients for SQS, IAM, and STS; SQS uses JSON target requests, while IAM and STS use AWS Query XML.
+S3, SQS, DynamoDB, IAM, and STS emulation with AWS SDK-compatible S3 paths, AWS JSON RPC endpoints for SQS and DynamoDB, and AWS Query endpoints for SQS/IAM/STS. All state is in-memory. Query and REST XML operations return AWS-compatible XML. The native Go runtime is verified against current AWS SDK v3 clients for SQS, IAM, and STS; SQS uses JSON target requests, DynamoDB uses JSON target requests, and IAM/STS use AWS Query XML.
 
 ## Vercel Preview
 
@@ -39,7 +39,7 @@ const aws = await createEmulator({ service: 'aws', port: 4006 })
 
 ## Auth
 
-Pass tokens as `Authorization: Bearer <token>`. Scoped permissions use `s3:*`, `sqs:*`, `iam:*`, `sts:*` patterns.
+Pass tokens as `Authorization: Bearer <token>`. Scoped permissions use `s3:*`, `sqs:*`, `dynamodb:*`, `iam:*`, `sts:*` patterns.
 
 ```bash
 curl http://localhost:4006/ \
@@ -84,6 +84,21 @@ const sqs = new SQSClient({
 ```
 
 The native Go runtime accepts the SQS SDK client's `X-Amz-Target: AmazonSQS.<Action>` JSON requests to `/sqs` and returns JSON responses. Manual curl calls can use the AWS Query form examples below.
+
+```typescript
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb'
+
+const dynamodb = new DynamoDBClient({
+  endpoint: `${process.env.AWS_EMULATOR_URL}/dynamodb`,
+  region: 'us-east-1',
+  credentials: {
+    accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
+    secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+  },
+})
+```
+
+The native Go runtime accepts the DynamoDB SDK client's `X-Amz-Target: DynamoDB_20120810.<Action>` JSON requests to `/dynamodb` and returns JSON responses.
 
 ```typescript
 import { IAMClient } from '@aws-sdk/client-iam'
@@ -260,6 +275,15 @@ curl -X POST http://localhost:4006/sqs/ \
   -H "Authorization: Bearer $TOKEN" \
   -d "Action=DeleteQueue&QueueUrl=<queue_url>"
 ```
+
+### DynamoDB
+
+In the native Go runtime, `@aws-sdk/client-dynamodb` can use endpoint `${AWS_EMULATOR_URL}/dynamodb`. SDK responses are JSON.
+
+- `CreateTable`, `DescribeTable`, `ListTables`, `UpdateTable`, `DeleteTable`
+- `PutItem`, `GetItem`, `DeleteItem`, `Scan`, `Query`
+- `BatchGetItem`, `BatchWriteItem`
+- `TagResource`, `UntagResource`, `ListTagsOfResource`
 
 ### IAM
 

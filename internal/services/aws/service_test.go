@@ -777,7 +777,7 @@ func TestServiceHandlesIAMRolesAndSTS(t *testing.T) {
 func TestServiceReturnsJSONRPCNotImplemented(t *testing.T) {
 	handler := newTestHandler()
 	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/", strings.NewReader(`{"TableName":"items"}`))
-	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.DescribeTable")
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
 	signAWSRequest(req, "dynamodb")
 
 	res := httptest.NewRecorder()
@@ -799,8 +799,199 @@ func TestServiceReturnsJSONRPCNotImplemented(t *testing.T) {
 	if body["__type"] != "com.amazonaws.dynamodb.v20120810#NotImplementedException" {
 		t.Fatalf("unexpected body: %#v", body)
 	}
-	if !strings.Contains(body["message"], "dynamodb.DescribeTable") {
+	if !strings.Contains(body["message"], "dynamodb.UpdateItem") {
 		t.Fatalf("unexpected message: %#v", body)
+	}
+}
+
+func TestServiceHandlesDynamoDBTableAndItemLifecycle(t *testing.T) {
+	handler := newTestHandler()
+
+	res := executeAWSDynamoDBRequest(t, handler, "CreateTable", map[string]any{
+		"TableName": "items",
+		"AttributeDefinitions": []map[string]any{
+			{"AttributeName": "pk", "AttributeType": "S"},
+			{"AttributeName": "sk", "AttributeType": "S"},
+		},
+		"KeySchema": []map[string]any{
+			{"AttributeName": "pk", "KeyType": "HASH"},
+			{"AttributeName": "sk", "KeyType": "RANGE"},
+		},
+		"BillingMode": "PAY_PER_REQUEST",
+		"Tags": []map[string]any{
+			{"Key": "env", "Value": "test"},
+		},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("create table status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var createBody map[string]any
+	decodeJSONBody(t, res, &createBody)
+	tableDescription := createBody["TableDescription"].(map[string]any)
+	if tableDescription["TableName"] != "items" || tableDescription["TableStatus"] != "ACTIVE" {
+		t.Fatalf("unexpected table description: %#v", tableDescription)
+	}
+	tableARN := tableDescription["TableArn"].(string)
+	if !strings.Contains(tableARN, ":table/items") {
+		t.Fatalf("table arn = %q", tableARN)
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "UpdateTable", map[string]any{
+		"TableName":   "items",
+		"BillingMode": "PROVISIONED",
+		"ProvisionedThroughput": map[string]any{
+			"ReadCapacityUnits":  2,
+			"WriteCapacityUnits": 1,
+		},
+	})
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"PROVISIONED"`) {
+		t.Fatalf("update table status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "PutItem", map[string]any{
+		"TableName": "items",
+		"Item": map[string]any{
+			"pk":      map[string]any{"S": "acct#1"},
+			"sk":      map[string]any{"S": "profile"},
+			"name":    map[string]any{"S": "Ada"},
+			"enabled": map[string]any{"BOOL": true},
+			"count":   map[string]any{"N": "3"},
+			"nested":  map[string]any{"M": map[string]any{"role": map[string]any{"S": "admin"}}},
+		},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("put item status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "GetItem", map[string]any{
+		"TableName": "items",
+		"Key": map[string]any{
+			"pk": map[string]any{"S": "acct#1"},
+			"sk": map[string]any{"S": "profile"},
+		},
+		"ProjectionExpression": "#name, enabled",
+		"ExpressionAttributeNames": map[string]any{
+			"#name": "name",
+		},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("get item status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var getBody map[string]map[string]map[string]any
+	decodeJSONBody(t, res, &getBody)
+	item := getBody["Item"]
+	if item["name"]["S"] != "Ada" || item["enabled"]["BOOL"] != true {
+		t.Fatalf("unexpected item: %#v", item)
+	}
+	if _, ok := item["pk"]; ok {
+		t.Fatalf("projection included pk: %#v", item)
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "Query", map[string]any{
+		"TableName":              "items",
+		"KeyConditionExpression": "#pk = :pk AND #sk = :sk",
+		"ExpressionAttributeNames": map[string]any{
+			"#pk": "pk",
+			"#sk": "sk",
+		},
+		"ExpressionAttributeValues": map[string]any{
+			":pk": map[string]any{"S": "acct#1"},
+			":sk": map[string]any{"S": "profile"},
+		},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("query status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var queryBody struct {
+		Count int                         `json:"Count"`
+		Items []map[string]map[string]any `json:"Items"`
+	}
+	decodeJSONBody(t, res, &queryBody)
+	if queryBody.Count != 1 || queryBody.Items[0]["name"]["S"] != "Ada" {
+		t.Fatalf("unexpected query body: %#v", queryBody)
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "ListTagsOfResource", map[string]any{"ResourceArn": tableARN})
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"env"`) {
+		t.Fatalf("list tags status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "DeleteItem", map[string]any{
+		"TableName": "items",
+		"Key": map[string]any{
+			"pk": map[string]any{"S": "acct#1"},
+			"sk": map[string]any{"S": "profile"},
+		},
+		"ReturnValues": "ALL_OLD",
+	})
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"Ada"`) {
+		t.Fatalf("delete item status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestServiceHandlesDynamoDBBatchOperations(t *testing.T) {
+	handler := newTestHandler()
+	res := executeAWSDynamoDBRequest(t, handler, "CreateTable", map[string]any{
+		"TableName": "events",
+		"AttributeDefinitions": []map[string]any{
+			{"AttributeName": "id", "AttributeType": "S"},
+		},
+		"KeySchema": []map[string]any{
+			{"AttributeName": "id", "KeyType": "HASH"},
+		},
+		"BillingMode": "PAY_PER_REQUEST",
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "BatchWriteItem", map[string]any{
+		"RequestItems": map[string]any{
+			"events": []map[string]any{
+				{"PutRequest": map[string]any{"Item": map[string]any{"id": map[string]any{"S": "evt#1"}, "type": map[string]any{"S": "push"}}}},
+				{"PutRequest": map[string]any{"Item": map[string]any{"id": map[string]any{"S": "evt#2"}, "type": map[string]any{"S": "pull_request"}}}},
+			},
+		},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("batch write status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSDynamoDBRequest(t, handler, "BatchGetItem", map[string]any{
+		"RequestItems": map[string]any{
+			"events": map[string]any{
+				"Keys": []map[string]any{
+					{"id": map[string]any{"S": "evt#1"}},
+					{"id": map[string]any{"S": "evt#2"}},
+				},
+			},
+		},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("batch get status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Responses map[string][]map[string]map[string]any `json:"Responses"`
+	}
+	decodeJSONBody(t, res, &body)
+	if len(body.Responses["events"]) != 2 {
+		t.Fatalf("unexpected batch get body: %#v", body)
+	}
+}
+
+func TestServiceReturnsDynamoDBModeledErrors(t *testing.T) {
+	handler := newTestHandler()
+	res := executeAWSDynamoDBRequest(t, handler, "DescribeTable", map[string]any{"TableName": "missing"})
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("x-amzn-errortype"); got != "ResourceNotFoundException" {
+		t.Fatalf("error type = %q", got)
+	}
+	var body map[string]string
+	decodeJSONBody(t, res, &body)
+	if body["__type"] != "com.amazonaws.dynamodb.v20120810#ResourceNotFoundException" {
+		t.Fatalf("unexpected body: %#v", body)
 	}
 }
 
@@ -946,7 +1137,7 @@ func TestNewStoreCreatesAWSCollections(t *testing.T) {
 	awsStore.IAMUsers.Insert(corestore.Record{"user_name": "developer", "user_id": "AIDAEXAMPLE"})
 
 	snapshot := runtimeStore.Snapshot()
-	for _, name := range []string{"aws.s3_buckets", "aws.s3_objects", "aws.sqs_queues", "aws.sqs_messages", "aws.iam_users", "aws.iam_roles"} {
+	for _, name := range []string{"aws.s3_buckets", "aws.s3_objects", "aws.sqs_queues", "aws.sqs_messages", "aws.iam_users", "aws.iam_roles", "aws.dynamodb_tables", "aws.dynamodb_items"} {
 		if _, ok := snapshot.Collections[name]; !ok {
 			t.Fatalf("missing collection %s", name)
 		}
@@ -1014,6 +1205,28 @@ func executeAWSJSONRequest(t *testing.T, handler http.Handler, action string, pa
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 	return res
+}
+
+func executeAWSDynamoDBRequest(t *testing.T, handler http.Handler, action string, payload map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/dynamodb/", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810."+action)
+	signAWSRequest(req, "dynamodb")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	return res
+}
+
+func decodeJSONBody(t *testing.T, res *httptest.ResponseRecorder, target any) {
+	t.Helper()
+	if err := json.Unmarshal(res.Body.Bytes(), target); err != nil {
+		t.Fatalf("decode body %s: %v", res.Body.String(), err)
+	}
 }
 
 func executeS3MultipartPost(t *testing.T, handler http.Handler, target string, fields map[string]string, fileBody []byte) *httptest.ResponseRecorder {

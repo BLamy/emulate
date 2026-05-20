@@ -16,6 +16,18 @@ import {
   DeleteRoleCommand,
 } from "@aws-sdk/client-iam";
 import {
+  DynamoDBClient,
+  BatchGetItemCommand,
+  BatchWriteItemCommand,
+  CreateTableCommand,
+  DeleteTableCommand as DeleteDynamoDBTableCommand,
+  GetItemCommand,
+  ListTablesCommand,
+  PutItemCommand,
+  QueryCommand,
+  UpdateTableCommand,
+} from "@aws-sdk/client-dynamodb";
+import {
   S3Client,
   ListBucketsCommand,
   HeadBucketCommand,
@@ -78,6 +90,7 @@ async function streamToString(stream: unknown): Promise<string> {
 
 const describeExternalSqsE2E = process.env.AWS_EMULATOR_E2E_URL ? describe : describe.skip;
 const describeExternalIamStsE2E = process.env.AWS_EMULATOR_E2E_URL ? describe : describe.skip;
+const describeExternalDynamoDBE2E = process.env.AWS_EMULATOR_E2E_URL ? describe : describe.skip;
 
 describe("AWS plugin - real @aws-sdk/client-s3 E2E", () => {
   let emulator: EmulatorHandle;
@@ -388,6 +401,138 @@ describeExternalSqsE2E("AWS plugin - real @aws-sdk/client-sqs E2E", () => {
     expect(received.Messages ?? []).toHaveLength(0);
 
     await sqs.send(new DeleteSQSQueueCommand({ QueueUrl }));
+  });
+});
+
+describeExternalDynamoDBE2E("AWS plugin - real @aws-sdk/client-dynamodb E2E", () => {
+  let emulator: EmulatorHandle;
+  let dynamodb: DynamoDBClient;
+
+  beforeAll(async () => {
+    emulator = await startEmulator();
+    dynamodb = new DynamoDBClient({
+      endpoint: `${emulator.url.replace(/\/$/, "")}/dynamodb/`,
+      region: "us-east-1",
+      credentials: {
+        accessKeyId: "AKIAIOSFODNN7EXAMPLE",
+        secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+      },
+    });
+  });
+
+  afterAll(async () => {
+    dynamodb.destroy();
+    await emulator.close();
+  });
+
+  it("CreateTable, PutItem, GetItem, Query, and DeleteTable roundtrip", async () => {
+    await dynamodb.send(
+      new CreateTableCommand({
+        TableName: "sdk-e2e-items",
+        AttributeDefinitions: [
+          { AttributeName: "pk", AttributeType: "S" },
+          { AttributeName: "sk", AttributeType: "S" },
+        ],
+        KeySchema: [
+          { AttributeName: "pk", KeyType: "HASH" },
+          { AttributeName: "sk", KeyType: "RANGE" },
+        ],
+        BillingMode: "PAY_PER_REQUEST",
+      }),
+    );
+
+    const listed = await dynamodb.send(new ListTablesCommand({}));
+    expect(listed.TableNames ?? []).toContain("sdk-e2e-items");
+
+    const updated = await dynamodb.send(
+      new UpdateTableCommand({
+        TableName: "sdk-e2e-items",
+        BillingMode: "PROVISIONED",
+        ProvisionedThroughput: {
+          ReadCapacityUnits: 2,
+          WriteCapacityUnits: 1,
+        },
+      }),
+    );
+    expect(updated.TableDescription?.BillingModeSummary?.BillingMode).toBe("PROVISIONED");
+
+    await dynamodb.send(
+      new PutItemCommand({
+        TableName: "sdk-e2e-items",
+        Item: {
+          pk: { S: "acct#1" },
+          sk: { S: "profile" },
+          name: { S: "Ada" },
+          count: { N: "3" },
+        },
+      }),
+    );
+
+    const found = await dynamodb.send(
+      new GetItemCommand({
+        TableName: "sdk-e2e-items",
+        Key: {
+          pk: { S: "acct#1" },
+          sk: { S: "profile" },
+        },
+      }),
+    );
+    expect(found.Item?.name?.S).toBe("Ada");
+    expect(found.Item?.count?.N).toBe("3");
+
+    const queried = await dynamodb.send(
+      new QueryCommand({
+        TableName: "sdk-e2e-items",
+        KeyConditionExpression: "#pk = :pk AND #sk = :sk",
+        ExpressionAttributeNames: {
+          "#pk": "pk",
+          "#sk": "sk",
+        },
+        ExpressionAttributeValues: {
+          ":pk": { S: "acct#1" },
+          ":sk": { S: "profile" },
+        },
+      }),
+    );
+    expect(queried.Count).toBe(1);
+    expect(queried.Items?.[0]?.name?.S).toBe("Ada");
+
+    await dynamodb.send(new DeleteDynamoDBTableCommand({ TableName: "sdk-e2e-items" }));
+  });
+
+  it("BatchWriteItem and BatchGetItem roundtrip", async () => {
+    await dynamodb.send(
+      new CreateTableCommand({
+        TableName: "sdk-e2e-events",
+        AttributeDefinitions: [{ AttributeName: "id", AttributeType: "S" }],
+        KeySchema: [{ AttributeName: "id", KeyType: "HASH" }],
+        BillingMode: "PAY_PER_REQUEST",
+      }),
+    );
+
+    await dynamodb.send(
+      new BatchWriteItemCommand({
+        RequestItems: {
+          "sdk-e2e-events": [
+            { PutRequest: { Item: { id: { S: "evt#1" }, type: { S: "push" } } } },
+            { PutRequest: { Item: { id: { S: "evt#2" }, type: { S: "pull_request" } } } },
+          ],
+        },
+      }),
+    );
+
+    const batch = await dynamodb.send(
+      new BatchGetItemCommand({
+        RequestItems: {
+          "sdk-e2e-events": {
+            Keys: [{ id: { S: "evt#1" } }, { id: { S: "evt#2" } }],
+          },
+        },
+      }),
+    );
+    expect(batch.Responses?.["sdk-e2e-events"]).toHaveLength(2);
+
+    await dynamodb.send(new DeleteDynamoDBTableCommand({ TableName: "sdk-e2e-events" }));
   });
 });
 

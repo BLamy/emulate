@@ -667,7 +667,7 @@ Microsoft Entra ID (Azure AD) v2.0 OAuth 2.0 and OpenID Connect emulation with a
 
 ## AWS
 
-S3, SQS, IAM, and STS emulation with AWS SDK-compatible S3 paths and AWS Query endpoints for SQS/IAM/STS. Query and REST XML operations return AWS-compatible XML. The native Go runtime is verified against current AWS SDK v3 clients for SQS, IAM, and STS; SQS uses JSON target requests, while IAM and STS use AWS Query XML.
+S3, SQS, DynamoDB, IAM, and STS emulation with AWS SDK-compatible S3 paths, AWS JSON RPC endpoints for SQS and DynamoDB, and AWS Query endpoints for SQS/IAM/STS. Query and REST XML operations return AWS-compatible XML. The native Go runtime is verified against current AWS SDK v3 clients for SQS, IAM, and STS; SQS uses JSON target requests, DynamoDB uses JSON target requests, and IAM/STS use AWS Query XML.
 
 To expose the native AWS emulator in a Vercel preview without separate infrastructure, run `npx emulate vercel init --service aws`. The generated route serves AWS at `/emulate/aws/*`.
 
@@ -692,6 +692,14 @@ Manual SQS requests can use `POST /sqs/` with an `Action` form parameter. In the
 - `CreateQueue`, `ListQueues`, `GetQueueUrl`, `GetQueueAttributes`
 - `SendMessage`, `ReceiveMessage`, `DeleteMessage`
 - `PurgeQueue`, `DeleteQueue`
+
+### DynamoDB
+In the native Go runtime, `@aws-sdk/client-dynamodb` v3 can use the `/dynamodb/` endpoint directly. The SDK sends `X-Amz-Target: DynamoDB_20120810.<Action>` JSON requests and receives JSON responses.
+
+- `CreateTable`, `DescribeTable`, `ListTables`, `UpdateTable`, `DeleteTable`
+- `PutItem`, `GetItem`, `DeleteItem`, `Scan`, `Query`
+- `BatchGetItem`, `BatchWriteItem`
+- `TagResource`, `UntagResource`, `ListTagsOfResource`
 
 ### IAM
 Manual IAM requests can use `POST /iam/` with an `Action` form parameter. In the native Go runtime, `@aws-sdk/client-iam` v3 can use the `/iam/` endpoint directly.
@@ -906,7 +914,7 @@ packages/
     slack/          # Slack Web API, OAuth v2, incoming webhooks
     apple/          # Apple Sign In / OIDC
     microsoft/      # Microsoft Entra ID OAuth 2.0 / OIDC + Graph /me
-    aws/            # AWS S3, SQS, IAM, STS
+    aws/            # AWS S3, SQS, DynamoDB, IAM, STS
 apps/
   web/              # Documentation site (Next.js)
 ```

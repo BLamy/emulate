@@ -11,3 +11,5 @@ allowBuilds:
   node-liblzma: true
   sharp: true
   unrs-resolver: true
+minimumReleaseAgeExclude:
+  - '@aws-sdk/client-dynamodb@3.1050.0'
