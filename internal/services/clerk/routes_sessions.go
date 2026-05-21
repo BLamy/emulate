@@ -117,9 +117,11 @@ func (s *Service) handleCreateSessionToken(c *corehttp.Context) {
 	}
 	var org corestore.Record
 	var membership corestore.Record
-	if memberships := s.store.Memberships.FindBy("user_id", stringField(user, "clerk_id")); len(memberships) > 0 {
-		membership = memberships[0]
-		org = firstRecord(s.store.Organizations.FindBy("clerk_id", stringField(membership, "org_id")))
+	if c.Param("template") == "" {
+		if memberships := s.store.Memberships.FindBy("user_id", stringField(user, "clerk_id")); len(memberships) > 0 {
+			membership = memberships[0]
+			org = firstRecord(s.store.Organizations.FindBy("clerk_id", stringField(membership, "org_id")))
+		}
 	}
 	jwt, err := createSessionToken(user, sessionID, s.baseURL, org, membership)
 	if err != nil {

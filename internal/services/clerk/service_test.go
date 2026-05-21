@@ -100,6 +100,38 @@ func TestOAuthAuthorizationCodeFlow(t *testing.T) {
 	}
 }
 
+func TestOAuthAcceptsNormalizedRedirectURI(t *testing.T) {
+	service, router := newTestService(t)
+	aliceID := userIDByEmail(t, service, "alice@example.com")
+	redirectURI := "http://localhost:3000/callback/?next=dashboard"
+
+	authorize := serveClerk(router, httptest.NewRequest(http.MethodGet, "/oauth/authorize?client_id=test-client&response_type=code&redirect_uri="+url.QueryEscape(redirectURI), nil))
+	if authorize.Code != http.StatusOK {
+		t.Fatalf("authorize status = %d, body = %s", authorize.Code, authorize.Body.String())
+	}
+
+	form := url.Values{
+		"user_ref":     {aliceID},
+		"redirect_uri": {redirectURI},
+		"scope":        {"openid profile email"},
+		"client_id":    {"test-client"},
+		"state":        {"state-1"},
+	}
+	callback := httptest.NewRequest(http.MethodPost, "/oauth/authorize/callback", strings.NewReader(form.Encode()))
+	callback.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	callbackRes := serveClerk(router, callback)
+	if callbackRes.Code != http.StatusFound {
+		t.Fatalf("callback status = %d, body = %s", callbackRes.Code, callbackRes.Body.String())
+	}
+	redirect, err := url.Parse(callbackRes.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if redirect.Query().Get("code") == "" || redirect.Query().Get("next") != "dashboard" || redirect.Query().Get("state") != "state-1" {
+		t.Fatalf("unexpected redirect: %s", callbackRes.Header().Get("Location"))
+	}
+}
+
 func TestOAuthRejectsInvalidPKCEVerifier(t *testing.T) {
 	service, router := newTestService(t)
 	aliceID := userIDByEmail(t, service, "alice@example.com")
@@ -186,6 +218,24 @@ func TestManagementAPIsAndSessionTokens(t *testing.T) {
 	claims := decodeJWTClaims(t, tokenBody.JWT)
 	if claims["sub"] != aliceID || claims["org_role"] != "org:admin" || claims["org_slug"] != "acme" {
 		t.Fatalf("unexpected session token claims: %#v", claims)
+	}
+
+	templateTokenRes := clerkJSON(router, http.MethodPost, "/v1/sessions/"+session.ID+"/tokens/custom", `{}`)
+	if templateTokenRes.Code != http.StatusOK {
+		t.Fatalf("template session token status = %d, body = %s", templateTokenRes.Code, templateTokenRes.Body.String())
+	}
+	var templateTokenBody struct {
+		JWT string `json:"jwt"`
+	}
+	if err := json.Unmarshal(templateTokenRes.Body.Bytes(), &templateTokenBody); err != nil {
+		t.Fatal(err)
+	}
+	templateClaims := decodeJWTClaims(t, templateTokenBody.JWT)
+	if templateClaims["sub"] != aliceID || templateClaims["sid"] != session.ID {
+		t.Fatalf("unexpected template session token claims: %#v", templateClaims)
+	}
+	if _, ok := templateClaims["org_role"]; ok {
+		t.Fatalf("template session token included org claims: %#v", templateClaims)
 	}
 }
 

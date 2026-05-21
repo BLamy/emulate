@@ -331,12 +331,21 @@ func constantTimeEqual(left string, right string) bool {
 }
 
 func matchesRedirectURI(input string, allowed []string) bool {
+	normalized := normalizeRedirectURI(input)
 	for _, candidate := range allowed {
-		if input == candidate {
+		if normalized == normalizeRedirectURI(candidate) {
 			return true
 		}
 	}
 	return false
+}
+
+func normalizeRedirectURI(value string) string {
+	parsed, err := url.Parse(value)
+	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		return parsed.Scheme + "://" + parsed.Host + strings.TrimRight(parsed.EscapedPath(), "/")
+	}
+	return strings.TrimRight(strings.Split(value, "?")[0], "/")
 }
 
 func slugify(value string) string {
