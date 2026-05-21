@@ -169,7 +169,7 @@ stripe:
       secret: whsec_test
 ```
 
-The `product_name` field in prices links to the product by name. Use `events: ['*']` to receive all webhook events, or specify individual event types.
+The `product_name` field in prices links to the product by name. In embedded JavaScript mode, use `events: ['*']` to receive all webhook events, or specify individual event types.
 
 ## API Endpoints
 

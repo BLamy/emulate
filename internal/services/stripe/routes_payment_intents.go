@@ -91,17 +91,28 @@ func (s *Service) handleConfirmPaymentIntent(c *corehttp.Context) {
 		stripeError(c, http.StatusNotFound, "invalid_request_error", "No such payment_intent: '"+c.Param("id")+"'", "resource_missing", "")
 		return
 	}
-	status := stringField(intent, "status")
-	if status != "requires_confirmation" && status != "requires_payment_method" {
-		stripeError(c, http.StatusBadRequest, "invalid_request_error", "This PaymentIntent's status is "+status+", which does not allow confirmation.", "payment_intent_unexpected_state", "")
+	body := parseStripeBody(c.Request)
+	var unexpectedStatus string
+	updated, ok := s.store.PaymentIntents.UpdateFunc(intField(intent, "id"), func(current corestore.Record) (corestore.Record, bool) {
+		status := stringField(current, "status")
+		if status != "requires_confirmation" && status != "requires_payment_method" {
+			unexpectedStatus = status
+			return nil, false
+		}
+		patch := corestore.Record{"status": "succeeded"}
+		if paymentMethod := stringValue(body["payment_method"]); paymentMethod != "" {
+			patch["payment_method"] = paymentMethod
+		}
+		return patch, true
+	})
+	if !ok {
+		if unexpectedStatus == "" {
+			stripeError(c, http.StatusNotFound, "invalid_request_error", "No such payment_intent: '"+c.Param("id")+"'", "resource_missing", "")
+			return
+		}
+		stripeError(c, http.StatusBadRequest, "invalid_request_error", "This PaymentIntent's status is "+unexpectedStatus+", which does not allow confirmation.", "payment_intent_unexpected_state", "")
 		return
 	}
-	body := parseStripeBody(c.Request)
-	patch := corestore.Record{"status": "succeeded"}
-	if paymentMethod := stringValue(body["payment_method"]); paymentMethod != "" {
-		patch["payment_method"] = paymentMethod
-	}
-	updated, _ := s.store.PaymentIntents.Update(intField(intent, "id"), patch)
 	s.store.Charges.Insert(corestore.Record{
 		"stripe_id":         stripeID("ch"),
 		"amount":            intField(updated, "amount"),

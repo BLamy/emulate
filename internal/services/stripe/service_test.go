@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	corehttp "github.com/vercel-labs/emulate/internal/core/http"
@@ -91,6 +92,65 @@ func TestStripePaymentIntentConfirmCreatesChargeAndExpandsCustomer(t *testing.T)
 	secondConfirm := stripeRequest(handler, http.MethodPost, "/v1/payment_intents/"+intent.ID+"/confirm", `{}`)
 	if secondConfirm.Code != http.StatusBadRequest || !strings.Contains(secondConfirm.Body.String(), `"code":"payment_intent_unexpected_state"`) {
 		t.Fatalf("unexpected second confirm body: status=%d body=%s", secondConfirm.Code, secondConfirm.Body.String())
+	}
+}
+
+func TestStripePaymentIntentConfirmIsAtomic(t *testing.T) {
+	_, handler := newStripeTestService()
+
+	create := stripeRequest(handler, http.MethodPost, "/v1/payment_intents", `{"amount":5000,"currency":"usd","payment_method":"pm_card_visa"}`)
+	var intent struct {
+		ID string `json:"id"`
+	}
+	mustDecodeStripeJSON(t, create.Body.Bytes(), &intent)
+	if create.Code != http.StatusOK || intent.ID == "" {
+		t.Fatalf("unexpected intent: status=%d body=%s", create.Code, create.Body.String())
+	}
+
+	type confirmResult struct {
+		code int
+		body string
+	}
+	const attempts = 32
+	start := make(chan struct{})
+	results := make(chan confirmResult, attempts)
+	var wg sync.WaitGroup
+	for range attempts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			res := stripeRequest(handler, http.MethodPost, "/v1/payment_intents/"+intent.ID+"/confirm", `{}`)
+			results <- confirmResult{code: res.Code, body: res.Body.String()}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	successes := 0
+	unexpectedStateErrors := 0
+	for result := range results {
+		switch {
+		case result.code == http.StatusOK:
+			successes++
+		case result.code == http.StatusBadRequest && strings.Contains(result.body, `"code":"payment_intent_unexpected_state"`):
+			unexpectedStateErrors++
+		default:
+			t.Fatalf("unexpected confirm result: status=%d body=%s", result.code, result.body)
+		}
+	}
+	if successes != 1 || unexpectedStateErrors != attempts-1 {
+		t.Fatalf("confirm results: successes=%d unexpected_state_errors=%d attempts=%d", successes, unexpectedStateErrors, attempts)
+	}
+
+	charges := stripeRequest(handler, http.MethodGet, "/v1/charges?payment_intent="+intent.ID, "")
+	var list struct {
+		Data []map[string]any `json:"data"`
+	}
+	mustDecodeStripeJSON(t, charges.Body.Bytes(), &list)
+	if charges.Code != http.StatusOK || len(list.Data) != 1 {
+		t.Fatalf("unexpected charges: status=%d body=%s", charges.Code, charges.Body.String())
 	}
 }
 
