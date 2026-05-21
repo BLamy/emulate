@@ -332,6 +332,18 @@ describe("createEmulateHandler compatibility", () => {
     expect(forwardedRequest!.headers.get("x-forwarded-prefix")).toBe("/emulate/github");
   });
 
+  it("rejects legacy persistence configs instead of ignoring them", () => {
+    expect(() =>
+      createEmulateHandler({
+        services: {},
+        persistence: {
+          load: () => null,
+          save: () => undefined,
+        },
+      }),
+    ).toThrow("createEmulateHandler persistence is not supported");
+  });
+
   it("starts a native runtime for legacy in-process handler configs", async () => {
     process.env.EMULATE_GITHUB_PORT = "4998";
     (globalThis as { __emulateCompatLoadEmulateApi?: unknown }).__emulateCompatLoadEmulateApi = async () => ({

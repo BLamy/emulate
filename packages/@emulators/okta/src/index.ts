@@ -47,10 +47,10 @@ export interface CompatStoreSource {
   collection<T extends CompatEntity>(name: string, indexFields?: string[]): CompatCollection<T>;
 }
 
-export type OktaUserStatus = string;
-export type OktaGroupType = string;
-export type OktaAppStatus = string;
-export type OktaAuthorizationServerStatus = string;
+export type OktaUserStatus = "STAGED" | "PROVISIONED" | "ACTIVE" | "SUSPENDED" | "DEPROVISIONED";
+export type OktaGroupType = "OKTA_GROUP" | "BUILT_IN";
+export type OktaAppStatus = "ACTIVE" | "INACTIVE";
+export type OktaAuthorizationServerStatus = "ACTIVE" | "INACTIVE";
 
 export interface OktaUser extends CompatEntity {
   [key: string]: unknown;
@@ -103,11 +103,132 @@ export function getOktaStore(store: CompatStoreSource): OktaStore {
     apps: compatCollection<OktaApp>(store, "okta.apps", ["okta_id", "name"]),
     oauthClients: compatCollection<OktaOAuthClient>(store, "okta.oauth_clients", ["client_id", "auth_server_id"]),
     authorizationServers: compatCollection<OktaAuthorizationServer>(store, "okta.auth_servers", ["server_id"]),
-    groupMemberships: compatCollection<OktaGroupMembership>(store, "okta.group_memberships", ["group_okta_id", "user_okta_id"]),
+    groupMemberships: compatCollection<OktaGroupMembership>(store, "okta.group_memberships", [
+      "group_okta_id",
+      "user_okta_id",
+    ]),
     appAssignments: compatCollection<OktaAppAssignment>(store, "okta.app_assignments", ["app_okta_id", "user_okta_id"]),
   };
 }
 
+// Legacy public entity type augmentations.
+export interface OktaUser extends CompatEntity {
+  okta_id: string;
+  status: OktaUserStatus;
+  activated_at: string | null;
+  status_changed_at: string;
+  last_login_at: string | null;
+  password_changed_at: string | null;
+  transitioning_to_status: OktaUserStatus | null;
+  login: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  display_name: string;
+  locale: string;
+  time_zone: string;
+}
+
+export interface OktaGroup extends CompatEntity {
+  okta_id: string;
+  type: OktaGroupType;
+  name: string;
+  description: string | null;
+}
+
+export interface OktaApp extends CompatEntity {
+  okta_id: string;
+  name: string;
+  label: string;
+  status: OktaAppStatus;
+  sign_on_mode: string;
+  settings: Record<string, unknown>;
+  credentials: Record<string, unknown>;
+}
+
+export interface OktaOAuthClient extends CompatEntity {
+  client_id: string;
+  client_secret?: string;
+  name: string;
+  redirect_uris: string[];
+  response_types: string[];
+  grant_types: string[];
+  token_endpoint_auth_method: "client_secret_post" | "client_secret_basic" | "none";
+  auth_server_id: string;
+}
+
+export interface OktaAuthorizationServer extends CompatEntity {
+  server_id: string;
+  name: string;
+  description: string;
+  audiences: string[];
+  status: OktaAuthorizationServerStatus;
+}
+
+export interface OktaGroupMembership extends CompatEntity {
+  group_okta_id: string;
+  user_okta_id: string;
+}
+
+export interface OktaAppAssignment extends CompatEntity {
+  app_okta_id: string;
+  user_okta_id: string;
+}
+
+// Legacy public seed config type augmentations.
+export interface OktaSeedConfig {
+  users?: Array<{
+    okta_id?: string;
+    status?: OktaUserStatus;
+    login: string;
+    email?: string;
+    first_name?: string;
+    last_name?: string;
+    display_name?: string;
+    locale?: string;
+    time_zone?: string;
+  }>;
+  groups?: Array<{
+    okta_id?: string;
+    type?: OktaGroupType;
+    name: string;
+    description?: string;
+  }>;
+  apps?: Array<{
+    okta_id?: string;
+    name: string;
+    label?: string;
+    status?: "ACTIVE" | "INACTIVE";
+    sign_on_mode?: string;
+    settings?: Record<string, unknown>;
+    credentials?: Record<string, unknown>;
+  }>;
+  oauth_clients?: Array<{
+    client_id: string;
+    client_secret?: string;
+    name: string;
+    redirect_uris: string[];
+    response_types?: string[];
+    grant_types?: string[];
+    token_endpoint_auth_method?: "client_secret_post" | "client_secret_basic" | "none";
+    auth_server_id?: string;
+  }>;
+  authorization_servers?: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    audiences?: string[];
+    status?: OktaAuthorizationServerStatus;
+  }>;
+  group_memberships?: Array<{
+    group_okta_id: string;
+    user_okta_id: string;
+  }>;
+  app_assignments?: Array<{
+    app_okta_id: string;
+    user_okta_id: string;
+  }>;
+}
 export const service = {
   name: serviceName,
   label: serviceLabel,
@@ -127,7 +248,9 @@ export const plugin = {
 export const oktaPlugin = plugin;
 
 export function seedFromConfig(_store?: unknown, _baseUrl?: string, _config?: OktaSeedConfig): void {
-  return undefined;
+  throw new Error(
+    "seedFromConfig is no longer supported by native compatibility facade packages. Pass seed data to createEmulateHandler or createEmulator instead.",
+  );
 }
 
 export function createAppKeyResolver(): undefined {

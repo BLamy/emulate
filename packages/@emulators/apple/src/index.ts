@@ -78,6 +78,44 @@ export function getAppleStore(store: CompatStoreSource): AppleStore {
   };
 }
 
+// Legacy public entity type augmentations.
+export interface AppleUser extends CompatEntity {
+  uid: string;
+  email: string;
+  name: string;
+  given_name: string;
+  family_name: string;
+  email_verified: boolean;
+  is_private_email: boolean;
+  private_relay_email: string | null;
+  real_user_status: number;
+}
+
+export interface AppleOAuthClient extends CompatEntity {
+  client_id: string;
+  team_id: string;
+  key_id: string;
+  name: string;
+  redirect_uris: string[];
+}
+
+// Legacy public seed config type augmentations.
+export interface AppleSeedConfig {
+  users?: Array<{
+    email: string;
+    name?: string;
+    given_name?: string;
+    family_name?: string;
+    is_private_email?: boolean;
+  }>;
+  oauth_clients?: Array<{
+    client_id: string;
+    team_id: string;
+    key_id?: string;
+    name: string;
+    redirect_uris: string[];
+  }>;
+}
 export const service = {
   name: serviceName,
   label: serviceLabel,
@@ -97,7 +135,9 @@ export const plugin = {
 export const applePlugin = plugin;
 
 export function seedFromConfig(_store?: unknown, _baseUrl?: string, _config?: AppleSeedConfig): void {
-  return undefined;
+  throw new Error(
+    "seedFromConfig is no longer supported by native compatibility facade packages. Pass seed data to createEmulateHandler or createEmulator instead.",
+  );
 }
 
 export function createAppKeyResolver(): undefined {

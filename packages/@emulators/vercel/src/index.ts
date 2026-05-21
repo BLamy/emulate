@@ -130,7 +130,10 @@ export function getVercelStore(store: CompatStoreSource): VercelStore {
     teamMembers: compatCollection<VercelTeamMember>(store, "vercel.team_members", ["teamId", "userId"]),
     projects: compatCollection<VercelProject>(store, "vercel.projects", ["uid", "name", "accountId"]),
     deployments: compatCollection<VercelDeployment>(store, "vercel.deployments", ["uid", "projectId", "url"]),
-    deploymentAliases: compatCollection<VercelDeploymentAlias>(store, "vercel.deployment_aliases", ["deploymentId", "projectId"]),
+    deploymentAliases: compatCollection<VercelDeploymentAlias>(store, "vercel.deployment_aliases", [
+      "deploymentId",
+      "projectId",
+    ]),
     builds: compatCollection<VercelBuild>(store, "vercel.builds", ["deploymentId"]),
     deploymentEvents: compatCollection<VercelDeploymentEvent>(store, "vercel.deployment_events", ["deploymentId"]),
     files: compatCollection<VercelFile>(store, "vercel.files", ["digest"]),
@@ -143,6 +146,285 @@ export function getVercelStore(store: CompatStoreSource): VercelStore {
   };
 }
 
+// Legacy public entity type augmentations.
+export interface VercelUser extends CompatEntity {
+  uid: string;
+  email: string;
+  username: string;
+  name: string | null;
+  avatar: string | null;
+  defaultTeamId: string | null;
+  softBlock: null;
+  billing: {
+    plan: string;
+    period: null;
+    trial: null;
+    cancelation: null;
+    addons: null;
+  };
+  resourceConfig: {
+    nodeType: string;
+    concurrentBuilds: number;
+  };
+  stagingPrefix: string;
+  version: string | null;
+}
+
+export interface VercelTeam extends CompatEntity {
+  uid: string;
+  slug: string;
+  name: string;
+  avatar: string | null;
+  description: string | null;
+  creatorId: string;
+  membership: {
+    confirmed: boolean;
+    role: "OWNER" | "MEMBER" | "DEVELOPER" | "VIEWER";
+  };
+  billing: {
+    plan: string;
+    period: null;
+    trial: null;
+    cancelation: null;
+    addons: null;
+  };
+  resourceConfig: {
+    nodeType: string;
+    concurrentBuilds: number;
+  };
+  stagingPrefix: string;
+}
+
+export interface VercelTeamMember extends CompatEntity {
+  teamId: string;
+  userId: string;
+  role: "OWNER" | "MEMBER" | "DEVELOPER" | "VIEWER";
+  confirmed: boolean;
+  joinedFrom: string;
+}
+
+export interface VercelProject extends CompatEntity {
+  uid: string;
+  name: string;
+  accountId: string;
+  framework: string | null;
+  buildCommand: string | null;
+  devCommand: string | null;
+  installCommand: string | null;
+  outputDirectory: string | null;
+  rootDirectory: string | null;
+  commandForIgnoringBuildStep: string | null;
+  nodeVersion: string;
+  serverlessFunctionRegion: string | null;
+  publicSource: boolean;
+  autoAssignCustomDomains: boolean;
+  autoAssignCustomDomainsUpdatedBy: string | null;
+  gitForkProtection: boolean;
+  sourceFilesOutsideRootDirectory: boolean;
+  live: boolean;
+  link: {
+    type: string;
+    repo: string;
+    repoId: number;
+    org: string;
+    gitCredentialId: string;
+    productionBranch: string;
+    createdAt: number;
+    updatedAt: number;
+    deployHooks: Array<{ id: string; name: string; ref: string; url: string }>;
+  } | null;
+  latestDeployments: Array<{ id: string; url: string; state: string; createdAt: number }>;
+  targets: Record<string, { id: string; url: string; state: string; createdAt: number }>;
+  protectionBypass: Record<string, { createdAt: number; createdBy: string; scope: string }>;
+  passwordProtection: null;
+  ssoProtection: null;
+  trustedIps: null;
+  connectConfigurationId: string | null;
+  gitComments: { onPullRequest: boolean; onCommit: boolean };
+  webAnalytics: { id: string } | null;
+  speedInsights: { id: string } | null;
+  oidcTokenConfig: { enabled: boolean } | null;
+  tier: string;
+}
+
+export interface VercelDeployment extends CompatEntity {
+  uid: string;
+  name: string;
+  url: string;
+  projectId: string;
+  source: string;
+  target: "production" | "preview" | "staging" | null;
+  readyState: "QUEUED" | "BUILDING" | "INITIALIZING" | "READY" | "ERROR" | "CANCELED";
+  readySubstate: "STAGED" | "ROLLING" | "PROMOTED" | null;
+  state: "QUEUED" | "BUILDING" | "INITIALIZING" | "READY" | "ERROR" | "CANCELED";
+  creatorId: string;
+  inspectorUrl: string;
+  meta: Record<string, string>;
+  gitSource: {
+    type: string;
+    ref: string;
+    sha: string;
+    repoId: string;
+    org: string;
+    repo: string;
+    message: string;
+    authorName: string;
+    commitAuthorName: string;
+  } | null;
+  buildingAt: number | null;
+  readyAt: number | null;
+  canceledAt: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  regions: string[];
+  functions: Record<string, unknown> | null;
+  routes: unknown[] | null;
+  plan: string;
+  aliasAssigned: boolean;
+  aliasError: null;
+  bootedAt: number | null;
+}
+
+export interface VercelDeploymentAlias extends CompatEntity {
+  uid: string;
+  alias: string;
+  deploymentId: string;
+  projectId: string;
+}
+
+export interface VercelBuild extends CompatEntity {
+  uid: string;
+  deploymentId: string;
+  entrypoint: string;
+  readyState: "QUEUED" | "BUILDING" | "READY" | "ERROR";
+  output: Array<{
+    path: string;
+    functionName: string;
+    type: string;
+    size: number;
+  }>;
+  readyStateAt: number;
+  fingerprint: string;
+}
+
+export interface VercelDeploymentEvent extends CompatEntity {
+  deploymentId: string;
+  type: string;
+  payload: {
+    text: string;
+    statusCode?: number;
+    deploymentId?: string;
+  };
+  date: number;
+  serial: string;
+}
+
+export interface VercelFile extends CompatEntity {
+  digest: string;
+  size: number;
+  contentType: string;
+}
+
+export interface VercelDeploymentFile extends CompatEntity {
+  deploymentId: string;
+  name: string;
+  type: "file" | "directory" | "symlink" | "lambda" | "middleware";
+  uid: string;
+  children: string[];
+  contentType: string | null;
+  mode: number;
+  size: number;
+}
+
+export interface VercelDomain extends CompatEntity {
+  uid: string;
+  projectId: string;
+  name: string;
+  apexName: string;
+  redirect: string | null;
+  redirectStatusCode: 301 | 302 | 307 | 308 | null;
+  gitBranch: string | null;
+  customEnvironmentId: string | null;
+  verified: boolean;
+  verification: Array<{
+    type: string;
+    domain: string;
+    value: string;
+    reason: string;
+  }>;
+}
+
+export interface VercelEnvVar extends CompatEntity {
+  uid: string;
+  projectId: string;
+  key: string;
+  value: string;
+  type: "system" | "encrypted" | "plain" | "secret" | "sensitive";
+  target: Array<"production" | "preview" | "development">;
+  gitBranch: string | null;
+  customEnvironmentIds: string[];
+  comment: string | null;
+  decrypted: boolean;
+}
+
+export interface VercelProtectionBypass extends CompatEntity {
+  projectId: string;
+  secret: string;
+  note: string | null;
+  scope: string;
+  createdBy: string;
+}
+
+export interface VercelApiKey extends CompatEntity {
+  uid: string;
+  name: string;
+  teamId: string | null;
+  userId: string;
+  tokenString: string;
+}
+
+export interface VercelIntegration extends CompatEntity {
+  client_id: string;
+  client_secret: string;
+  name: string;
+  redirect_uris: string[];
+}
+
+// Legacy public seed config type augmentations.
+export interface VercelSeedConfig {
+  port?: number;
+  users?: Array<{
+    username: string;
+    email?: string;
+    name?: string;
+  }>;
+  teams?: Array<{
+    slug: string;
+    name?: string;
+    description?: string;
+  }>;
+  projects?: Array<{
+    name: string;
+    team?: string;
+    framework?: string;
+    buildCommand?: string;
+    outputDirectory?: string;
+    rootDirectory?: string;
+    nodeVersion?: string;
+    envVars?: Array<{
+      key: string;
+      value: string;
+      type?: string;
+      target?: string[];
+    }>;
+  }>;
+  integrations?: Array<{
+    client_id: string;
+    client_secret: string;
+    name: string;
+    redirect_uris: string[];
+  }>;
+}
 export const service = {
   name: serviceName,
   label: serviceLabel,
@@ -162,7 +444,9 @@ export const plugin = {
 export const vercelPlugin = plugin;
 
 export function seedFromConfig(_store?: unknown, _baseUrl?: string, _config?: VercelSeedConfig): void {
-  return undefined;
+  throw new Error(
+    "seedFromConfig is no longer supported by native compatibility facade packages. Pass seed data to createEmulateHandler or createEmulator instead.",
+  );
 }
 
 export function createAppKeyResolver(): undefined {

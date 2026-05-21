@@ -174,7 +174,20 @@ export class Store {
 
   collection<T extends Entity>(name: string, indexFields: (keyof T)[] = []): Collection<T> {
     const existing = this.collections.get(name);
-    if (existing) return existing as unknown as Collection<T>;
+    if (existing) {
+      if (indexFields.length > 0) {
+        const requested = indexFields.map(String).sort();
+        if (
+          existing.fieldNames.length !== requested.length ||
+          existing.fieldNames.some((field, index) => field !== requested[index])
+        ) {
+          throw new Error(
+            `Collection "${name}" already exists with indexes [${existing.fieldNames}] but was requested with [${requested}]`,
+          );
+        }
+      }
+      return existing as unknown as Collection<T>;
+    }
     const collection = new Collection<T>(indexFields);
     this.collections.set(name, collection as unknown as Collection<Entity>);
     return collection;
@@ -202,7 +215,12 @@ export class Store {
   }
 
   restore(snapshot: StoreSnapshot): void {
-    this.collections.clear();
+    const snapshotNames = new Set(Object.keys(snapshot.collections));
+    for (const name of this.collections.keys()) {
+      if (!snapshotNames.has(name)) {
+        this.collections.delete(name);
+      }
+    }
     for (const [name, collectionSnapshot] of Object.entries(snapshot.collections)) {
       const collection = this.collection(name, collectionSnapshot.indexFields as (keyof Entity)[]);
       collection.restore(collectionSnapshot);
@@ -601,7 +619,10 @@ export function renderFormPostPage(action: string, fields: Record<string, string
   const inputs = Object.entries(fields)
     .map(([name, value]) => `<input type="hidden" name="${escapeAttr(name)}" value="${escapeAttr(value)}">`)
     .join("");
-  return renderCardPage({ title: "Redirecting", body: `<form method="post" action="${escapeAttr(action)}">${inputs}</form>` });
+  return renderCardPage({
+    title: "Redirecting",
+    body: `<form method="post" action="${escapeAttr(action)}">${inputs}</form>`,
+  });
 }
 
 export function renderCheckoutPage(options: CheckoutPageOptions): string {

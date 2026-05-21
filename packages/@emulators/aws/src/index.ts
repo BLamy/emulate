@@ -98,6 +98,101 @@ export function getAwsStore(store: CompatStoreSource): AwsStore {
   };
 }
 
+// Legacy public entity type augmentations.
+export interface S3Bucket extends CompatEntity {
+  bucket_name: string;
+  region: string;
+  creation_date: string;
+  acl: "private" | "public-read" | "public-read-write";
+  versioning_enabled: boolean;
+}
+
+export interface S3Object extends CompatEntity {
+  bucket_name: string;
+  key: string;
+  body: string;
+  content_type: string;
+  content_length: number;
+  etag: string;
+  last_modified: string;
+  metadata: Record<string, string>;
+  version_id?: string;
+}
+
+export interface SqsQueue extends CompatEntity {
+  queue_name: string;
+  queue_url: string;
+  arn: string;
+  visibility_timeout: number;
+  delay_seconds: number;
+  max_message_size: number;
+  message_retention_period: number;
+  receive_message_wait_time: number;
+  fifo: boolean;
+}
+
+export interface SqsMessage extends CompatEntity {
+  queue_name: string;
+  message_id: string;
+  receipt_handle: string;
+  body: string;
+  md5_of_body: string;
+  attributes: Record<string, string>;
+  message_attributes: Record<string, { DataType: string; StringValue?: string; BinaryValue?: string }>;
+  visible_after: number;
+  sent_timestamp: number;
+  receive_count: number;
+}
+
+export interface IamUser extends CompatEntity {
+  user_name: string;
+  user_id: string;
+  arn: string;
+  path: string;
+  access_keys: Array<{ access_key_id: string; secret_access_key: string; status: "Active" | "Inactive" }>;
+}
+
+export interface IamRole extends CompatEntity {
+  role_name: string;
+  role_id: string;
+  arn: string;
+  path: string;
+  assume_role_policy_document: string;
+  description: string;
+}
+
+// Legacy public seed config type augmentations.
+export interface AwsSeedConfig {
+  port?: number;
+  region?: string;
+  account_id?: string;
+  s3?: {
+    buckets?: Array<{
+      name: string;
+      region?: string;
+    }>;
+  };
+  sqs?: {
+    queues?: Array<{
+      name: string;
+      fifo?: boolean;
+      visibility_timeout?: number;
+    }>;
+  };
+  iam?: {
+    users?: Array<{
+      user_name: string;
+      path?: string;
+      create_access_key?: boolean;
+    }>;
+    roles?: Array<{
+      role_name: string;
+      path?: string;
+      description?: string;
+      assume_role_policy?: string;
+    }>;
+  };
+}
 export const service = {
   name: serviceName,
   label: serviceLabel,
@@ -117,7 +212,9 @@ export const plugin = {
 export const awsPlugin = plugin;
 
 export function seedFromConfig(_store?: unknown, _baseUrl?: string, _config?: AwsSeedConfig): void {
-  return undefined;
+  throw new Error(
+    "seedFromConfig is no longer supported by native compatibility facade packages. Pass seed data to createEmulateHandler or createEmulator instead.",
+  );
 }
 
 export function createAppKeyResolver(): undefined {

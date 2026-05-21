@@ -85,4 +85,4 @@ No `oauth_apps` need to be seeded. When none are configured, the emulator skips 
 
 ## Compatibility Handler
 
-`createEmulateHandler` remains exported for existing App Router routes. It accepts the old `services` config shape, starts the native runtime on first local request, and proxies each service path to that runtime. For deployed Vercel previews, prefer `npx emulate vercel init`; alternatively set `EMULATE_<SERVICE>_URL` to a reachable native target. New code should use `createEmulateProxy` for explicit local proxying.
+`createEmulateHandler` remains exported for existing App Router routes. It accepts the old `services` config shape, starts the native runtime on first local request, and proxies each service path to that runtime. The legacy `persistence` option is rejected because state lives in the native runtime. For deployed Vercel previews, prefer `npx emulate vercel init`; alternatively set `EMULATE_<SERVICE>_URL` to a reachable native target. New code should use `createEmulateProxy` for explicit local proxying.

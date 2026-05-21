@@ -110,6 +110,12 @@ const NATIVE_SERVICE_NAMES = [
 const nativeServiceSet = new Set<string>(NATIVE_SERVICE_NAMES);
 
 export function createEmulateHandler(config: EmulateHandlerConfig) {
+  if (config.persistence) {
+    throw new Error(
+      "createEmulateHandler persistence is not supported by the native compatibility facade. Use createEmulateProxy with a persistent native runtime instead.",
+    );
+  }
+
   const runtimes = new Map<string, Promise<NativeHandlerRuntime>>();
 
   async function ensureRuntime(
@@ -180,14 +186,7 @@ export function createEmulateHandler(config: EmulateHandlerConfig) {
 }
 
 function resolveNativeServiceName(serviceKey: string, mod: EmulatorModule): ServiceName {
-  const candidates = [
-    mod.serviceName,
-    mod.service?.name,
-    mod.plugin?.name,
-    mod.default?.name,
-    mod.name,
-    serviceKey,
-  ];
+  const candidates = [mod.serviceName, mod.service?.name, mod.plugin?.name, mod.default?.name, mod.name, serviceKey];
   for (const candidate of candidates) {
     if (typeof candidate === "string" && nativeServiceSet.has(candidate)) {
       return candidate as ServiceName;

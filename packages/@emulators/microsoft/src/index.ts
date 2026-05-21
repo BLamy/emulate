@@ -78,6 +78,47 @@ export function getMicrosoftStore(store: CompatStoreSource): MicrosoftStore {
   };
 }
 
+// Legacy public entity type augmentations.
+export interface MicrosoftUser extends CompatEntity {
+  /** Object ID (oid) — unique per-tenant user identifier */
+  oid: string;
+  email: string;
+  name: string;
+  given_name: string;
+  family_name: string;
+  email_verified: boolean;
+  /** Microsoft tenant ID */
+  tenant_id: string;
+  /** User principal name (usually email) */
+  preferred_username: string;
+}
+
+export interface MicrosoftOAuthClient extends CompatEntity {
+  client_id: string;
+  client_secret: string;
+  name: string;
+  redirect_uris: string[];
+  /** Tenant ID this app is registered in */
+  tenant_id: string;
+}
+
+// Legacy public seed config type augmentations.
+export interface MicrosoftSeedConfig {
+  users?: Array<{
+    email: string;
+    name?: string;
+    given_name?: string;
+    family_name?: string;
+    tenant_id?: string;
+  }>;
+  oauth_clients?: Array<{
+    client_id: string;
+    client_secret: string;
+    name: string;
+    redirect_uris: string[];
+    tenant_id?: string;
+  }>;
+}
 export const service = {
   name: serviceName,
   label: serviceLabel,
@@ -97,7 +138,9 @@ export const plugin = {
 export const microsoftPlugin = plugin;
 
 export function seedFromConfig(_store?: unknown, _baseUrl?: string, _config?: MicrosoftSeedConfig): void {
-  return undefined;
+  throw new Error(
+    "seedFromConfig is no longer supported by native compatibility facade packages. Pass seed data to createEmulateHandler or createEmulator instead.",
+  );
 }
 
 export function createAppKeyResolver(): undefined {

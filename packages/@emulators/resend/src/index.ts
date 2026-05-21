@@ -93,6 +93,74 @@ export function getResendStore(store: CompatStoreSource): ResendStore {
   };
 }
 
+// Legacy public entity type augmentations.
+export interface ResendEmail extends CompatEntity {
+  uuid: string;
+  from: string;
+  to: string[];
+  subject: string;
+  html: string | null;
+  text: string | null;
+  cc: string[];
+  bcc: string[];
+  reply_to: string[];
+  headers: Record<string, string>;
+  tags: Array<{ name: string; value: string }>;
+  status: "sent" | "delivered" | "bounced" | "canceled" | "scheduled";
+  scheduled_at: string | null;
+  last_event: string;
+}
+
+export interface ResendDomain extends CompatEntity {
+  uuid: string;
+  name: string;
+  status: "pending" | "verified";
+  region: string;
+  records: Array<{
+    record: string;
+    name: string;
+    type: string;
+    ttl: string;
+    status: "pending" | "verified";
+    value: string;
+    priority?: number;
+  }>;
+}
+
+export interface ResendApiKey extends CompatEntity {
+  uuid: string;
+  name: string;
+  token: string;
+}
+
+export interface ResendAudience extends CompatEntity {
+  uuid: string;
+  name: string;
+}
+
+export interface ResendContact extends CompatEntity {
+  uuid: string;
+  audience_id: string;
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+  unsubscribed: boolean;
+}
+
+// Legacy public seed config type augmentations.
+export interface ResendSeedConfig {
+  port?: number;
+  domains?: Array<{
+    name: string;
+    region?: string;
+  }>;
+  contacts?: Array<{
+    email: string;
+    first_name?: string;
+    last_name?: string;
+    audience?: string;
+  }>;
+}
 export const service = {
   name: serviceName,
   label: serviceLabel,
@@ -112,7 +180,9 @@ export const plugin = {
 export const resendPlugin = plugin;
 
 export function seedFromConfig(_store?: unknown, _baseUrl?: string, _config?: ResendSeedConfig): void {
-  return undefined;
+  throw new Error(
+    "seedFromConfig is no longer supported by native compatibility facade packages. Pass seed data to createEmulateHandler or createEmulator instead.",
+  );
 }
 
 export function createAppKeyResolver(): undefined {

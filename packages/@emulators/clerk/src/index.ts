@@ -94,15 +94,160 @@ function compatCollection<T extends CompatEntity>(
 export function getClerkStore(store: CompatStoreSource): ClerkStore {
   return {
     users: compatCollection<ClerkUser>(store, "clerk.users", ["clerk_id", "username"]),
-    emailAddresses: compatCollection<ClerkEmailAddress>(store, "clerk.emails", ["email_id", "user_id", "email_address"]),
+    emailAddresses: compatCollection<ClerkEmailAddress>(store, "clerk.emails", [
+      "email_id",
+      "user_id",
+      "email_address",
+    ]),
     organizations: compatCollection<ClerkOrganization>(store, "clerk.orgs", ["clerk_id", "slug"]),
-    memberships: compatCollection<ClerkOrganizationMembership>(store, "clerk.memberships", ["membership_id", "org_id", "user_id"]),
+    memberships: compatCollection<ClerkOrganizationMembership>(store, "clerk.memberships", [
+      "membership_id",
+      "org_id",
+      "user_id",
+    ]),
     invitations: compatCollection<ClerkOrganizationInvitation>(store, "clerk.invitations", ["invitation_id", "org_id"]),
     sessions: compatCollection<ClerkSession>(store, "clerk.sessions", ["clerk_id", "user_id"]),
     oauthApps: compatCollection<ClerkOAuthApplication>(store, "clerk.oauth_apps", ["app_id", "client_id"]),
   };
 }
 
+// Legacy public entity type augmentations.
+export interface ClerkUser extends CompatEntity {
+  clerk_id: string;
+  username: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  image_url: string | null;
+  profile_image_url: string | null;
+  external_id: string | null;
+  primary_email_address_id: string | null;
+  primary_phone_number_id: string | null;
+  password_enabled: boolean;
+  password_hash: string | null;
+  totp_enabled: boolean;
+  backup_code_enabled: boolean;
+  two_factor_enabled: boolean;
+  banned: boolean;
+  locked: boolean;
+  public_metadata: Record<string, unknown>;
+  private_metadata: Record<string, unknown>;
+  unsafe_metadata: Record<string, unknown>;
+  last_active_at: number | null;
+  last_sign_in_at: number | null;
+  created_at_unix: number;
+  updated_at_unix: number;
+}
+
+export interface ClerkEmailAddress extends CompatEntity {
+  email_id: string;
+  email_address: string;
+  user_id: string;
+  verification_status: "verified" | "unverified";
+  verification_strategy: string;
+  is_primary: boolean;
+  reserved: boolean;
+  created_at_unix: number;
+  updated_at_unix: number;
+}
+
+export interface ClerkOrganization extends CompatEntity {
+  clerk_id: string;
+  name: string;
+  slug: string;
+  image_url: string | null;
+  has_logo: boolean;
+  members_count: number;
+  pending_invitations_count: number;
+  public_metadata: Record<string, unknown>;
+  private_metadata: Record<string, unknown>;
+  max_allowed_memberships: number | null;
+  admin_delete_enabled: boolean;
+  created_at_unix: number;
+  updated_at_unix: number;
+}
+
+export interface ClerkOrganizationMembership extends CompatEntity {
+  membership_id: string;
+  org_id: string;
+  user_id: string;
+  role: string;
+  permissions: string[];
+  public_metadata: Record<string, unknown>;
+  private_metadata: Record<string, unknown>;
+  created_at_unix: number;
+  updated_at_unix: number;
+}
+
+export interface ClerkOrganizationInvitation extends CompatEntity {
+  invitation_id: string;
+  email_address: string;
+  org_id: string;
+  role: string;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  expires_at: number;
+  created_at_unix: number;
+  updated_at_unix: number;
+}
+
+export interface ClerkSession extends CompatEntity {
+  clerk_id: string;
+  user_id: string;
+  client_id: string;
+  status: "active" | "revoked" | "ended";
+  last_active_at: number | null;
+  expire_at: number;
+  abandon_at: number;
+  created_at_unix: number;
+  updated_at_unix: number;
+}
+
+export interface ClerkOAuthApplication extends CompatEntity {
+  app_id: string;
+  name: string;
+  client_id: string;
+  client_secret: string;
+  is_public: boolean;
+  scopes: string[];
+  redirect_uris: string[];
+  created_at_unix: number;
+  updated_at_unix: number;
+}
+
+// Legacy public seed config type augmentations.
+export interface ClerkSeedConfig {
+  users?: Array<{
+    clerk_id?: string;
+    email_addresses: string[];
+    first_name?: string;
+    last_name?: string;
+    username?: string;
+    password?: string;
+    external_id?: string;
+    public_metadata?: Record<string, unknown>;
+    private_metadata?: Record<string, unknown>;
+    unsafe_metadata?: Record<string, unknown>;
+  }>;
+  organizations?: Array<{
+    clerk_id?: string;
+    name: string;
+    slug?: string;
+    max_allowed_memberships?: number;
+    public_metadata?: Record<string, unknown>;
+    private_metadata?: Record<string, unknown>;
+    members?: Array<{
+      email: string;
+      role: string;
+    }>;
+  }>;
+  oauth_applications?: Array<{
+    client_id: string;
+    client_secret?: string;
+    name: string;
+    redirect_uris: string[];
+    scopes?: string[];
+    public?: boolean;
+  }>;
+}
 export const service = {
   name: serviceName,
   label: serviceLabel,
@@ -122,7 +267,9 @@ export const plugin = {
 export const clerkPlugin = plugin;
 
 export function seedFromConfig(_store?: unknown, _baseUrl?: string, _config?: ClerkSeedConfig): void {
-  return undefined;
+  throw new Error(
+    "seedFromConfig is no longer supported by native compatibility facade packages. Pass seed data to createEmulateHandler or createEmulator instead.",
+  );
 }
 
 export function createAppKeyResolver(): undefined {
