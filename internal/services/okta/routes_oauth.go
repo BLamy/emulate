@@ -146,9 +146,9 @@ func (s *Service) handleAuthorize(c *corehttp.Context, authServerID string) {
 	}
 
 	var body strings.Builder
-	users := s.store.Users.All()
+	users := activeUsers(s.store.Users.All())
 	if len(users) == 0 {
-		body.WriteString(`<p class="empty">No users in the emulator store.</p>`)
+		body.WriteString(`<p class="empty">No active users in the emulator store.</p>`)
 	} else {
 		for _, user := range users {
 			login := stringField(user, "login")
@@ -219,6 +219,10 @@ func (s *Service) handleAuthorizeCallback(c *corehttp.Context, authServerID stri
 	user := s.findUser(userRef)
 	if user == nil {
 		c.HTML(http.StatusBadRequest, ui.RenderErrorPage("Unknown user", "The selected user is not available.", ui.PageOptions{Service: serviceLabel}))
+		return
+	}
+	if !userIsActive(user) {
+		c.HTML(http.StatusBadRequest, ui.RenderErrorPage("User is not active", "The selected user cannot sign in.", ui.PageOptions{Service: serviceLabel}))
 		return
 	}
 	configuredClients := s.clientsForServer(authServerID)
@@ -294,15 +298,23 @@ func (s *Service) handleToken(c *corehttp.Context, authServerID string) {
 		return
 	}
 
-	switch body["grant_type"] {
+	grantType := body["grant_type"]
+	if !supportedGrantType(grantType) {
+		oauthError(c, http.StatusBadRequest, "unsupported_grant_type", "Only authorization_code, refresh_token, and client_credentials are supported.")
+		return
+	}
+	if !clientAllowsGrant(client, grantType) {
+		oauthError(c, http.StatusBadRequest, "unauthorized_client", "The client is not authorized to use the requested grant_type.")
+		return
+	}
+
+	switch grantType {
 	case "authorization_code":
 		s.handleAuthorizationCodeToken(c, server, body, clientID, client)
 	case "refresh_token":
 		s.handleRefreshToken(c, server, body, client)
 	case "client_credentials":
 		s.handleClientCredentialsToken(c, server, body, clientID, client)
-	default:
-		oauthError(c, http.StatusBadRequest, "unsupported_grant_type", "Only authorization_code, refresh_token, and client_credentials are supported.")
 	}
 }
 
@@ -336,6 +348,10 @@ func (s *Service) handleAuthorizationCodeToken(c *corehttp.Context, server *reso
 	user := firstRecord(s.store.Users.FindBy("okta_id", stringField(code, "user_okta_id")))
 	if user == nil {
 		oauthError(c, http.StatusBadRequest, "invalid_grant", "Unknown user.")
+		return
+	}
+	if !userIsActive(user) {
+		oauthError(c, http.StatusBadRequest, "invalid_grant", "User is not active.")
 		return
 	}
 	s.deleteOAuthCode(stringField(code, "code"))
@@ -398,10 +414,20 @@ func (s *Service) handleRefreshToken(c *corehttp.Context, server *resolvedAuthSe
 		oauthError(c, http.StatusBadRequest, "invalid_grant", "Unknown user.")
 		return
 	}
+	if !userIsActive(user) {
+		oauthError(c, http.StatusBadRequest, "invalid_grant", "User is not active.")
+		return
+	}
+	storedScope := firstNonEmpty(stringField(refresh, "scope"), "openid profile email")
+	requestedScope := strings.TrimSpace(body["scope"])
+	if requestedScope != "" && !scopeSubset(requestedScope, storedScope) {
+		oauthError(c, http.StatusBadRequest, "invalid_scope", "Requested scope exceeds original grant.")
+		return
+	}
 	s.deleteRefreshToken(stringField(refresh, "token"))
 
 	now := time.Now().Unix()
-	scope := firstNonEmpty(body["scope"], stringField(refresh, "scope"), "openid profile email")
+	scope := firstNonEmpty(requestedScope, storedScope)
 	clientID := stringField(refresh, "client_id")
 	accessToken := oktaToken("okta_")
 	refreshToken := oktaToken("r_okta_")
@@ -630,6 +656,9 @@ func (s *Service) resolveAuthServer(authServerID string) *resolvedAuthServer {
 	if server == nil {
 		return nil
 	}
+	if stringField(server, "status") != "ACTIVE" {
+		return nil
+	}
 	audiences := stringSliceValue(server["audiences"])
 	if len(audiences) == 0 {
 		audiences = []string{defaultAudience}
@@ -659,6 +688,54 @@ func (s *Service) validateClient(c *corehttp.Context, authServerID string, clien
 		return nil, false
 	}
 	return client, true
+}
+
+func supportedGrantType(grantType string) bool {
+	switch grantType {
+	case "authorization_code", "refresh_token", "client_credentials":
+		return true
+	default:
+		return false
+	}
+}
+
+func clientAllowsGrant(client corestore.Record, grantType string) bool {
+	if client == nil {
+		return true
+	}
+	for _, allowed := range stringSliceValue(client["grant_types"]) {
+		if allowed == grantType {
+			return true
+		}
+	}
+	return false
+}
+
+func activeUsers(users []corestore.Record) []corestore.Record {
+	out := make([]corestore.Record, 0, len(users))
+	for _, user := range users {
+		if userIsActive(user) {
+			out = append(out, user)
+		}
+	}
+	return out
+}
+
+func userIsActive(user corestore.Record) bool {
+	return stringField(user, "status") == "ACTIVE"
+}
+
+func scopeSubset(requested string, granted string) bool {
+	grantedSet := map[string]struct{}{}
+	for _, scope := range parseScope(granted) {
+		grantedSet[scope] = struct{}{}
+	}
+	for _, scope := range parseScope(requested) {
+		if _, ok := grantedSet[scope]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func recordWithField(records []corestore.Record, field string, value string) corestore.Record {

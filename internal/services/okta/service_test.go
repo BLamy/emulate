@@ -105,6 +105,155 @@ func TestOAuthAuthorizationCodeFlow(t *testing.T) {
 	}
 }
 
+func TestTokenRejectsGrantTypeNotAllowedForClient(t *testing.T) {
+	service, router := newTestService(t)
+	form := url.Values{
+		"grant_type": {"client_credentials"},
+		"client_id":  {"okta-test-app"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/oauth2/default/v1/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	res := serveOkta(router, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("token status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"error":"unauthorized_client"`) {
+		t.Fatalf("unexpected token body: %s", res.Body.String())
+	}
+	if service.store.AccessTokens.Count() != 0 {
+		t.Fatalf("access tokens were minted for a disallowed grant")
+	}
+}
+
+func TestAuthorizeRejectsInactiveUsers(t *testing.T) {
+	service, router := newTestService(t)
+	user := firstRecord(service.store.Users.FindBy("login", "testuser@okta.local"))
+	if user == nil {
+		t.Fatal("missing default user")
+	}
+	if _, ok := service.store.Users.Update(intField(user, "id"), corestore.Record{"status": "SUSPENDED"}); !ok {
+		t.Fatal("failed to suspend user")
+	}
+
+	authorize := serveOkta(router, httptest.NewRequest(http.MethodGet, "/oauth2/default/v1/authorize?client_id=okta-test-client&redirect_uri="+url.QueryEscape("http://localhost:3000/callback")+"&response_type=code", nil))
+	if authorize.Code != http.StatusOK {
+		t.Fatalf("authorize status = %d, body = %s", authorize.Code, authorize.Body.String())
+	}
+	if strings.Contains(authorize.Body.String(), "testuser@okta.local") || !strings.Contains(authorize.Body.String(), "No active users") {
+		t.Fatalf("inactive user was shown in authorize body: %s", authorize.Body.String())
+	}
+
+	form := url.Values{
+		"user_ref":      {stringField(user, "okta_id")},
+		"redirect_uri":  {"http://localhost:3000/callback"},
+		"scope":         {"openid profile email"},
+		"client_id":     {"okta-test-client"},
+		"response_mode": {"query"},
+	}
+	callback := httptest.NewRequest(http.MethodPost, "/oauth2/default/v1/authorize/callback", strings.NewReader(form.Encode()))
+	callback.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	callbackRes := serveOkta(router, callback)
+	if callbackRes.Code != http.StatusBadRequest {
+		t.Fatalf("callback status = %d, body = %s", callbackRes.Code, callbackRes.Body.String())
+	}
+	if !strings.Contains(callbackRes.Body.String(), "User is not active") {
+		t.Fatalf("unexpected callback body: %s", callbackRes.Body.String())
+	}
+	if service.store.OAuthCodes.Count() != 0 {
+		t.Fatalf("oauth codes were issued for inactive user")
+	}
+}
+
+func TestTokenRejectsUserSuspendedAfterAuthorization(t *testing.T) {
+	service, router := newTestService(t)
+	user := firstRecord(service.store.Users.FindBy("login", "testuser@okta.local"))
+	if user == nil {
+		t.Fatal("missing default user")
+	}
+	code := authorizeOktaCode(t, service, router, "openid profile email")
+	if _, ok := service.store.Users.Update(intField(user, "id"), corestore.Record{"status": "SUSPENDED"}); !ok {
+		t.Fatal("failed to suspend user")
+	}
+
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"http://localhost:3000/callback"},
+		"client_id":     {"okta-test-client"},
+		"client_secret": {"okta-test-secret"},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/oauth2/default/v1/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRes := serveOkta(router, tokenReq)
+	if tokenRes.Code != http.StatusBadRequest {
+		t.Fatalf("token status = %d, body = %s", tokenRes.Code, tokenRes.Body.String())
+	}
+	if !strings.Contains(tokenRes.Body.String(), `"error":"invalid_grant"`) || !strings.Contains(tokenRes.Body.String(), "User is not active") {
+		t.Fatalf("unexpected token body: %s", tokenRes.Body.String())
+	}
+	if service.store.AccessTokens.Count() != 0 {
+		t.Fatalf("access tokens were issued for inactive user")
+	}
+}
+
+func TestRefreshTokenRejectsScopeEscalation(t *testing.T) {
+	service, router := newTestService(t)
+	tokenBody := issueOktaToken(t, service, router, "openid email")
+
+	refreshForm := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {tokenBody.RefreshToken},
+		"client_id":     {"okta-test-client"},
+		"client_secret": {"okta-test-secret"},
+		"scope":         {"openid email groups"},
+	}
+	refreshReq := httptest.NewRequest(http.MethodPost, "/oauth2/default/v1/token", strings.NewReader(refreshForm.Encode()))
+	refreshReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	refreshRes := serveOkta(router, refreshReq)
+	if refreshRes.Code != http.StatusBadRequest {
+		t.Fatalf("refresh status = %d, body = %s", refreshRes.Code, refreshRes.Body.String())
+	}
+	if !strings.Contains(refreshRes.Body.String(), `"error":"invalid_scope"`) {
+		t.Fatalf("unexpected refresh body: %s", refreshRes.Body.String())
+	}
+	if service.store.RefreshTokens.Count() != 1 {
+		t.Fatalf("refresh token was rotated after invalid scope")
+	}
+	if service.store.AccessTokens.Count() != 1 {
+		t.Fatalf("access token was minted after invalid scope")
+	}
+}
+
+func TestInactiveAuthorizationServerDoesNotServeOAuth(t *testing.T) {
+	service, router := newTestService(t)
+	server := firstRecord(service.store.AuthorizationServers.FindBy("server_id", "default"))
+	if server == nil {
+		t.Fatal("missing default authorization server")
+	}
+	if _, ok := service.store.AuthorizationServers.Update(intField(server, "id"), corestore.Record{"status": "INACTIVE"}); !ok {
+		t.Fatal("failed to deactivate authorization server")
+	}
+
+	management := httptest.NewRequest(http.MethodGet, "/api/v1/authorizationServers/default", nil)
+	management.Header.Set("Authorization", "SSWS dev-token")
+	managementRes := serveOkta(router, management)
+	if managementRes.Code != http.StatusOK || !strings.Contains(managementRes.Body.String(), `"status":"INACTIVE"`) {
+		t.Fatalf("management status = %d, body = %s", managementRes.Code, managementRes.Body.String())
+	}
+
+	discovery := serveOkta(router, httptest.NewRequest(http.MethodGet, "/oauth2/default/.well-known/openid-configuration", nil))
+	if discovery.Code != http.StatusNotFound {
+		t.Fatalf("discovery status = %d, body = %s", discovery.Code, discovery.Body.String())
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/oauth2/default/v1/token", strings.NewReader(url.Values{"grant_type": {"client_credentials"}, "client_id": {"okta-test-client"}, "client_secret": {"okta-test-secret"}}.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRes := serveOkta(router, tokenReq)
+	if tokenRes.Code != http.StatusNotFound {
+		t.Fatalf("token status = %d, body = %s", tokenRes.Code, tokenRes.Body.String())
+	}
+}
+
 func TestManagementUsersGroupsAppsAndAuthorizationServers(t *testing.T) {
 	_, router := newTestService(t)
 
@@ -185,6 +334,69 @@ func TestManagementUsersGroupsAppsAndAuthorizationServers(t *testing.T) {
 	if !strings.Contains(authServerRes.Body.String(), `"id":"partner-api"`) || !strings.Contains(authServerRes.Body.String(), `"api://partner"`) {
 		t.Fatalf("unexpected auth server body: %s", authServerRes.Body.String())
 	}
+}
+
+type oktaTokenBody struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	IDToken      string `json:"id_token"`
+	Scope        string `json:"scope"`
+}
+
+func authorizeOktaCode(t *testing.T, service *Service, router *corehttp.Router, scope string) string {
+	t.Helper()
+	user := firstRecord(service.store.Users.FindBy("login", "testuser@okta.local"))
+	if user == nil {
+		t.Fatal("missing default user")
+	}
+	form := url.Values{
+		"user_ref":      {stringField(user, "okta_id")},
+		"redirect_uri":  {"http://localhost:3000/callback"},
+		"scope":         {scope},
+		"client_id":     {"okta-test-client"},
+		"response_mode": {"query"},
+	}
+	callback := httptest.NewRequest(http.MethodPost, "/oauth2/default/v1/authorize/callback", strings.NewReader(form.Encode()))
+	callback.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	callbackRes := serveOkta(router, callback)
+	if callbackRes.Code != http.StatusFound {
+		t.Fatalf("callback status = %d, body = %s", callbackRes.Code, callbackRes.Body.String())
+	}
+	redirect, err := url.Parse(callbackRes.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := redirect.Query().Get("code")
+	if code == "" {
+		t.Fatalf("missing code in redirect: %s", callbackRes.Header().Get("Location"))
+	}
+	return code
+}
+
+func issueOktaToken(t *testing.T, service *Service, router *corehttp.Router, scope string) oktaTokenBody {
+	t.Helper()
+	code := authorizeOktaCode(t, service, router, scope)
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"http://localhost:3000/callback"},
+		"client_id":     {"okta-test-client"},
+		"client_secret": {"okta-test-secret"},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/oauth2/default/v1/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRes := serveOkta(router, tokenReq)
+	if tokenRes.Code != http.StatusOK {
+		t.Fatalf("token status = %d, body = %s", tokenRes.Code, tokenRes.Body.String())
+	}
+	var body oktaTokenBody
+	if err := json.Unmarshal(tokenRes.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.AccessToken == "" || body.RefreshToken == "" {
+		t.Fatalf("unexpected token body: %#v", body)
+	}
+	return body
 }
 
 func newTestService(t *testing.T) (*Service, *corehttp.Router) {
