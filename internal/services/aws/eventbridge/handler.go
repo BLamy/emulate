@@ -128,7 +128,7 @@ func (h *Handler) deleteEventBus(ctx gateway.AwsRequestContext, requestID string
 	return jsonResponse(http.StatusOK, map[string]any{})
 }
 
-func (h *Handler) listEventBuses(ctx gateway.AwsRequestContext, _ string) protocols.ErrorResponse {
+func (h *Handler) listEventBuses(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
 	h.ensureDefaultBus(ctx)
 	prefix := stringInput(ctx.Input, "NamePrefix")
 	buses := []corestore.Record{}
@@ -144,15 +144,19 @@ func (h *Handler) listEventBuses(ctx gateway.AwsRequestContext, _ string) protoc
 	sort.Slice(buses, func(i int, j int) bool {
 		return stringField(buses[i], "name") < stringField(buses[j], "name")
 	})
-	limit := intInput(ctx.Input, "Limit", len(buses))
-	if limit <= 0 || limit > len(buses) {
-		limit = len(buses)
+	start, end, nextToken, response, ok := h.pageBounds(ctx.Input, len(buses), requestID)
+	if !ok {
+		return response
 	}
-	out := make([]map[string]any, 0, limit)
-	for _, bus := range buses[:limit] {
+	out := make([]map[string]any, 0, end-start)
+	for _, bus := range buses[start:end] {
 		out = append(out, map[string]any{"Name": stringField(bus, "name"), "Arn": stringField(bus, "arn")})
 	}
-	return jsonResponse(http.StatusOK, map[string]any{"EventBuses": out})
+	body := map[string]any{"EventBuses": out}
+	if nextToken != "" {
+		body["NextToken"] = nextToken
+	}
+	return jsonResponse(http.StatusOK, body)
 }
 
 func (h *Handler) putRule(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
@@ -212,7 +216,7 @@ func (h *Handler) describeRule(ctx gateway.AwsRequestContext, requestID string) 
 	return jsonResponse(http.StatusOK, h.ruleResponse(rule))
 }
 
-func (h *Handler) listRules(ctx gateway.AwsRequestContext, _ string) protocols.ErrorResponse {
+func (h *Handler) listRules(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
 	busName := eventBusName(ctx.Input)
 	prefix := stringInput(ctx.Input, "NamePrefix")
 	rules := []corestore.Record{}
@@ -228,15 +232,19 @@ func (h *Handler) listRules(ctx gateway.AwsRequestContext, _ string) protocols.E
 	sort.Slice(rules, func(i int, j int) bool {
 		return stringField(rules[i], "name") < stringField(rules[j], "name")
 	})
-	limit := intInput(ctx.Input, "Limit", len(rules))
-	if limit <= 0 || limit > len(rules) {
-		limit = len(rules)
+	start, end, nextToken, response, ok := h.pageBounds(ctx.Input, len(rules), requestID)
+	if !ok {
+		return response
 	}
-	out := make([]map[string]any, 0, limit)
-	for _, rule := range rules[:limit] {
+	out := make([]map[string]any, 0, end-start)
+	for _, rule := range rules[start:end] {
 		out = append(out, h.ruleResponse(rule))
 	}
-	return jsonResponse(http.StatusOK, map[string]any{"Rules": out})
+	body := map[string]any{"Rules": out}
+	if nextToken != "" {
+		body["NextToken"] = nextToken
+	}
+	return jsonResponse(http.StatusOK, body)
 }
 
 func (h *Handler) deleteRule(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
@@ -245,7 +253,9 @@ func (h *Handler) deleteRule(ctx gateway.AwsRequestContext, requestID string) pr
 	if !ok {
 		return response
 	}
-	h.deleteRuleTargets(ctx, busName, stringField(rule, "name"))
+	if len(h.targetsForRule(ctx, busName, stringField(rule, "name"))) > 0 {
+		return h.validation("Rule can't be deleted since it has targets.", requestID)
+	}
 	h.EventRules.Delete(intField(rule, "id"))
 	return jsonResponse(http.StatusOK, map[string]any{})
 }
@@ -301,10 +311,7 @@ func (h *Handler) listTargetsByRule(ctx gateway.AwsRequestContext, requestID str
 		return response
 	}
 	targets := []map[string]any{}
-	for _, target := range h.EventTargets.FindBy("rule_name", stringField(rule, "name")) {
-		if !h.sameScope(ctx, target) || stringField(target, "event_bus_name") != busName {
-			continue
-		}
+	for _, target := range h.targetsForRule(ctx, busName, stringField(rule, "name")) {
 		item := map[string]any{"Id": stringField(target, "target_id"), "Arn": stringField(target, "arn")}
 		if input := stringField(target, "input"); input != "" {
 			item["Input"] = input
@@ -317,7 +324,15 @@ func (h *Handler) listTargetsByRule(ctx gateway.AwsRequestContext, requestID str
 	sort.Slice(targets, func(i int, j int) bool {
 		return stringValue(targets[i]["Id"]) < stringValue(targets[j]["Id"])
 	})
-	return jsonResponse(http.StatusOK, map[string]any{"Targets": targets})
+	start, end, nextToken, pageResponse, ok := h.pageBounds(ctx.Input, len(targets), requestID)
+	if !ok {
+		return pageResponse
+	}
+	body := map[string]any{"Targets": targets[start:end]}
+	if nextToken != "" {
+		body["NextToken"] = nextToken
+	}
+	return jsonResponse(http.StatusOK, body)
 }
 
 func (h *Handler) removeTargets(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
@@ -610,6 +625,33 @@ func (h *Handler) requireRule(ctx gateway.AwsRequestContext, busName string, rul
 	return rule, protocols.ErrorResponse{}, true
 }
 
+func (h *Handler) pageBounds(input map[string]any, total int, requestID string) (int, int, string, protocols.ErrorResponse, bool) {
+	limit := intInput(input, "Limit", total)
+	if limit <= 0 {
+		limit = total
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	start := 0
+	if raw := strings.TrimSpace(stringInput(input, "NextToken")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 || parsed > total {
+			return 0, 0, "", h.error("InvalidToken", "NextToken is invalid.", http.StatusBadRequest, requestID), false
+		}
+		start = parsed
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	nextToken := ""
+	if end < total {
+		nextToken = strconv.Itoa(end)
+	}
+	return start, end, nextToken, protocols.ErrorResponse{}, true
+}
+
 func (h *Handler) findBus(ctx gateway.AwsRequestContext, name string) (corestore.Record, bool) {
 	name = busNameFromInput(name)
 	for _, bus := range h.EventBuses.FindBy("name", name) {
@@ -680,6 +722,16 @@ func (h *Handler) deleteRuleTargets(ctx gateway.AwsRequestContext, busName strin
 			h.EventTargets.Delete(intField(target, "id"))
 		}
 	}
+}
+
+func (h *Handler) targetsForRule(ctx gateway.AwsRequestContext, busName string, ruleName string) []corestore.Record {
+	targets := []corestore.Record{}
+	for _, target := range h.EventTargets.FindBy("rule_name", ruleName) {
+		if stringField(target, "event_bus_name") == busName && h.sameScope(ctx, target) {
+			targets = append(targets, target)
+		}
+	}
+	return targets
 }
 
 func (h *Handler) requireTaggableResource(ctx gateway.AwsRequestContext, arn string, requestID string) (corestore.Record, protocols.ErrorResponse, bool) {
@@ -798,7 +850,7 @@ func parsePattern(raw string) map[string]any {
 
 func validJSONObject(raw string) bool {
 	var out map[string]any
-	return json.Unmarshal([]byte(raw), &out) == nil
+	return json.Unmarshal([]byte(raw), &out) == nil && out != nil
 }
 
 func parseDetail(raw string) (map[string]any, bool) {
@@ -807,6 +859,9 @@ func parseDetail(raw string) (map[string]any, bool) {
 	}
 	var detail map[string]any
 	if err := json.Unmarshal([]byte(raw), &detail); err != nil {
+		return nil, false
+	}
+	if detail == nil {
 		return nil, false
 	}
 	return detail, true

@@ -1442,6 +1442,172 @@ func TestServiceAcceptsEventBridgeCloudTrailManagementState(t *testing.T) {
 	}
 }
 
+func TestServicePaginatesEventBridgeLists(t *testing.T) {
+	handler := newTestHandler()
+	type eventBusPage struct {
+		NextToken  string
+		EventBuses []struct {
+			Name string
+		}
+	}
+	type rulePage struct {
+		NextToken string
+		Rules     []struct {
+			Name string
+		}
+	}
+
+	for _, name := range []string{"page-bus-a", "page-bus-b", "page-bus-c"} {
+		res := executeAWSEventBridgeRequest(t, handler, "CreateEventBus", map[string]any{"Name": name})
+		if res.Code != http.StatusOK {
+			t.Fatalf("create bus %s status = %d, body = %s", name, res.Code, res.Body.String())
+		}
+	}
+
+	res := executeAWSEventBridgeRequest(t, handler, "ListEventBuses", map[string]any{
+		"NamePrefix": "page-bus-",
+		"Limit":      2,
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("list buses page 1 status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var busesPage eventBusPage
+	decodeJSONBody(t, res, &busesPage)
+	if busesPage.NextToken == "" || len(busesPage.EventBuses) != 2 || busesPage.EventBuses[0].Name != "page-bus-a" || busesPage.EventBuses[1].Name != "page-bus-b" {
+		t.Fatalf("unexpected event bus page 1: %#v", busesPage)
+	}
+
+	res = executeAWSEventBridgeRequest(t, handler, "ListEventBuses", map[string]any{
+		"NamePrefix": "page-bus-",
+		"Limit":      2,
+		"NextToken":  busesPage.NextToken,
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("list buses page 2 status = %d, body = %s", res.Code, res.Body.String())
+	}
+	busesPage = eventBusPage{}
+	decodeJSONBody(t, res, &busesPage)
+	if busesPage.NextToken != "" || len(busesPage.EventBuses) != 1 || busesPage.EventBuses[0].Name != "page-bus-c" {
+		t.Fatalf("unexpected event bus page 2: %#v", busesPage)
+	}
+
+	for _, name := range []string{"page-rule-a", "page-rule-b", "page-rule-c"} {
+		res = executeAWSEventBridgeRequest(t, handler, "PutRule", map[string]any{
+			"Name":         name,
+			"EventPattern": `{}`,
+		})
+		if res.Code != http.StatusOK {
+			t.Fatalf("put rule %s status = %d, body = %s", name, res.Code, res.Body.String())
+		}
+	}
+
+	res = executeAWSEventBridgeRequest(t, handler, "ListRules", map[string]any{
+		"NamePrefix": "page-rule-",
+		"Limit":      2,
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("list rules page 1 status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var rulesPage rulePage
+	decodeJSONBody(t, res, &rulesPage)
+	if rulesPage.NextToken == "" || len(rulesPage.Rules) != 2 || rulesPage.Rules[0].Name != "page-rule-a" || rulesPage.Rules[1].Name != "page-rule-b" {
+		t.Fatalf("unexpected rule page 1: %#v", rulesPage)
+	}
+
+	res = executeAWSEventBridgeRequest(t, handler, "ListRules", map[string]any{
+		"NamePrefix": "page-rule-",
+		"Limit":      2,
+		"NextToken":  rulesPage.NextToken,
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("list rules page 2 status = %d, body = %s", res.Code, res.Body.String())
+	}
+	rulesPage = rulePage{}
+	decodeJSONBody(t, res, &rulesPage)
+	if rulesPage.NextToken != "" || len(rulesPage.Rules) != 1 || rulesPage.Rules[0].Name != "page-rule-c" {
+		t.Fatalf("unexpected rule page 2: %#v", rulesPage)
+	}
+}
+
+func TestServiceRequiresEventBridgeTargetsRemovedBeforeDeleteRule(t *testing.T) {
+	handler := newTestHandler()
+
+	res := executeAWSEventBridgeRequest(t, handler, "PutRule", map[string]any{
+		"Name":         "targeted",
+		"EventPattern": `{}`,
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("put rule status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSEventBridgeRequest(t, handler, "PutTargets", map[string]any{
+		"Rule": "targeted",
+		"Targets": []map[string]any{{
+			"Id":  "queue",
+			"Arn": "arn:aws:sqs:us-east-1:123456789012:targeted",
+		}},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("put target status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSEventBridgeRequest(t, handler, "DeleteRule", map[string]any{"Name": "targeted"})
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "ValidationException") || !strings.Contains(res.Body.String(), "targets") {
+		t.Fatalf("delete rule with target status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSEventBridgeRequest(t, handler, "ListTargetsByRule", map[string]any{"Rule": "targeted"})
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"Id":"queue"`) {
+		t.Fatalf("target was removed by failed delete: status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSEventBridgeRequest(t, handler, "RemoveTargets", map[string]any{
+		"Rule": "targeted",
+		"Ids":  []string{"queue"},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("remove target status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSEventBridgeRequest(t, handler, "DeleteRule", map[string]any{"Name": "targeted"})
+	if res.Code != http.StatusOK {
+		t.Fatalf("delete rule after removing target status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestServiceRejectsEventBridgeNonObjectJSON(t *testing.T) {
+	handler := newTestHandler()
+
+	res := executeAWSEventBridgeRequest(t, handler, "PutRule", map[string]any{
+		"Name":         "null-pattern",
+		"EventPattern": `null`,
+	})
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "ValidationException") {
+		t.Fatalf("put null pattern status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSEventBridgeRequest(t, handler, "PutEvents", map[string]any{
+		"Entries": []map[string]any{{
+			"Source":     "app.test",
+			"DetailType": "NonObject",
+			"Detail":     `null`,
+		}},
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("put null detail status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var body struct {
+		FailedEntryCount int
+		Entries          []struct {
+			ErrorCode string
+		}
+	}
+	decodeJSONBody(t, res, &body)
+	if body.FailedEntryCount != 1 || len(body.Entries) != 1 || body.Entries[0].ErrorCode != "MalformedDetail" {
+		t.Fatalf("unexpected null detail response: %#v", body)
+	}
+}
+
 func TestServiceValidatesEventBridgePutEventsEntries(t *testing.T) {
 	handler := newTestHandler()
 
