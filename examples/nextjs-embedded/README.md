@@ -1,8 +1,8 @@
 # Next.js Native Proxy Example
 
-A Next.js app with native emulators proxied through `@emulators/adapter-next`. Start `npx emulate --service github,google` separately.
+A Next.js app with native emulators proxied through `@emulators/adapter-next` for local development. Start `npx emulate --service github,google` separately.
 
-This demonstrates the solution for **Vercel preview deployments** where OAuth callback URLs change with every deployment. Because the emulators run on the same origin as the app, callbacks always work regardless of the deployment URL.
+This demonstrates same-origin OAuth routing for a locally running native runtime. For Vercel preview deployments without separate emulator infrastructure, use `npx emulate vercel init` to scaffold the Go Function runtime instead.
 
 ## Setup
 
@@ -37,11 +37,11 @@ The session cookie in this example is a plain base64url-encoded JSON blob with n
 
 | | `examples/oauth` | `examples/nextjs-embedded` |
 |---|---|---|
-| Emulator process | Separate `npx emulate` process | Native process proxied through Next.js |
+| Emulator process | Separate `npx emulate` process | Separate native process proxied through Next.js |
 | Config | `emulate.config.yaml` + `.env.local` | Seed data from `npx emulate --seed` |
 | OAuth URLs | `http://localhost:4001/login/oauth/...` | `/emulate/github/login/oauth/...` (same origin) |
 | Client credentials | Must match config | `"any"` (validation skipped) |
-| Preview deploys | Requires fixed callback URL | Works on any URL |
+| Preview deploys | Requires fixed callback URL | Use `npx emulate vercel init` |
 | Extra dependency | None | `@emulators/adapter-next` |
 
 ## Project Structure

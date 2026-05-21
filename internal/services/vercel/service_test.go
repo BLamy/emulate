@@ -49,6 +49,33 @@ func TestVercelUser1TokenDoesNotFallbackToAdmin(t *testing.T) {
 	}
 }
 
+func TestVercelSeededTokenAuthenticatesConfiguredUser(t *testing.T) {
+	handler := newVercelTestHandlerWithSeed(&SeedConfig{
+		Users: []UserSeed{{Username: "developer", Email: "dev@example.com", Name: "Developer"}},
+		Tokens: map[string]TokenSeed{
+			"dev_token": {Login: "developer", Scopes: []string{"user"}},
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v2/user", nil)
+	req.Header.Set("Authorization", "Bearer dev_token")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var body struct {
+		User struct {
+			Username string `json:"username"`
+			Email    string `json:"email"`
+		} `json:"user"`
+	}
+	decodeVercelBody(t, res, &body)
+	if body.User.Username != "developer" || body.User.Email != "dev@example.com" {
+		t.Fatalf("unexpected user: %#v", body.User)
+	}
+}
+
 func TestVercelProjectsEnvAndDomains(t *testing.T) {
 	handler := newVercelTestHandler()
 	create := doVercelJSON(handler, http.MethodPost, "/v11/projects", `{

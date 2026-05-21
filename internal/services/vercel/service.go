@@ -29,17 +29,24 @@ type Options struct {
 }
 
 type SeedConfig struct {
-	Port         int               `json:"port,omitempty"`
-	Users        []UserSeed        `json:"users"`
-	Teams        []TeamSeed        `json:"teams"`
-	Projects     []ProjectSeed     `json:"projects"`
-	Integrations []IntegrationSeed `json:"integrations"`
+	Port         int                  `json:"port,omitempty"`
+	Users        []UserSeed           `json:"users"`
+	Teams        []TeamSeed           `json:"teams"`
+	Projects     []ProjectSeed        `json:"projects"`
+	Integrations []IntegrationSeed    `json:"integrations"`
+	Tokens       map[string]TokenSeed `json:"tokens"`
 }
 
 type UserSeed struct {
 	Username string `json:"username"`
 	Email    string `json:"email"`
 	Name     string `json:"name"`
+}
+
+type TokenSeed struct {
+	Username string   `json:"username"`
+	Login    string   `json:"login"`
+	Scopes   []string `json:"scopes"`
 }
 
 type TeamSeed struct {
@@ -150,6 +157,29 @@ func (s *Service) SeedFromConfig(config SeedConfig) {
 		}
 		record := defaultUserRecord(username, email, name)
 		s.store.Users.Insert(record)
+	}
+
+	for token, seed := range config.Tokens {
+		token = strings.TrimSpace(token)
+		username := strings.TrimSpace(seed.Username)
+		if username == "" {
+			username = strings.TrimSpace(seed.Login)
+		}
+		if token == "" || username == "" || firstRecord(s.store.APIKeys.FindBy("tokenString", token)) != nil {
+			continue
+		}
+		user := firstRecord(s.store.Users.FindBy("username", username))
+		if user == nil {
+			continue
+		}
+		s.store.APIKeys.Insert(corestore.Record{
+			"uid":         generateUID("ak"),
+			"name":        "Seeded API Key",
+			"teamId":      nil,
+			"userId":      stringField(user, "uid"),
+			"tokenString": token,
+			"scopes":      seed.Scopes,
+		})
 	}
 
 	for _, teamSeed := range config.Teams {

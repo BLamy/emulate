@@ -140,6 +140,7 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	var slackSeed *slack.SeedConfig
 	var stripeSeed *stripe.SeedConfig
 	var vercelSeed *vercel.SeedConfig
+	var topLevelTokens map[string]github.TokenSeed
 	seedBaseURLs := map[string]string{}
 	loaded, err := loadNativeSeedConfig(*seedValue)
 	if err != nil {
@@ -183,6 +184,7 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 				fmt.Fprintf(stderr, "Failed to parse token seed config: %v\n", err)
 				return 1
 			}
+			topLevelTokens = tokens
 			if githubSeed == nil {
 				githubSeed = &github.SeedConfig{}
 			}
@@ -264,6 +266,23 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 				return 1
 			}
 			vercelSeed = &cfg
+		}
+		if len(topLevelTokens) > 0 {
+			if vercelSeed == nil {
+				vercelSeed = &vercel.SeedConfig{}
+			}
+			if vercelSeed.Tokens == nil {
+				vercelSeed.Tokens = map[string]vercel.TokenSeed{}
+			}
+			for token, user := range topLevelTokens {
+				if _, ok := vercelSeed.Tokens[token]; ok {
+					continue
+				}
+				vercelSeed.Tokens[token] = vercel.TokenSeed{
+					Login:  user.Login,
+					Scopes: user.Scopes,
+				}
+			}
 		}
 	}
 	services, err := parseServices(*serviceValue)
