@@ -80,6 +80,13 @@ func TestSlackChatConversationsAndReactions(t *testing.T) {
 	if !posted.OK || posted.Channel != "C000000001" || posted.TS == "" || posted.Message.Text != "hello world" {
 		t.Fatalf("unexpected post body: %#v", posted)
 	}
+	var postedRaw struct {
+		Message map[string]any `json:"message"`
+	}
+	mustDecodeSlackJSON(t, post.Body.Bytes(), &postedRaw)
+	if _, ok := postedRaw.Message["thread_ts"]; ok {
+		t.Fatalf("top-level message included thread_ts: %#v", postedRaw.Message)
+	}
 
 	reply := slackRequest(handler, http.MethodPost, "/api/chat.postMessage", `{"channel":"C000000001","text":"reply","thread_ts":"`+posted.TS+`"}`, true)
 	var replyBody struct {
@@ -126,6 +133,78 @@ func TestSlackChatConversationsAndReactions(t *testing.T) {
 	getReaction := slackRequest(handler, http.MethodPost, "/api/reactions.get", `{"channel":"C000000001","timestamp":"`+posted.TS+`"}`, true)
 	if !strings.Contains(getReaction.Body.String(), `"name":"thumbsup"`) {
 		t.Fatalf("reaction missing: %s", getReaction.Body.String())
+	}
+}
+
+func TestSlackChatDeleteThreadReplyRefreshesParentMetadata(t *testing.T) {
+	service, handler := newSlackTestService()
+
+	post := slackRequest(handler, http.MethodPost, "/api/chat.postMessage", `{"channel":"general","text":"parent"}`, true)
+	var posted struct {
+		OK bool   `json:"ok"`
+		TS string `json:"ts"`
+	}
+	mustDecodeSlackJSON(t, post.Body.Bytes(), &posted)
+	if !posted.OK || posted.TS == "" {
+		t.Fatalf("unexpected post body: %#v", posted)
+	}
+
+	firstReply := slackRequest(handler, http.MethodPost, "/api/chat.postMessage", `{"channel":"C000000001","text":"first","thread_ts":"`+posted.TS+`"}`, true)
+	var firstReplyBody struct {
+		OK bool   `json:"ok"`
+		TS string `json:"ts"`
+	}
+	mustDecodeSlackJSON(t, firstReply.Body.Bytes(), &firstReplyBody)
+	if !firstReplyBody.OK || firstReplyBody.TS == "" {
+		t.Fatalf("unexpected first reply body: %#v", firstReplyBody)
+	}
+
+	secondReply := slackRequest(handler, http.MethodPost, "/api/chat.postMessage", `{"channel":"C000000001","text":"second","thread_ts":"`+posted.TS+`"}`, true)
+	var secondReplyBody struct {
+		OK bool   `json:"ok"`
+		TS string `json:"ts"`
+	}
+	mustDecodeSlackJSON(t, secondReply.Body.Bytes(), &secondReplyBody)
+	if !secondReplyBody.OK || secondReplyBody.TS == "" {
+		t.Fatalf("unexpected second reply body: %#v", secondReplyBody)
+	}
+
+	parent := service.findMessage("C000000001", posted.TS)
+	if parent == nil || intField(parent, "reply_count") != 2 {
+		t.Fatalf("unexpected parent before delete: %#v", parent)
+	}
+
+	deletedFirst := slackRequest(handler, http.MethodPost, "/api/chat.delete", `{"channel":"C000000001","ts":"`+firstReplyBody.TS+`"}`, true)
+	if !strings.Contains(deletedFirst.Body.String(), `"ok":true`) {
+		t.Fatalf("unexpected first delete body: %s", deletedFirst.Body.String())
+	}
+	parent = service.findMessage("C000000001", posted.TS)
+	replyUsers := stringSliceValue(parent["reply_users"])
+	if intField(parent, "reply_count") != 1 || len(replyUsers) != 1 || replyUsers[0] != "U000000001" {
+		t.Fatalf("unexpected parent after first delete: %#v", parent)
+	}
+
+	deletedSecond := slackRequest(handler, http.MethodPost, "/api/chat.delete", `{"channel":"C000000001","ts":"`+secondReplyBody.TS+`"}`, true)
+	if !strings.Contains(deletedSecond.Body.String(), `"ok":true`) {
+		t.Fatalf("unexpected second delete body: %s", deletedSecond.Body.String())
+	}
+	parent = service.findMessage("C000000001", posted.TS)
+	replyUsers = stringSliceValue(parent["reply_users"])
+	if intField(parent, "reply_count") != 0 || len(replyUsers) != 0 {
+		t.Fatalf("unexpected parent after second delete: %#v", parent)
+	}
+
+	history := slackRequest(handler, http.MethodPost, "/api/conversations.history", `{"channel":"C000000001"}`, true)
+	var historyBody struct {
+		OK       bool             `json:"ok"`
+		Messages []map[string]any `json:"messages"`
+	}
+	mustDecodeSlackJSON(t, history.Body.Bytes(), &historyBody)
+	if !historyBody.OK || len(historyBody.Messages) != 1 {
+		t.Fatalf("unexpected history body: %#v", historyBody)
+	}
+	if _, ok := historyBody.Messages[0]["reply_count"]; ok {
+		t.Fatalf("history retained reply_count after replies were deleted: %#v", historyBody.Messages[0])
 	}
 }
 

@@ -55,13 +55,7 @@ func (s *Service) handleChatPostMessage(c *corehttp.Context) {
 	slackOK(c, map[string]any{
 		"channel": stringField(channel, "channel_id"),
 		"ts":      stringField(message, "ts"),
-		"message": map[string]any{
-			"text":      stringField(message, "text"),
-			"user":      stringField(message, "user"),
-			"type":      stringField(message, "type"),
-			"ts":        stringField(message, "ts"),
-			"thread_ts": stringField(message, "thread_ts"),
-		},
+		"message": formatMessage(message),
 	})
 }
 
@@ -94,7 +88,11 @@ func (s *Service) handleChatDelete(c *corehttp.Context) {
 		slackError(c, "message_not_found")
 		return
 	}
+	threadTS := stringField(message, "thread_ts")
 	s.store.Messages.Delete(intField(message, "id"))
+	if threadTS != "" && threadTS != ts {
+		s.refreshThreadReplyMetadata(channel, threadTS)
+	}
 	slackOK(c, map[string]any{"channel": channel, "ts": ts})
 }
 
@@ -327,6 +325,34 @@ func (s *Service) incrementThreadReply(channelID string, threadTS string, userID
 		}
 		return corestore.Record{
 			"reply_count": intField(current, "reply_count") + 1,
+			"reply_users": replyUsers,
+		}, true
+	})
+}
+
+func (s *Service) refreshThreadReplyMetadata(channelID string, threadTS string) {
+	parent := s.findMessage(channelID, threadTS)
+	if parent == nil {
+		return
+	}
+	replyCount := 0
+	replyUsers := []string{}
+	for _, message := range s.store.Messages.FindBy("channel_id", channelID) {
+		if stringField(message, "ts") == threadTS || stringField(message, "thread_ts") != threadTS {
+			continue
+		}
+		replyCount++
+		userID := stringField(message, "user")
+		if userID != "" && !containsString(replyUsers, userID) {
+			replyUsers = append(replyUsers, userID)
+		}
+	}
+	s.store.Messages.UpdateFunc(intField(parent, "id"), func(current corestore.Record) (corestore.Record, bool) {
+		if stringField(current, "channel_id") != channelID || stringField(current, "ts") != threadTS {
+			return nil, false
+		}
+		return corestore.Record{
+			"reply_count": replyCount,
 			"reply_users": replyUsers,
 		}, true
 	})
