@@ -94,7 +94,7 @@ func (s *Service) handleAuthorize(c *corehttp.Context) {
 				Login:      login,
 				Name:       userDisplayName(user),
 				Email:      stringField(primary, "email_address"),
-				FormAction: "/oauth/authorize/callback",
+				FormAction: s.oauthCallbackPath(),
 				HiddenFields: map[string]string{
 					"user_ref":              stringField(user, "clerk_id"),
 					"redirect_uri":          redirectURI,
@@ -114,6 +114,19 @@ func (s *Service) handleAuthorize(c *corehttp.Context) {
 		subtitle = "Sign in to <strong>" + ui.EscapeHTML(appName) + "</strong> with your Clerk account."
 	}
 	c.HTML(http.StatusOK, ui.RenderCardPage("Sign in with Clerk", subtitle, body.String(), ui.PageOptions{Service: serviceLabel}))
+}
+
+func (s *Service) oauthCallbackPath() string {
+	callbackPath := "/oauth/authorize/callback"
+	parsed, err := url.Parse(s.baseURL)
+	if err != nil {
+		return callbackPath
+	}
+	prefix := strings.TrimRight(parsed.Path, "/")
+	if prefix == "" {
+		return callbackPath
+	}
+	return prefix + callbackPath
 }
 
 func (s *Service) handleAuthorizeCallback(c *corehttp.Context) {

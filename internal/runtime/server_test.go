@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -410,6 +411,42 @@ func TestNewHandlerMultiServiceOIDCDiscoveryUsesServicePrefixes(t *testing.T) {
 				t.Fatalf("missing %s in %s", tc.want, res.Body.String())
 			}
 		})
+	}
+}
+
+func TestNewHandlerPrefixesClerkOIDCWhenVercelIsEnabled(t *testing.T) {
+	handler := NewHandler(ServerOptions{
+		Services: []string{"vercel", "clerk"},
+		BaseURL:  "http://localhost:4010",
+	})
+
+	rootDiscovery := httptest.NewRecorder()
+	handler.ServeHTTP(rootDiscovery, httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil))
+	if rootDiscovery.Code != http.StatusBadRequest {
+		t.Fatalf("root discovery status = %d, body = %s", rootDiscovery.Code, rootDiscovery.Body.String())
+	}
+	if !strings.Contains(rootDiscovery.Body.String(), "/clerk/.well-known/openid-configuration") {
+		t.Fatalf("unexpected root discovery body: %s", rootDiscovery.Body.String())
+	}
+
+	discovery := httptest.NewRecorder()
+	handler.ServeHTTP(discovery, httptest.NewRequest(http.MethodGet, "/clerk/.well-known/openid-configuration", nil))
+	if discovery.Code != http.StatusOK {
+		t.Fatalf("prefixed discovery status = %d, body = %s", discovery.Code, discovery.Body.String())
+	}
+	if !strings.Contains(discovery.Body.String(), `"issuer":"http://localhost:4010/clerk"`) ||
+		!strings.Contains(discovery.Body.String(), `"authorization_endpoint":"http://localhost:4010/clerk/oauth/authorize"`) {
+		t.Fatalf("unexpected prefixed discovery body: %s", discovery.Body.String())
+	}
+
+	authorizePath := "/clerk/oauth/authorize?client_id=clerk_emulate_client&response_type=code&redirect_uri=" + url.QueryEscape("http://localhost:3000/api/auth/callback/clerk")
+	authorize := httptest.NewRecorder()
+	handler.ServeHTTP(authorize, httptest.NewRequest(http.MethodGet, authorizePath, nil))
+	if authorize.Code != http.StatusOK {
+		t.Fatalf("authorize status = %d, body = %s", authorize.Code, authorize.Body.String())
+	}
+	if !strings.Contains(authorize.Body.String(), `action="/clerk/oauth/authorize/callback"`) {
+		t.Fatalf("authorize form did not use prefixed callback: %s", authorize.Body.String())
 	}
 }
 

@@ -91,12 +91,17 @@ func NewServer(options ServerOptions) *Server {
 		})
 	})
 	ambiguousOIDCServices := enabledRootOIDCServices(services)
-	if len(ambiguousOIDCServices) > 1 {
+	clerkNeedsOAuthPrefix := serviceEnabled(services, "clerk") && serviceEnabled(services, "vercel")
+	if len(ambiguousOIDCServices) > 1 || clerkNeedsOAuthPrefix {
 		router.Get("/.well-known/openid-configuration", func(c *corehttp.Context) {
+			paths := oidcDiscoveryPaths(ambiguousOIDCServices)
+			if clerkNeedsOAuthPrefix {
+				paths["clerk"] = "/clerk/.well-known/openid-configuration"
+			}
 			c.JSON(http.StatusBadRequest, map[string]any{
-				"message":  "Multiple enabled services serve OIDC discovery at /.well-known/openid-configuration. Use a service specific discovery path.",
+				"message":  "Root OIDC discovery is ambiguous for the enabled services. Use a service specific discovery path.",
 				"services": ambiguousOIDCServices,
-				"paths":    oidcDiscoveryPaths(ambiguousOIDCServices),
+				"paths":    paths,
 			})
 		})
 	}
@@ -209,7 +214,7 @@ func NewServer(options ServerOptions) *Server {
 			BaseURL: options.BaseURL,
 			Seed:    options.ClerkSeed,
 		})
-		if len(ambiguousOIDCServices) > 1 {
+		if len(ambiguousOIDCServices) > 1 || clerkNeedsOAuthPrefix {
 			prefixed := corehttp.NewRouter()
 			clerk.Register(prefixed, clerk.Options{
 				Store:   runtimeStore,
