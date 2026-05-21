@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import type { Emulator, SeedConfig, ServiceName } from "emulate";
 
@@ -230,11 +231,23 @@ export class Store {
   }
 }
 
+type BodyInitCompat = ConstructorParameters<typeof Response>[0];
+type HeadersInitCompat = ConstructorParameters<typeof Headers>[0];
+type FormDataEntryValueCompat = string | File;
+type VariablesOf<E> = unknown extends E
+  ? Record<string, unknown>
+  : E extends { Variables: infer V }
+    ? V
+    : Record<string, unknown>;
+
 export type ContentfulStatusCode = number;
 export type Next = () => Promise<void>;
-export type Handler = (context: Context, next?: Next) => Response | Promise<Response> | void | Promise<void>;
-export type MiddlewareHandler = Handler;
-export type ErrorHandler = (error: Error, context: Context) => Response | Promise<Response>;
+export type Handler<E = unknown, P extends string = string> = (
+  context: Context<E, P>,
+  next: Next,
+) => Response | Promise<Response> | void | Promise<void>;
+export type MiddlewareHandler<E = unknown> = Handler<E>;
+export type ErrorHandler<E = unknown> = (error: unknown, context: Context<E>) => Response | Promise<Response>;
 export type FetchHandler = (request: Request, ...rest: unknown[]) => Response | Promise<Response>;
 
 export interface CorsOptions {
@@ -246,11 +259,192 @@ export interface ServeOptions {
   port?: number;
 }
 
-export class Context {
-  req = new HonoRequest();
+export class Context<E = unknown, P extends string = string> {
+  req: HonoRequest<P>;
+  private values = new Map<string, unknown>();
+  private responseHeaders = new Headers();
+  private responseStatus = 200;
+
+  constructor(
+    request?: Request,
+    params: Record<string, string> = {},
+    private notFoundHandler: (context: Context<E>) => Response | Promise<Response> = () =>
+      new Response("404 Not Found", { status: 404 }),
+  ) {
+    this.req = new HonoRequest<P>(request, params);
+  }
+
+  get<K extends keyof VariablesOf<E> & string>(key: K): VariablesOf<E>[K] | undefined {
+    return this.values.get(key) as VariablesOf<E>[K] | undefined;
+  }
+
+  set<K extends keyof VariablesOf<E> & string>(key: K, value: VariablesOf<E>[K]): void {
+    this.values.set(key, value);
+  }
+
+  header(name: string, value: string): void {
+    this.responseHeaders.set(name, value);
+  }
+
+  status(status: number): void {
+    this.responseStatus = status;
+  }
+
+  json(value: unknown, status?: ContentfulStatusCode, headers?: HeadersInitCompat): Response {
+    return this.response(JSON.stringify(value), status, defaultContentType(headers, "application/json; charset=UTF-8"));
+  }
+
+  text(text: string, status?: ContentfulStatusCode, headers?: HeadersInitCompat): Response {
+    return this.response(text, status, defaultContentType(headers, "text/plain; charset=UTF-8"));
+  }
+
+  html(html: string, status?: ContentfulStatusCode, headers?: HeadersInitCompat): Response {
+    return this.response(html, status, defaultContentType(headers, "text/html; charset=UTF-8"));
+  }
+
+  body(body: BodyInitCompat | null, status?: ContentfulStatusCode, headers?: HeadersInitCompat): Response {
+    return this.response(body, status, headers);
+  }
+
+  redirect(location: string, status: ContentfulStatusCode = 302): Response {
+    return this.response(null, status, { Location: location });
+  }
+
+  notFound(): Response | Promise<Response> {
+    return this.notFoundHandler(this);
+  }
+
+  finalize(response: Response): Response {
+    const headers = new Headers(response.headers);
+    this.responseHeaders.forEach((value, key) => {
+      headers.set(key, value);
+    });
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+
+  private response(body: BodyInitCompat | null, status?: ContentfulStatusCode, headers?: HeadersInitCompat): Response {
+    const merged = new Headers(headers);
+    this.responseHeaders.forEach((value, key) => {
+      merged.set(key, value);
+    });
+    return new Response(body, {
+      status: status ?? this.responseStatus,
+      headers: merged,
+    });
+  }
 }
 
-export class HonoRequest {}
+export class HonoRequest<P extends string = string> {
+  readonly url: string;
+  readonly method: string;
+  readonly path: string;
+
+  constructor(
+    private request?: Request,
+    private params: Record<string, string> = {},
+  ) {
+    this.url = request?.url ?? "http://localhost/";
+    this.method = request?.method ?? "GET";
+    this.path = new URL(this.url).pathname;
+  }
+
+  header(): Record<string, string>;
+  header(name: string): string | undefined;
+  header(name?: string): Record<string, string> | string | undefined {
+    if (!this.request) return name ? undefined : {};
+    if (name) return this.request.headers.get(name) ?? undefined;
+    const headers: Record<string, string> = {};
+    this.request.headers.forEach((value, key) => {
+      headers[key] = value;
+    });
+    return headers;
+  }
+
+  query(name: string): string | undefined {
+    return new URL(this.url).searchParams.get(name) ?? undefined;
+  }
+
+  queries(name: string): string[] | undefined {
+    const values = new URL(this.url).searchParams.getAll(name);
+    return values.length > 0 ? values : undefined;
+  }
+
+  param(): Record<string, string>;
+  param(name: P): string;
+  param(name?: P): Record<string, string> | string {
+    if (!name) return { ...this.params };
+    return this.params[name] ?? "";
+  }
+
+  json<T = unknown>(): Promise<T> {
+    return (this.request?.json() ?? Promise.resolve({})) as Promise<T>;
+  }
+
+  text(): Promise<string> {
+    return this.request?.text() ?? Promise.resolve("");
+  }
+
+  arrayBuffer(): Promise<ArrayBuffer> {
+    return this.request?.arrayBuffer() ?? Promise.resolve(new ArrayBuffer(0));
+  }
+
+  async parseBody(): Promise<Record<string, FormDataEntryValueCompat | FormDataEntryValueCompat[]>> {
+    const contentType = this.header("Content-Type") ?? "";
+    if (!this.request) return {};
+    if (contentType.includes("multipart/form-data")) {
+      return formDataToObject(await this.request.formData());
+    }
+    if (contentType.includes("application/x-www-form-urlencoded")) {
+      const params = new URLSearchParams(await this.request.text());
+      const body: Record<string, string | string[]> = {};
+      for (const [key, value] of params) appendBodyValue(body, key, value);
+      return body;
+    }
+    if (contentType.includes("application/json")) {
+      const body = await this.request.json().catch(() => ({}));
+      return body && typeof body === "object" && !Array.isArray(body)
+        ? (body as Record<string, FormDataEntryValueCompat | FormDataEntryValueCompat[]>)
+        : {};
+    }
+    return {};
+  }
+}
+
+function defaultContentType(headers: HeadersInitCompat | undefined, contentType: string): Headers {
+  const merged = new Headers(headers);
+  if (!merged.has("Content-Type")) merged.set("Content-Type", contentType);
+  return merged;
+}
+
+function appendBodyValue(out: Record<string, string | string[]>, key: string, value: string): void {
+  const existing = out[key];
+  if (existing === undefined) {
+    out[key] = value;
+  } else if (Array.isArray(existing)) {
+    existing.push(value);
+  } else {
+    out[key] = [existing, value];
+  }
+}
+
+function formDataToObject(form: FormData): Record<string, FormDataEntryValueCompat | FormDataEntryValueCompat[]> {
+  const out: Record<string, FormDataEntryValueCompat | FormDataEntryValueCompat[]> = {};
+  for (const [key, value] of form) {
+    const existing = out[key];
+    if (existing === undefined) {
+      out[key] = value;
+    } else if (Array.isArray(existing)) {
+      existing.push(value);
+    } else {
+      out[key] = [existing, value];
+    }
+  }
+  return out;
+}
 
 export class Hono<TEnv = unknown> {
   fetch: FetchHandler = async () => new Response("Not found", { status: 404 });
@@ -306,64 +500,212 @@ export function serve(_options: ServeOptions): never {
 
 export interface AuthUser {
   login: string;
-  id?: number;
-  scopes?: string[];
+  id: number;
+  scopes: string[];
 }
 
 export interface AuthApp {
-  id: string;
-  slug?: string;
+  appId: number;
+  slug: string;
+  name: string;
 }
 
 export interface AuthInstallation {
-  id: number;
+  installationId: number;
+  appId: number;
+  permissions: Record<string, string>;
+  repositoryIds: number[];
+  repositorySelection: "all" | "selected";
 }
 
-export type AuthFallback = AuthUser | (() => AuthUser | undefined);
-export type AppKeyResolver = (appId: string) => Promise<unknown | string | undefined> | unknown | string | undefined;
-export type AppEnv = Record<string, unknown>;
+export interface AuthFallback {
+  login: string;
+  id: number;
+  scopes: string[];
+}
+
+export interface AppKeyResolver {
+  (appId: number): { privateKey: string; slug: string; name: string } | null;
+}
+
+export type AppEnv = {
+  Variables: {
+    authUser?: AuthUser;
+    authApp?: AuthApp;
+    authToken?: string;
+    authScopes?: string[];
+    docsUrl?: string;
+  };
+};
 
 export interface TokenEntry {
-  token?: string;
+  token: string;
   login: string;
-  id?: number;
-  scopes?: string[];
+  id: number;
+  scopes: string[];
 }
 
-export type TokenMap = Map<string, TokenEntry>;
+export type TokenMap = Map<string, AuthUser>;
 
-export function serializeTokenMap(tokenMap: TokenMap): Record<string, TokenEntry[]> {
-  return { tokens: [...tokenMap.entries()].map(([token, entry]) => ({ ...entry, token })) };
+export function serializeTokenMap(tokenMap: TokenMap): TokenEntry[] {
+  return [...tokenMap.entries()].map(([token, user]) => ({
+    token,
+    login: user.login,
+    id: user.id,
+    scopes: user.scopes,
+  }));
 }
 
 export function restoreTokenMap(tokenMap: TokenMap, entries: TokenEntry[] | Record<string, TokenEntry[]>): void {
   tokenMap.clear();
   const list = Array.isArray(entries) ? entries : entries.tokens;
   for (const entry of list ?? []) {
-    if (entry.token) tokenMap.set(entry.token, entry);
+    if (entry.token) tokenMap.set(entry.token, { login: entry.login, id: entry.id, scopes: entry.scopes });
   }
 }
 
 export interface WebhookSubscription {
+  id: number;
   url: string;
-  events?: string[];
+  events: string[];
+  active: boolean;
   secret?: string;
+  owner: string;
+  repo?: string;
 }
 
 export interface WebhookDelivery {
+  id: number;
+  hook_id: number;
   event: string;
+  action?: string;
   payload: unknown;
+  status_code: number | null;
+  delivered_at: string;
+  duration: number | null;
+  success: boolean;
 }
 
 export class WebhookDispatcher {
-  subscriptions: WebhookSubscription[] = [];
+  private subscriptions: WebhookSubscription[] = [];
+  private deliveries: WebhookDelivery[] = [];
+  private subscriptionIdCounter = 1;
+  private deliveryIdCounter = 1;
 
-  subscribe(subscription: WebhookSubscription): void {
-    this.subscriptions.push(subscription);
+  register(subscription: Omit<WebhookSubscription, "id"> & { id?: number }): WebhookSubscription {
+    const { id: explicitId, ...rest } = subscription;
+    const id = explicitId !== undefined ? explicitId : this.subscriptionIdCounter++;
+    if (id >= this.subscriptionIdCounter) this.subscriptionIdCounter = id + 1;
+    const stored = { ...rest, id };
+    this.subscriptions.push(stored);
+    return stored;
   }
 
-  async dispatch(event: string, _action: string | undefined, payload: unknown): Promise<WebhookDelivery[]> {
-    return this.subscriptions.map(() => ({ event, payload }));
+  subscribe(subscription: Omit<WebhookSubscription, "id" | "active" | "events" | "owner"> & Partial<WebhookSubscription>): void {
+    this.register({
+      url: subscription.url,
+      events: subscription.events ?? ["*"],
+      active: subscription.active ?? true,
+      secret: subscription.secret,
+      owner: subscription.owner ?? "",
+      repo: subscription.repo,
+      id: subscription.id,
+    });
+  }
+
+  unregister(id: number): boolean {
+    const index = this.subscriptions.findIndex((subscription) => subscription.id === id);
+    if (index === -1) return false;
+    this.subscriptions.splice(index, 1);
+    return true;
+  }
+
+  getSubscription(id: number): WebhookSubscription | undefined {
+    return this.subscriptions.find((subscription) => subscription.id === id);
+  }
+
+  getSubscriptions(owner?: string, repo?: string): WebhookSubscription[] {
+    return this.subscriptions.filter((subscription) => {
+      if (owner && subscription.owner !== owner) return false;
+      if (repo !== undefined && subscription.repo !== repo) return false;
+      return true;
+    });
+  }
+
+  updateSubscription(
+    id: number,
+    data: Partial<Pick<WebhookSubscription, "url" | "events" | "active" | "secret">>,
+  ): WebhookSubscription | undefined {
+    const subscription = this.subscriptions.find((item) => item.id === id);
+    if (!subscription) return undefined;
+    Object.assign(subscription, data);
+    return subscription;
+  }
+
+  async dispatch(event: string, action: string | undefined, payload: unknown, owner = "", repo?: string): Promise<void> {
+    const matchingSubscriptions = this.subscriptions.filter((subscription) => {
+      if (!subscription.active) return false;
+      if (owner && subscription.owner !== owner) return false;
+      if (repo !== undefined) {
+        if (subscription.repo !== repo) return false;
+      } else if (subscription.repo !== undefined) {
+        return false;
+      }
+      return event === "ping" || subscription.events.includes("*") || subscription.events.includes(event);
+    });
+
+    for (const subscription of matchingSubscriptions) {
+      const delivery: WebhookDelivery = {
+        id: this.deliveryIdCounter++,
+        hook_id: subscription.id,
+        event,
+        action,
+        payload,
+        status_code: null,
+        delivered_at: new Date().toISOString(),
+        duration: null,
+        success: false,
+      };
+      const body = JSON.stringify(payload);
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "X-GitHub-Event": event,
+        "X-GitHub-Delivery": String(delivery.id),
+      };
+      if (subscription.secret) {
+        headers["X-Hub-Signature-256"] = `sha256=${createHmac("sha256", subscription.secret).update(body).digest("hex")}`;
+      }
+
+      try {
+        const start = Date.now();
+        const response = await fetch(subscription.url, {
+          method: "POST",
+          headers,
+          body,
+          signal: AbortSignal.timeout(10000),
+        });
+        delivery.duration = Date.now() - start;
+        delivery.status_code = response.status;
+        delivery.success = response.ok;
+      } catch {
+        delivery.duration = 0;
+      }
+      this.deliveries.push(delivery);
+      if (this.deliveries.length > 1000) {
+        this.deliveries.splice(0, this.deliveries.length - 1000);
+      }
+    }
+  }
+
+  getDeliveries(hookId?: number): WebhookDelivery[] {
+    return hookId === undefined ? [...this.deliveries] : this.deliveries.filter((delivery) => delivery.hook_id === hookId);
+  }
+
+  clear(): void {
+    this.subscriptions.length = 0;
+    this.deliveries.length = 0;
+    this.subscriptionIdCounter = 1;
+    this.deliveryIdCounter = 1;
   }
 }
 
@@ -398,7 +740,11 @@ export function createServer(plugin: ServicePlugin, options: ServerOptions = {})
   const webhooks = new WebhookDispatcher();
   const tokenMap: TokenMap = new Map();
   for (const [token, user] of Object.entries(options.tokens ?? {})) {
-    tokenMap.set(token, { token, ...user });
+    tokenMap.set(token, {
+      login: user.login,
+      id: user.id ?? 0,
+      scopes: user.scopes ?? ["repo", "user", "admin:org", "admin:repo_hook"],
+    });
   }
 
   let runtime: Promise<{ emulator: Emulator; target: string }> | undefined;
@@ -488,45 +834,80 @@ function isServiceName(service: string): service is ServiceName {
   ].includes(service);
 }
 
-export function errorHandler(error: Error): Response {
-  return renderErrorPage(error.message, 500);
+function contextDocsUrl(context: Context): string {
+  return (context.get("docsUrl") as string | undefined) ?? "https://emulate.dev";
 }
 
-export function createErrorHandler(): ErrorHandler {
-  return (error) => errorHandler(error);
+function errorStatus(error: unknown): number {
+  if (error && typeof error === "object" && "status" in error) {
+    const status = (error as { status: unknown }).status;
+    if (typeof status === "number" && Number.isFinite(status)) return status;
+  }
+  return 500;
 }
 
-export function createApiErrorHandler(): ErrorHandler {
-  return (error) => Response.json({ message: error.message }, { status: 500 });
+export function createApiErrorHandler(documentationUrl?: string): ErrorHandler {
+  return (error, context) => {
+    if (documentationUrl) context.set("docsUrl", documentationUrl);
+    const status = errorStatus(error);
+    const message = error instanceof Error ? error.message : "Internal Server Error";
+    return context.json({ message, documentation_url: contextDocsUrl(context) }, status);
+  };
 }
+
+export function createErrorHandler(documentationUrl?: string): MiddlewareHandler {
+  return async (context, next) => {
+    if (documentationUrl) context.set("docsUrl", documentationUrl);
+    await next?.();
+  };
+}
+
+export const errorHandler: MiddlewareHandler = createErrorHandler();
 
 export class ApiError extends Error {
+  status: number;
+  errors?: Array<{ resource: string; field: string; code: string }>;
+
+  constructor(status: number, message: string, errors?: ApiError["errors"]);
+  constructor(message: string, status?: number, errors?: ApiError["errors"]);
   constructor(
-    message: string,
-    readonly status = 400,
+    first: number | string,
+    second?: string | number,
+    errors?: Array<{ resource: string; field: string; code: string }>,
   ) {
+    const status = typeof first === "number" ? first : typeof second === "number" ? second : 400;
+    const message = typeof first === "number" ? (typeof second === "string" ? second : "Error") : first;
     super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.errors = errors;
   }
 }
 
-export function notFound(message = "Not Found"): never {
-  throw new ApiError(message, 404);
+export function notFound(resource?: string): ApiError {
+  return new ApiError(404, resource ? `${resource} not found` : "Not Found");
 }
 
-export function validationError(message: string): never {
-  throw new ApiError(message, 400);
+export function validationError(message: string, errors?: ApiError["errors"]): ApiError {
+  return new ApiError(422, message, errors);
 }
 
-export function unauthorized(message = "Unauthorized"): never {
-  throw new ApiError(message, 401);
+export function unauthorized(): ApiError {
+  return new ApiError(401, "Requires authentication");
 }
 
-export function forbidden(message = "Forbidden"): never {
-  throw new ApiError(message, 403);
+export function forbidden(): ApiError {
+  return new ApiError(403, "Forbidden");
 }
 
-export async function parseJsonBody<T = unknown>(request: Request): Promise<T> {
-  return (await request.json()) as T;
+export async function parseJsonBody<T = Record<string, unknown>>(input: Context | Request): Promise<T> {
+  try {
+    const body = input instanceof Request ? await input.json() : await input.req.json();
+    if (body && typeof body === "object" && !Array.isArray(body)) return body as T;
+    return {} as T;
+  } catch {
+    throw new ApiError(400, "Problems parsing JSON");
+  }
 }
 
 export function authMiddleware(): MiddlewareHandler {
@@ -536,11 +917,11 @@ export function authMiddleware(): MiddlewareHandler {
 }
 
 export function requireAuth(): AuthUser {
-  return { login: "emulate" };
+  return { login: "emulate", id: 0, scopes: [] };
 }
 
 export function requireAppAuth(): AuthApp {
-  return { id: "emulate" };
+  return { appId: 0, slug: "emulate", name: "emulate" };
 }
 
 export interface PaginationParams {
@@ -548,16 +929,34 @@ export interface PaginationParams {
   per_page: number;
 }
 
-export function parsePagination(url: string | URL): PaginationParams {
-  const parsed = new URL(url.toString());
+export function parsePagination(input: Context | string | URL): PaginationParams {
+  const pageValue = input instanceof Context ? input.req.query("page") : new URL(input.toString()).searchParams.get("page");
+  const perPageValue =
+    input instanceof Context ? input.req.query("per_page") : new URL(input.toString()).searchParams.get("per_page");
   return {
-    page: Number(parsed.searchParams.get("page") ?? 1),
-    per_page: Number(parsed.searchParams.get("per_page") ?? 30),
+    page: Math.max(1, parseInt(pageValue ?? "1", 10) || 1),
+    per_page: Math.min(100, Math.max(1, parseInt(perPageValue ?? "30", 10) || 30)),
   };
 }
 
-export function setLinkHeader(): void {
-  return undefined;
+export function setLinkHeader(context: Context, totalCount: number, page: number, perPage: number): void {
+  const lastPage = Math.max(1, Math.ceil(totalCount / perPage));
+  const baseUrl = new URL(context.req.url);
+  const links: string[] = [];
+  const makeLink = (targetPage: number, rel: string) => {
+    baseUrl.searchParams.set("page", String(targetPage));
+    baseUrl.searchParams.set("per_page", String(perPage));
+    return `<${baseUrl.toString()}>; rel="${rel}"`;
+  };
+  if (page < lastPage) {
+    links.push(makeLink(page + 1, "next"));
+    links.push(makeLink(lastPage, "last"));
+  }
+  if (page > 1) {
+    links.push(makeLink(1, "first"));
+    links.push(makeLink(page - 1, "prev"));
+  }
+  if (links.length > 0) context.header("Link", links.join(", "));
 }
 
 export function escapeHtml(value: unknown): string {
