@@ -97,7 +97,7 @@ await vercel.close()
 | Method | Description |
 |--------|-------------|
 | `url` | Base URL of the running server |
-| `reset()` | Wipe the store and replay seed data |
+| `reset()` | Restart the native process and replay seed data, returns a Promise |
 | `close()` | Shut down the HTTP server, returns a Promise |
 
 ## Vitest / Jest Setup
@@ -117,7 +117,7 @@ beforeAll(async () => {
   process.env.VERCEL_EMULATOR_URL = vercel.url
 })
 
-afterEach(() => { github.reset(); vercel.reset() })
+afterEach(() => Promise.all([github.reset(), vercel.reset()]))
 afterAll(() => Promise.all([github.close(), vercel.close()]))
 ```
 

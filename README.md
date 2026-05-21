@@ -152,7 +152,7 @@ afterAll(() => Promise.all([github.close(), vercel.close()]))
 | Method | Description |
 |--------|-------------|
 | `url` | Base URL of the running server |
-| `reset()` | Wipe the store and replay seed data |
+| `reset()` | Restart the native process and replay seed data, returns a Promise |
 | `close()` | Shut down the HTTP server, returns a Promise |
 
 ## Configuration

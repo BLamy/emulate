@@ -383,6 +383,6 @@ export function createEmulateProxy(config: EmulateProxyConfig) {
   };
 }
 
-export function withEmulate<T>(nextConfig: T): T {
+export function withEmulate<T>(nextConfig: T, _options?: { routePrefix?: string }): T {
   return nextConfig;
 }

@@ -62,7 +62,12 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
   }
   const binary = resolved.path;
 
-  const url = options.baseUrl ?? `http://localhost:${port}`;
+  const url = resolveAdvertisedBaseUrl({
+    service,
+    port,
+    seed: options.seed,
+    baseUrl: options.baseUrl,
+  });
   const seed = await prepareSeed(options.seed);
   let runtime = await startRuntime({
     binary,
@@ -189,4 +194,42 @@ async function closeRuntime(runtime: NativeRuntime): Promise<void> {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolveAdvertisedBaseUrl(options: {
+  service: ServiceName;
+  port: number;
+  seed?: SeedConfig;
+  baseUrl?: string;
+}): string {
+  const seedBaseUrl = seedBaseUrlForService(options.seed, options.service);
+  if (seedBaseUrl) {
+    return interpolateService(seedBaseUrl, options.service);
+  }
+  if (options.baseUrl) {
+    return interpolateService(options.baseUrl, options.service);
+  }
+  if (process.env.EMULATE_BASE_URL) {
+    return interpolateService(process.env.EMULATE_BASE_URL, options.service);
+  }
+  if (process.env.PORTLESS_URL) {
+    return interpolateService(process.env.PORTLESS_URL, options.service);
+  }
+  return `http://localhost:${options.port}`;
+}
+
+function seedBaseUrlForService(seed: SeedConfig | undefined, service: ServiceName): string | undefined {
+  const serviceSeed = seed?.[service];
+  if (!serviceSeed || typeof serviceSeed !== "object") {
+    return undefined;
+  }
+  const baseUrl = (serviceSeed as { baseUrl?: unknown }).baseUrl;
+  if (typeof baseUrl !== "string") {
+    return undefined;
+  }
+  return baseUrl.trim().replace(/\/+$/, "") || undefined;
+}
+
+function interpolateService(baseUrl: string, service: ServiceName): string {
+  return baseUrl.replaceAll("{service}", service);
 }

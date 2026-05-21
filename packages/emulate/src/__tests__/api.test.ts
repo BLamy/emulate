@@ -55,6 +55,56 @@ describe("createEmulator", () => {
     await Promise.all([github.close(), vercel.close()]);
   });
 
+  it("returns the native advertised URL from explicit baseUrl templates", async () => {
+    const github = await createEmulator({
+      service: "github",
+      port: 14012,
+      baseUrl: "https://{service}.example.test",
+    });
+
+    try {
+      expect(github.url).toBe("https://github.example.test");
+      await expect(readHealthBaseUrl(14012)).resolves.toBe("https://github.example.test");
+    } finally {
+      await github.close();
+    }
+  });
+
+  it("returns the native advertised URL from environment fallback templates", async () => {
+    const previousBaseUrl = process.env.EMULATE_BASE_URL;
+    process.env.EMULATE_BASE_URL = "https://{service}.env.example.test";
+    let github: Awaited<ReturnType<typeof createEmulator>> | undefined;
+
+    try {
+      github = await createEmulator({ service: "github", port: 14013 });
+      expect(github.url).toBe("https://github.env.example.test");
+      await expect(readHealthBaseUrl(14013)).resolves.toBe("https://github.env.example.test");
+    } finally {
+      await github?.close();
+      if (previousBaseUrl == null) {
+        delete process.env.EMULATE_BASE_URL;
+      } else {
+        process.env.EMULATE_BASE_URL = previousBaseUrl;
+      }
+    }
+  });
+
+  it("returns seed baseUrl before explicit baseUrl", async () => {
+    const github = await createEmulator({
+      service: "github",
+      port: 14014,
+      baseUrl: "https://ignored.example.test",
+      seed: { github: { baseUrl: "https://seed-{service}.example.test" } },
+    });
+
+    try {
+      expect(github.url).toBe("https://seed-github.example.test");
+      await expect(readHealthBaseUrl(14014)).resolves.toBe("https://seed-github.example.test");
+    } finally {
+      await github.close();
+    }
+  });
+
   it("reset restarts the native process and reapplies seed config", async () => {
     const github = await createEmulator({
       service: "github",
@@ -135,4 +185,11 @@ function isProcessRunning(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+async function readHealthBaseUrl(port: number): Promise<string> {
+  const health = (await fetch(`http://127.0.0.1:${port}/_emulate/health`).then((res) => res.json())) as {
+    base_url: string;
+  };
+  return health.base_url;
 }
