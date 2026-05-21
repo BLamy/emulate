@@ -53,14 +53,6 @@ jobs:
             fi
           done
 
-          for pkg in $NATIVE_BINARY_PACKAGES; do
-            REGISTRY_VERSION=$(npm view "@emulators/$pkg" version 2>/dev/null || echo "0.0.0")
-            echo "@emulators/$pkg — local: $LOCAL_VERSION, registry: $REGISTRY_VERSION"
-            if [ "$LOCAL_VERSION" != "$REGISTRY_VERSION" ]; then
-              SHOULD_RELEASE=true
-            fi
-          done
-
           echo "should_release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
           echo "version=$LOCAL_VERSION" >> "$GITHUB_OUTPUT"
 
@@ -133,6 +125,11 @@ jobs:
           for pkg in $NATIVE_BINARY_PACKAGES; do
             publish_pkg "packages/@emulators/$pkg" "@emulators/$pkg"
           done
+
+          if [ -n "$FAILED" ]; then
+            echo "Failed to publish native packages:$FAILED"
+            exit 1
+          fi
 
           publish_pkg packages/emulate emulate
 
