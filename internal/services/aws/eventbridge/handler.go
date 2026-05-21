@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -119,7 +120,7 @@ func (h *Handler) deleteEventBus(ctx gateway.AwsRequestContext, requestID string
 	}
 	for _, rule := range h.EventRules.FindBy("event_bus_name", name) {
 		if h.sameScope(ctx, rule) {
-			h.deleteRuleTargets(stringField(rule, "event_bus_name"), stringField(rule, "name"))
+			h.deleteRuleTargets(ctx, stringField(rule, "event_bus_name"), stringField(rule, "name"))
 			h.EventRules.Delete(intField(rule, "id"))
 		}
 	}
@@ -242,7 +243,7 @@ func (h *Handler) deleteRule(ctx gateway.AwsRequestContext, requestID string) pr
 	if !ok {
 		return response
 	}
-	h.deleteRuleTargets(busName, stringField(rule, "name"))
+	h.deleteRuleTargets(ctx, busName, stringField(rule, "name"))
 	h.EventRules.Delete(intField(rule, "id"))
 	return jsonResponse(http.StatusOK, map[string]any{})
 }
@@ -282,7 +283,7 @@ func (h *Handler) putTargets(ctx gateway.AwsRequestContext, requestID string) pr
 			"input":          stringValue(target["Input"]),
 			"role_arn":       stringValue(target["RoleArn"]),
 		}
-		if existing, ok := h.findTarget(busName, stringField(rule, "name"), targetID); ok {
+		if existing, ok := h.findTarget(ctx, busName, stringField(rule, "name"), targetID); ok {
 			h.EventTargets.Update(intField(existing, "id"), record)
 		} else {
 			h.EventTargets.Insert(record)
@@ -299,7 +300,7 @@ func (h *Handler) listTargetsByRule(ctx gateway.AwsRequestContext, requestID str
 	}
 	targets := []map[string]any{}
 	for _, target := range h.EventTargets.FindBy("rule_name", stringField(rule, "name")) {
-		if stringField(target, "event_bus_name") != busName {
+		if !h.sameScope(ctx, target) || stringField(target, "event_bus_name") != busName {
 			continue
 		}
 		item := map[string]any{"Id": stringField(target, "target_id"), "Arn": stringField(target, "arn")}
@@ -324,7 +325,7 @@ func (h *Handler) removeTargets(ctx gateway.AwsRequestContext, requestID string)
 		return response
 	}
 	for _, id := range stringSlice(ctx.Input["Ids"]) {
-		if target, ok := h.findTarget(busName, stringField(rule, "name"), id); ok {
+		if target, ok := h.findTarget(ctx, busName, stringField(rule, "name"), id); ok {
 			h.EventTargets.Delete(intField(target, "id"))
 		}
 	}
@@ -406,7 +407,7 @@ func (h *Handler) deliverEvent(ctx gateway.AwsRequestContext, busName string, ev
 			continue
 		}
 		for _, target := range h.EventTargets.FindBy("rule_name", stringField(rule, "name")) {
-			if stringField(target, "event_bus_name") != busName {
+			if !h.sameScope(ctx, target) || stringField(target, "event_bus_name") != busName {
 				continue
 			}
 			body := h.targetBody(target, event)
@@ -611,9 +612,9 @@ func (h *Handler) findRule(ctx gateway.AwsRequestContext, busName string, ruleNa
 	return nil, false
 }
 
-func (h *Handler) findTarget(busName string, ruleName string, targetID string) (corestore.Record, bool) {
+func (h *Handler) findTarget(ctx gateway.AwsRequestContext, busName string, ruleName string, targetID string) (corestore.Record, bool) {
 	for _, target := range h.EventTargets.FindBy("target_id", targetID) {
-		if stringField(target, "event_bus_name") == busName && stringField(target, "rule_name") == ruleName {
+		if stringField(target, "event_bus_name") == busName && stringField(target, "rule_name") == ruleName && h.sameScope(ctx, target) {
 			return target, true
 		}
 	}
@@ -638,9 +639,9 @@ func (h *Handler) findSNSTopic(ctx gateway.AwsRequestContext, arn string) (cores
 	return nil, false
 }
 
-func (h *Handler) deleteRuleTargets(busName string, ruleName string) {
+func (h *Handler) deleteRuleTargets(ctx gateway.AwsRequestContext, busName string, ruleName string) {
 	for _, target := range h.EventTargets.FindBy("rule_name", ruleName) {
-		if stringField(target, "event_bus_name") == busName {
+		if stringField(target, "event_bus_name") == busName && h.sameScope(ctx, target) {
 			h.EventTargets.Delete(intField(target, "id"))
 		}
 	}
@@ -1128,12 +1129,43 @@ func eventTime(value any, fallback time.Time) time.Time {
 	switch v := value.(type) {
 	case time.Time:
 		return v
+	case json.Number:
+		if parsed, ok := timeFromJSONNumber(v); ok {
+			return parsed
+		}
+	case int:
+		return time.Unix(int64(v), 0).UTC()
+	case int64:
+		return time.Unix(v, 0).UTC()
+	case float64:
+		if parsed, ok := timeFromUnixSeconds(v); ok {
+			return parsed
+		}
 	case string:
 		if parsed, err := time.Parse(time.RFC3339, v); err == nil {
 			return parsed
 		}
 	}
 	return fallback
+}
+
+func timeFromJSONNumber(value json.Number) (time.Time, bool) {
+	if seconds, err := value.Int64(); err == nil {
+		return time.Unix(seconds, 0).UTC(), true
+	}
+	seconds, err := strconv.ParseFloat(value.String(), 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return timeFromUnixSeconds(seconds)
+}
+
+func timeFromUnixSeconds(seconds float64) (time.Time, bool) {
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) {
+		return time.Time{}, false
+	}
+	whole, fraction := math.Modf(seconds)
+	return time.Unix(int64(whole), int64(fraction*1e9)).UTC(), true
 }
 
 func md5Hex(value string) string {

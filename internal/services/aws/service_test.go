@@ -15,6 +15,7 @@ import (
 	corehttp "github.com/vercel-labs/emulate/internal/core/http"
 	corestore "github.com/vercel-labs/emulate/internal/core/store"
 	"github.com/vercel-labs/emulate/internal/core/ui"
+	"github.com/vercel-labs/emulate/internal/services/aws/auth"
 )
 
 func TestServiceHandlesS3ListBuckets(t *testing.T) {
@@ -1221,7 +1222,7 @@ func TestServiceHandlesEventBridgeRuleAndSQSTarget(t *testing.T) {
 
 	res = executeAWSEventBridgeRequest(t, handler, "PutEvents", map[string]any{
 		"Entries": []map[string]any{
-			{"Source": "app.orders", "DetailType": "OrderCreated", "Detail": `{"tenant":"acme","id":"ord_1"}`},
+			{"Source": "app.orders", "DetailType": "OrderCreated", "Detail": `{"tenant":"acme","id":"ord_1"}`, "Time": 1577934245},
 			{"Source": "app.orders", "DetailType": "OrderCreated", "Detail": `{"tenant":"other","id":"ord_2"}`},
 		},
 	})
@@ -1238,7 +1239,7 @@ func TestServiceHandlesEventBridgeRuleAndSQSTarget(t *testing.T) {
 		t.Fatalf("receive status = %d, body = %s", res.Code, res.Body.String())
 	}
 	body := res.Body.String()
-	if !strings.Contains(body, "ord_1") || strings.Contains(body, "ord_2") || !strings.Contains(body, "OrderCreated") {
+	if !strings.Contains(body, "ord_1") || strings.Contains(body, "ord_2") || !strings.Contains(body, "OrderCreated") || !strings.Contains(body, "2020-01-02T03:04:05Z") {
 		t.Fatalf("unexpected EventBridge delivery body: %s", body)
 	}
 }
@@ -1348,6 +1349,103 @@ func TestServiceReturnsEventBridgeModeledErrors(t *testing.T) {
 	})
 	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"FailedEntryCount":1`) || !strings.Contains(res.Body.String(), "ResourceNotFoundException") {
 		t.Fatalf("missing bus status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestServiceScopesEventBridgeTargetsByAccount(t *testing.T) {
+	handler := newTestHandlerWithCredentialStore(auth.NewStore(
+		auth.Credential{AccessKeyID: "AKIAEVENTSA", AccountID: "111111111111", PrincipalARN: "arn:aws:iam::111111111111:user/a"},
+		auth.Credential{AccessKeyID: "AKIAEVENTSB", AccountID: "222222222222", PrincipalARN: "arn:aws:iam::222222222222:user/b"},
+	))
+
+	for _, accessKeyID := range []string{"AKIAEVENTSA", "AKIAEVENTSB"} {
+		res := executeAWSEventBridgeRequestWithAccessKey(t, handler, "CreateEventBus", map[string]any{"Name": "shared"}, accessKeyID)
+		if res.Code != http.StatusOK {
+			t.Fatalf("create bus for %s status = %d, body = %s", accessKeyID, res.Code, res.Body.String())
+		}
+		res = executeAWSEventBridgeRequestWithAccessKey(t, handler, "PutRule", map[string]any{
+			"Name":         "same-rule",
+			"EventBusName": "shared",
+			"EventPattern": `{}`,
+		}, accessKeyID)
+		if res.Code != http.StatusOK {
+			t.Fatalf("put rule for %s status = %d, body = %s", accessKeyID, res.Code, res.Body.String())
+		}
+	}
+
+	res := executeAWSEventBridgeRequestWithAccessKey(t, handler, "PutTargets", map[string]any{
+		"Rule":         "same-rule",
+		"EventBusName": "shared",
+		"Targets": []map[string]any{{
+			"Id":  "target",
+			"Arn": "arn:aws:sqs:us-east-1:111111111111:queue-a",
+		}},
+	}, "AKIAEVENTSA")
+	if res.Code != http.StatusOK {
+		t.Fatalf("put target for account A status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSEventBridgeRequestWithAccessKey(t, handler, "ListTargetsByRule", map[string]any{
+		"Rule":         "same-rule",
+		"EventBusName": "shared",
+	}, "AKIAEVENTSB")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list targets for account B status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var listed struct {
+		Targets []struct {
+			ID  string `json:"Id"`
+			Arn string `json:"Arn"`
+		}
+	}
+	decodeJSONBody(t, res, &listed)
+	if len(listed.Targets) != 0 {
+		t.Fatalf("account B saw account A targets: %#v", listed.Targets)
+	}
+
+	res = executeAWSEventBridgeRequestWithAccessKey(t, handler, "RemoveTargets", map[string]any{
+		"Rule":         "same-rule",
+		"EventBusName": "shared",
+		"Ids":          []string{"target"},
+	}, "AKIAEVENTSB")
+	if res.Code != http.StatusOK {
+		t.Fatalf("remove target for account B status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSEventBridgeRequestWithAccessKey(t, handler, "ListTargetsByRule", map[string]any{
+		"Rule":         "same-rule",
+		"EventBusName": "shared",
+	}, "AKIAEVENTSA")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list targets for account A status = %d, body = %s", res.Code, res.Body.String())
+	}
+	decodeJSONBody(t, res, &listed)
+	if len(listed.Targets) != 1 || listed.Targets[0].Arn != "arn:aws:sqs:us-east-1:111111111111:queue-a" {
+		t.Fatalf("account A target was not preserved: %#v", listed.Targets)
+	}
+
+	res = executeAWSEventBridgeRequestWithAccessKey(t, handler, "PutTargets", map[string]any{
+		"Rule":         "same-rule",
+		"EventBusName": "shared",
+		"Targets": []map[string]any{{
+			"Id":  "target",
+			"Arn": "arn:aws:sqs:us-east-1:222222222222:queue-b",
+		}},
+	}, "AKIAEVENTSB")
+	if res.Code != http.StatusOK {
+		t.Fatalf("put target for account B status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSEventBridgeRequestWithAccessKey(t, handler, "ListTargetsByRule", map[string]any{
+		"Rule":         "same-rule",
+		"EventBusName": "shared",
+	}, "AKIAEVENTSA")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list targets for account A after account B put status = %d, body = %s", res.Code, res.Body.String())
+	}
+	decodeJSONBody(t, res, &listed)
+	if len(listed.Targets) != 1 || listed.Targets[0].Arn != "arn:aws:sqs:us-east-1:111111111111:queue-a" {
+		t.Fatalf("account B target update affected account A: %#v", listed.Targets)
 	}
 }
 
@@ -2301,9 +2399,13 @@ func TestNewStoreCreatesAWSCollections(t *testing.T) {
 }
 
 func newTestHandler() http.Handler {
+	return newTestHandlerWithCredentialStore(nil)
+}
+
+func newTestHandlerWithCredentialStore(credentialStore *auth.Store) http.Handler {
 	router := corehttp.NewRouter()
 	ui.RegisterAssetRoutes(router)
-	Register(router, Options{Store: corestore.New()})
+	Register(router, Options{Store: corestore.New(), CredentialStore: credentialStore})
 	router.NotFound(func(c *corehttp.Context) {
 		c.JSON(http.StatusNotFound, map[string]any{"message": "Not Found"})
 	})
@@ -2380,6 +2482,11 @@ func executeAWSDynamoDBRequest(t *testing.T, handler http.Handler, action string
 
 func executeAWSEventBridgeRequest(t *testing.T, handler http.Handler, action string, payload map[string]any) *httptest.ResponseRecorder {
 	t.Helper()
+	return executeAWSEventBridgeRequestWithAccessKey(t, handler, action, payload, "AKIAEXAMPLE")
+}
+
+func executeAWSEventBridgeRequestWithAccessKey(t *testing.T, handler http.Handler, action string, payload map[string]any, accessKeyID string) *httptest.ResponseRecorder {
+	t.Helper()
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -2387,6 +2494,7 @@ func executeAWSEventBridgeRequest(t *testing.T, handler http.Handler, action str
 	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/events/", bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	req.Header.Set("X-Amz-Target", "AWSEvents."+action)
+	req.Header.Set("X-Access-Key", accessKeyID)
 	signAWSRequest(req, "events")
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
