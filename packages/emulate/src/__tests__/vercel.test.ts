@@ -35,7 +35,9 @@ describe("createVercelScaffold", () => {
   });
 
   it("includes google in the shared Vercel CLI service default", () => {
-    expect(DEFAULT_VERCEL_SERVICE_OPTION).toBe("apple,aws,clerk,github,google,microsoft,okta,resend,slack,stripe,vercel");
+    expect(DEFAULT_VERCEL_SERVICE_OPTION).toBe(
+      "apple,aws,clerk,github,google,microsoft,okta,resend,slack,stripe,vercel",
+    );
   });
 
   it("merges the rewrite into an existing vercel.json", () => {
