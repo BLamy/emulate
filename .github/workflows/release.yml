@@ -15,6 +15,7 @@ permissions:
 
 env:
   EMULATOR_PACKAGES: adapter-next apple aws clerk core github google microsoft mongoatlas okta resend slack stripe vercel
+  NATIVE_BINARY_PACKAGES: emulate-darwin-arm64 emulate-darwin-x64 emulate-linux-arm64 emulate-linux-x64 emulate-win32-arm64 emulate-win32-x64
 
 jobs:
   check-release:
@@ -45,6 +46,14 @@ jobs:
           fi
 
           for pkg in $EMULATOR_PACKAGES; do
+            REGISTRY_VERSION=$(npm view "@emulators/$pkg" version 2>/dev/null || echo "0.0.0")
+            echo "@emulators/$pkg — local: $LOCAL_VERSION, registry: $REGISTRY_VERSION"
+            if [ "$LOCAL_VERSION" != "$REGISTRY_VERSION" ]; then
+              SHOULD_RELEASE=true
+            fi
+          done
+
+          for pkg in $NATIVE_BINARY_PACKAGES; do
             REGISTRY_VERSION=$(npm view "@emulators/$pkg" version 2>/dev/null || echo "0.0.0")
             echo "@emulators/$pkg — local: $LOCAL_VERSION, registry: $REGISTRY_VERSION"
             if [ "$LOCAL_VERSION" != "$REGISTRY_VERSION" ]; then
@@ -85,11 +94,20 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Build
         run: pnpm build
+
+      - name: Build native binary packages
+        run: node scripts/build-native-packages.mjs
 
       - name: Publish packages
         run: |
@@ -111,6 +129,10 @@ jobs:
               FAILED="$FAILED $name"
             fi
           }
+
+          for pkg in $NATIVE_BINARY_PACKAGES; do
+            publish_pkg "packages/@emulators/$pkg" "@emulators/$pkg"
+          done
 
           publish_pkg packages/emulate emulate
 

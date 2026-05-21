@@ -21,6 +21,7 @@ import (
 	coreconfig "github.com/vercel-labs/emulate/internal/core/config"
 	emuruntime "github.com/vercel-labs/emulate/internal/runtime"
 	"github.com/vercel-labs/emulate/internal/services/apple"
+	"github.com/vercel-labs/emulate/internal/services/aws"
 	"github.com/vercel-labs/emulate/internal/services/clerk"
 	"github.com/vercel-labs/emulate/internal/services/github"
 	"github.com/vercel-labs/emulate/internal/services/google"
@@ -34,6 +35,21 @@ import (
 )
 
 var version = "dev"
+
+type nativeSeedOptions struct {
+	Apple      *apple.SeedConfig
+	AWS        *aws.SeedConfig
+	Clerk      *clerk.SeedConfig
+	GitHub     *github.SeedConfig
+	Google     *google.SeedConfig
+	Microsoft  *microsoft.SeedConfig
+	MongoAtlas *mongoatlas.SeedConfig
+	Okta       *okta.SeedConfig
+	Resend     *resend.SeedConfig
+	Slack      *slack.SeedConfig
+	Stripe     *stripe.SeedConfig
+	Vercel     *vercel.SeedConfig
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -63,6 +79,8 @@ func runWithContext(ctx context.Context, args []string, stdout io.Writer, stderr
 		return runInit(args[1:], stdout, stderr)
 	case "list", "list-services":
 		return runList(args[1:], stdout, stderr)
+	case "vercel":
+		return runVercel(args[1:], stdout, stderr)
 	default:
 		if strings.HasPrefix(args[0], "-") {
 			return runStart(ctx, args, stdout, stderr)
@@ -81,8 +99,8 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		printStartHelp(stderr)
 	}
 
-	portValue := fs.String("port", defaultPort, "Base port")
-	fs.StringVar(portValue, "p", defaultPort, "Base port")
+	portValue := fs.String("port", defaultPort, "Port")
+	fs.StringVar(portValue, "p", defaultPort, "Port")
 	serviceValue := fs.String("service", "", "Comma-separated services to enable")
 	fs.StringVar(serviceValue, "s", "", "Comma-separated services to enable")
 	seedValue := fs.String("seed", "", "Path to seed config file")
@@ -108,12 +126,9 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		fmt.Fprintln(stderr, "--portless and --base-url are mutually exclusive.")
 		return 1
 	}
-	if *portlessValue {
-		fmt.Fprintln(stderr, "The native Go runtime does not support --portless yet.")
-		return 1
-	}
 	var seedServices []string
 	var appleSeed *apple.SeedConfig
+	var awsSeed *aws.SeedConfig
 	var clerkSeed *clerk.SeedConfig
 	var githubSeed *github.SeedConfig
 	var googleSeed *google.SeedConfig
@@ -131,10 +146,18 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 			return 1
 		}
 		if unsupported := unsupportedNativeSeedServices(loaded.Data); len(unsupported) > 0 {
-			fmt.Fprintf(stderr, "The native Go runtime only supports --seed for apple, clerk, github, google, microsoft, mongoatlas, okta, resend, slack, stripe, and vercel. Unsupported seed config services: %s\n", strings.Join(unsupported, ", "))
+			fmt.Fprintf(stderr, "The native Go runtime only supports --seed for apple, aws, clerk, github, google, microsoft, mongoatlas, okta, resend, slack, stripe, and vercel. Unsupported seed config services: %s\n", strings.Join(unsupported, ", "))
 			return 1
 		}
 		seedServices = coreconfig.InferServices(loaded.Data, nativeSeedServiceNames())
+		if raw, ok := loaded.Data["aws"]; ok {
+			var cfg aws.SeedConfig
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				fmt.Fprintf(stderr, "Failed to parse aws seed config: %v\n", err)
+				return 1
+			}
+			awsSeed = &cfg
+		}
 		if raw, ok := loaded.Data["github"]; ok {
 			var cfg github.SeedConfig
 			if err := json.Unmarshal(raw, &cfg); err != nil {
@@ -249,26 +272,39 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		services = seedServices
 	}
 
+	seeds := nativeSeedOptions{
+		Apple:      appleSeed,
+		AWS:        awsSeed,
+		Clerk:      clerkSeed,
+		GitHub:     githubSeed,
+		Google:     googleSeed,
+		Microsoft:  microsoftSeed,
+		MongoAtlas: mongoAtlasSeed,
+		Okta:       oktaSeed,
+		Resend:     resendSeed,
+		Slack:      slackSeed,
+		Stripe:     stripeSeed,
+		Vercel:     vercelSeed,
+	}
+	if *portlessValue {
+		return runPortlessStart(ctx, stdout, stderr, port, services, seeds)
+	}
+
 	baseURL := *baseURLValue
+	if baseURL == "" {
+		baseURL = getenv("EMULATE_BASE_URL", getenv("PORTLESS_URL", ""))
+	}
+	if baseURL != "" && strings.Contains(baseURL, "{service}") {
+		if len(services) != 1 {
+			fmt.Fprintln(stderr, "Base URL templates with {service} require exactly one service in native single-server mode. Use --portless for per-service aliases.")
+			return 1
+		}
+		baseURL = strings.ReplaceAll(baseURL, "{service}", services[0])
+	}
 	if baseURL == "" {
 		baseURL = fmt.Sprintf("http://localhost:%d", port)
 	}
-	server := emuruntime.NewServer(emuruntime.ServerOptions{
-		Version:        version,
-		BaseURL:        baseURL,
-		Services:       services,
-		AppleSeed:      appleSeed,
-		ClerkSeed:      clerkSeed,
-		GitHubSeed:     githubSeed,
-		GoogleSeed:     googleSeed,
-		MicrosoftSeed:  microsoftSeed,
-		MongoAtlasSeed: mongoAtlasSeed,
-		OktaSeed:       oktaSeed,
-		ResendSeed:     resendSeed,
-		SlackSeed:      slackSeed,
-		StripeSeed:     stripeSeed,
-		VercelSeed:     vercelSeed,
-	})
+	server := emuruntime.NewServer(serverOptions(baseURL, services, seeds))
 	httpServer := &nethttp.Server{
 		Handler:           server.Handler,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -307,6 +343,26 @@ func runStart(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 			return 1
 		}
 		return 0
+	}
+}
+
+func serverOptions(baseURL string, services []string, seeds nativeSeedOptions) emuruntime.ServerOptions {
+	return emuruntime.ServerOptions{
+		Version:        version,
+		BaseURL:        baseURL,
+		Services:       services,
+		AppleSeed:      seeds.Apple,
+		AWSSeed:        seeds.AWS,
+		ClerkSeed:      seeds.Clerk,
+		GitHubSeed:     seeds.GitHub,
+		GoogleSeed:     seeds.Google,
+		MicrosoftSeed:  seeds.Microsoft,
+		MongoAtlasSeed: seeds.MongoAtlas,
+		OktaSeed:       seeds.Okta,
+		ResendSeed:     seeds.Resend,
+		SlackSeed:      seeds.Slack,
+		StripeSeed:     seeds.Stripe,
+		VercelSeed:     seeds.Vercel,
 	}
 }
 
@@ -399,23 +455,24 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  npx emulate [start] [options]")
 	fmt.Fprintln(w, "  npx emulate init [--service <service>]")
 	fmt.Fprintln(w, "  npx emulate list")
+	fmt.Fprintln(w, "  npx emulate vercel init [--service <services>]")
 	fmt.Fprintln(w, "\nStart options:")
-	fmt.Fprintln(w, "  -p, --port <port>          Base port")
+	fmt.Fprintln(w, "  -p, --port <port>          Port")
 	fmt.Fprintln(w, "  -s, --service <services>   Comma-separated services to enable")
-	fmt.Fprintln(w, "      --seed <file>          Path to JSON seed config file (YAML not supported in native Go yet)")
+	fmt.Fprintln(w, "      --seed <file>          Path to YAML or JSON seed config file")
 	fmt.Fprintln(w, "      --base-url <url>       Override advertised base URL")
-	fmt.Fprintln(w, "      --portless             Serve over HTTPS via portless (not supported in native Go yet)")
+	fmt.Fprintln(w, "      --portless             Serve over HTTPS via portless")
 }
 
 func printStartHelp(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  npx emulate [start] [options]")
 	fmt.Fprintln(w, "\nOptions:")
-	fmt.Fprintln(w, "  -p, --port <port>          Base port")
+	fmt.Fprintln(w, "  -p, --port <port>          Port")
 	fmt.Fprintln(w, "  -s, --service <services>   Comma-separated services to enable")
-	fmt.Fprintln(w, "      --seed <file>          Path to JSON seed config file (YAML not supported in native Go yet)")
+	fmt.Fprintln(w, "      --seed <file>          Path to YAML or JSON seed config file")
 	fmt.Fprintln(w, "      --base-url <url>       Override advertised base URL")
-	fmt.Fprintln(w, "      --portless             Serve over HTTPS via portless (not supported in native Go yet)")
+	fmt.Fprintln(w, "      --portless             Serve over HTTPS via portless")
 }
 
 func printInitHelp(w io.Writer) {
@@ -454,7 +511,7 @@ func parseServices(value string) ([]string, error) {
 }
 
 func nativeSeedServiceNames() []string {
-	return []string{"apple", "clerk", "github", "google", "microsoft", "mongoatlas", "okta", "resend", "slack", "stripe", "vercel"}
+	return []string{"apple", "aws", "clerk", "github", "google", "microsoft", "mongoatlas", "okta", "resend", "slack", "stripe", "vercel"}
 }
 
 func unsupportedNativeSeedServices(data map[string]json.RawMessage) []string {
