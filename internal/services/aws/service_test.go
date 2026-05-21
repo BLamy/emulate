@@ -1782,6 +1782,113 @@ func TestServiceProvidesEventBridgeDefaultBusPerAccount(t *testing.T) {
 	}
 }
 
+func TestServiceDoesNotResolveForeignEventBridgeBusARNToLocalBus(t *testing.T) {
+	handler := newTestHandlerWithCredentialStore(auth.NewStore(
+		auth.Credential{AccessKeyID: "AKIAEVENTSA", AccountID: "111111111111", PrincipalARN: "arn:aws:iam::111111111111:user/a"},
+		auth.Credential{AccessKeyID: "AKIAEVENTSB", AccountID: "222222222222", PrincipalARN: "arn:aws:iam::222222222222:user/b"},
+	))
+
+	for _, accessKeyID := range []string{"AKIAEVENTSA", "AKIAEVENTSB"} {
+		res := executeAWSEventBridgeRequestWithAccessKey(t, handler, "CreateEventBus", map[string]any{"Name": "shared"}, accessKeyID)
+		if res.Code != http.StatusOK {
+			t.Fatalf("create shared bus for %s status = %d, body = %s", accessKeyID, res.Code, res.Body.String())
+		}
+	}
+
+	foreignARN := "arn:aws:events:us-east-1:222222222222:event-bus/shared"
+	res := executeAWSEventBridgeRequestWithAccessKey(t, handler, "DeleteEventBus", map[string]any{"Name": foreignARN}, "AKIAEVENTSA")
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "ResourceNotFoundException") {
+		t.Fatalf("delete foreign ARN status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSEventBridgeRequestWithAccessKey(t, handler, "ListEventBuses", map[string]any{"NamePrefix": "shared"}, "AKIAEVENTSA")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"Arn":"arn:aws:events:us-east-1:111111111111:event-bus/shared"`) {
+		t.Fatalf("local same-name bus was not preserved: status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSEventBridgeRequestWithAccessKey(t, handler, "PutRule", map[string]any{
+		"Name":         "foreign-rule",
+		"EventBusName": foreignARN,
+		"EventPattern": `{}`,
+	}, "AKIAEVENTSA")
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "ResourceNotFoundException") {
+		t.Fatalf("put rule with foreign ARN status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSEventBridgeRequestWithAccessKey(t, handler, "ListRules", map[string]any{"EventBusName": "shared"}, "AKIAEVENTSA")
+	if res.Code != http.StatusOK || strings.Contains(res.Body.String(), "foreign-rule") {
+		t.Fatalf("foreign ARN created or exposed a local rule: status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	localARN := "arn:aws:events:us-east-1:111111111111:event-bus/shared"
+	res = executeAWSEventBridgeRequestWithAccessKey(t, handler, "PutRule", map[string]any{
+		"Name":         "local-rule",
+		"EventBusName": localARN,
+		"EventPattern": `{}`,
+	}, "AKIAEVENTSA")
+	if res.Code != http.StatusOK {
+		t.Fatalf("put rule with local ARN status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSEventBridgeRequestWithAccessKey(t, handler, "PutEvents", map[string]any{
+		"Entries": []map[string]any{{
+			"EventBusName": foreignARN,
+			"Source":       "app.test",
+			"DetailType":   "Foreign",
+			"Detail":       `{}`,
+		}},
+	}, "AKIAEVENTSA")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"FailedEntryCount":1`) || !strings.Contains(res.Body.String(), "ResourceNotFoundException") {
+		t.Fatalf("put events with foreign ARN status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestServiceRejectsUnsupportedEventBridgeTargetInputShaping(t *testing.T) {
+	handler := newTestHandler()
+
+	res := executeAWSEventBridgeRequest(t, handler, "PutRule", map[string]any{
+		"Name":         "input-shaping",
+		"EventPattern": `{}`,
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("put rule status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	for _, test := range []struct {
+		name   string
+		target map[string]any
+	}{
+		{
+			name: "input path",
+			target: map[string]any{
+				"Id":        "path",
+				"Arn":       "arn:aws:sqs:us-east-1:123456789012:queue",
+				"InputPath": "$.detail",
+			},
+		},
+		{
+			name: "input transformer",
+			target: map[string]any{
+				"Id":  "transformer",
+				"Arn": "arn:aws:sqs:us-east-1:123456789012:queue",
+				"InputTransformer": map[string]any{
+					"InputTemplate": `"transformed"`,
+				},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			res := executeAWSEventBridgeRequest(t, handler, "PutTargets", map[string]any{
+				"Rule":    "input-shaping",
+				"Targets": []map[string]any{test.target},
+			})
+			if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "ValidationException") || !strings.Contains(res.Body.String(), "not supported") {
+				t.Fatalf("put target status = %d, body = %s", res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
 func TestServiceHandlesSNSTagsPermissionsAndErrors(t *testing.T) {
 	handler := newTestHandler()
 

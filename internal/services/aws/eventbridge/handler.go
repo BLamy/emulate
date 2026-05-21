@@ -21,6 +21,14 @@ import (
 
 const jsonContentType = "application/x-amz-json-1.1"
 
+type eventBusRef struct {
+	Raw       string
+	Name      string
+	Region    string
+	AccountID string
+	IsARN     bool
+}
+
 type Handler struct {
 	EventBuses       *corestore.Collection
 	EventRules       *corestore.Collection
@@ -89,6 +97,9 @@ func (h *Handler) createEventBus(ctx gateway.AwsRequestContext, requestID string
 	if name == "" {
 		return h.validation("Name is required.", requestID)
 	}
+	if strings.Contains(name, ":event-bus/") {
+		return h.validation("Name must be an event bus name, not an ARN.", requestID)
+	}
 	if name == "default" {
 		return h.error("ResourceAlreadyExistsException", "Event bus default already exists.", http.StatusBadRequest, requestID)
 	}
@@ -107,17 +118,18 @@ func (h *Handler) createEventBus(ctx gateway.AwsRequestContext, requestID string
 }
 
 func (h *Handler) deleteEventBus(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
-	name := busNameFromInput(ctx.Input["Name"])
-	if name == "" {
+	ref := eventBusReference(ctx.Input["Name"])
+	if ref.Name == "" {
 		return h.validation("Name is required.", requestID)
 	}
-	if name == "default" {
+	if ref.Name == "default" {
 		return h.validation("Cannot delete default event bus.", requestID)
 	}
-	bus, response, ok := h.requireBus(ctx, name, requestID)
+	bus, response, ok := h.requireBus(ctx, ctx.Input["Name"], requestID)
 	if !ok {
 		return response
 	}
+	name := stringField(bus, "name")
 	for _, rule := range h.EventRules.FindBy("event_bus_name", name) {
 		if h.sameScope(ctx, rule) {
 			h.deleteRuleTargets(ctx, stringField(rule, "event_bus_name"), stringField(rule, "name"))
@@ -164,10 +176,11 @@ func (h *Handler) putRule(ctx gateway.AwsRequestContext, requestID string) proto
 	if name == "" {
 		return h.validation("Name is required.", requestID)
 	}
-	busName := eventBusName(ctx.Input)
-	if _, response, ok := h.requireBus(ctx, busName, requestID); !ok {
+	bus, response, ok := h.requireBus(ctx, eventBusValue(ctx.Input), requestID)
+	if !ok {
 		return response
 	}
+	busName := stringField(bus, "name")
 	eventPattern := strings.TrimSpace(stringInput(ctx.Input, "EventPattern"))
 	scheduleExpression := strings.TrimSpace(stringInput(ctx.Input, "ScheduleExpression"))
 	if eventPattern == "" && scheduleExpression == "" {
@@ -209,7 +222,7 @@ func (h *Handler) putRule(ctx gateway.AwsRequestContext, requestID string) proto
 }
 
 func (h *Handler) describeRule(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
-	rule, response, ok := h.requireRule(ctx, eventBusName(ctx.Input), stringInput(ctx.Input, "Name"), requestID)
+	rule, response, ok := h.requireRule(ctx, eventBusValue(ctx.Input), stringInput(ctx.Input, "Name"), requestID)
 	if !ok {
 		return response
 	}
@@ -217,7 +230,11 @@ func (h *Handler) describeRule(ctx gateway.AwsRequestContext, requestID string) 
 }
 
 func (h *Handler) listRules(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
-	busName := eventBusName(ctx.Input)
+	bus, response, ok := h.requireBus(ctx, eventBusValue(ctx.Input), requestID)
+	if !ok {
+		return response
+	}
+	busName := stringField(bus, "name")
 	prefix := stringInput(ctx.Input, "NamePrefix")
 	rules := []corestore.Record{}
 	for _, rule := range h.EventRules.FindBy("event_bus_name", busName) {
@@ -248,11 +265,11 @@ func (h *Handler) listRules(ctx gateway.AwsRequestContext, requestID string) pro
 }
 
 func (h *Handler) deleteRule(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
-	busName := eventBusName(ctx.Input)
-	rule, response, ok := h.requireRule(ctx, busName, stringInput(ctx.Input, "Name"), requestID)
+	rule, response, ok := h.requireRule(ctx, eventBusValue(ctx.Input), stringInput(ctx.Input, "Name"), requestID)
 	if !ok {
 		return response
 	}
+	busName := stringField(rule, "event_bus_name")
 	if len(h.targetsForRule(ctx, busName, stringField(rule, "name"))) > 0 {
 		return h.validation("Rule can't be deleted since it has targets.", requestID)
 	}
@@ -261,7 +278,7 @@ func (h *Handler) deleteRule(ctx gateway.AwsRequestContext, requestID string) pr
 }
 
 func (h *Handler) setRuleState(ctx gateway.AwsRequestContext, requestID string, state string) protocols.ErrorResponse {
-	rule, response, ok := h.requireRule(ctx, eventBusName(ctx.Input), stringInput(ctx.Input, "Name"), requestID)
+	rule, response, ok := h.requireRule(ctx, eventBusValue(ctx.Input), stringInput(ctx.Input, "Name"), requestID)
 	if !ok {
 		return response
 	}
@@ -270,11 +287,11 @@ func (h *Handler) setRuleState(ctx gateway.AwsRequestContext, requestID string, 
 }
 
 func (h *Handler) putTargets(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
-	busName := eventBusName(ctx.Input)
-	rule, response, ok := h.requireRule(ctx, busName, stringInput(ctx.Input, "Rule"), requestID)
+	rule, response, ok := h.requireRule(ctx, eventBusValue(ctx.Input), stringInput(ctx.Input, "Rule"), requestID)
 	if !ok {
 		return response
 	}
+	busName := stringField(rule, "event_bus_name")
 	targets := mapSlice(ctx.Input["Targets"])
 	if len(targets) == 0 {
 		return h.validation("Targets is required.", requestID)
@@ -284,6 +301,12 @@ func (h *Handler) putTargets(ctx gateway.AwsRequestContext, requestID string) pr
 		targetARN := strings.TrimSpace(stringValue(target["Arn"]))
 		if targetID == "" || targetARN == "" {
 			return h.validation("Target Id and Arn are required.", requestID)
+		}
+		if strings.TrimSpace(stringValue(target["InputPath"])) != "" {
+			return h.validation("Target InputPath is not supported in the native Go runtime yet.", requestID)
+		}
+		if _, ok := target["InputTransformer"]; ok {
+			return h.validation("Target InputTransformer is not supported in the native Go runtime yet.", requestID)
 		}
 		record := corestore.Record{
 			"account_id":     h.accountID(ctx),
@@ -305,11 +328,11 @@ func (h *Handler) putTargets(ctx gateway.AwsRequestContext, requestID string) pr
 }
 
 func (h *Handler) listTargetsByRule(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
-	busName := eventBusName(ctx.Input)
-	rule, response, ok := h.requireRule(ctx, busName, stringInput(ctx.Input, "Rule"), requestID)
+	rule, response, ok := h.requireRule(ctx, eventBusValue(ctx.Input), stringInput(ctx.Input, "Rule"), requestID)
 	if !ok {
 		return response
 	}
+	busName := stringField(rule, "event_bus_name")
 	targets := []map[string]any{}
 	for _, target := range h.targetsForRule(ctx, busName, stringField(rule, "name")) {
 		item := map[string]any{"Id": stringField(target, "target_id"), "Arn": stringField(target, "arn")}
@@ -336,11 +359,11 @@ func (h *Handler) listTargetsByRule(ctx gateway.AwsRequestContext, requestID str
 }
 
 func (h *Handler) removeTargets(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
-	busName := eventBusName(ctx.Input)
-	rule, response, ok := h.requireRule(ctx, busName, stringInput(ctx.Input, "Rule"), requestID)
+	rule, response, ok := h.requireRule(ctx, eventBusValue(ctx.Input), stringInput(ctx.Input, "Rule"), requestID)
 	if !ok {
 		return response
 	}
+	busName := stringField(rule, "event_bus_name")
 	for _, id := range stringSlice(ctx.Input["Ids"]) {
 		if target, ok := h.findTarget(ctx, busName, stringField(rule, "name"), id); ok {
 			h.EventTargets.Delete(intField(target, "id"))
@@ -360,15 +383,18 @@ func (h *Handler) putEvents(ctx gateway.AwsRequestContext, requestID string) pro
 	out := make([]map[string]any, 0, len(entries))
 	failed := 0
 	for _, entry := range entries {
-		busName := busNameFromInput(firstNonEmpty(stringValue(entry["EventBusName"]), "default"))
-		if busName == "default" {
+		busValue := firstNonEmpty(stringValue(entry["EventBusName"]), "default")
+		ref := eventBusReference(busValue)
+		if ref.Name == "default" && h.eventBusReferenceMatchesCaller(ctx, ref) {
 			h.ensureDefaultBus(ctx)
 		}
-		if _, ok := h.findBus(ctx, busName); !ok {
+		bus, ok := h.findBus(ctx, busValue)
+		if !ok {
 			failed++
-			out = append(out, map[string]any{"ErrorCode": "ResourceNotFoundException", "ErrorMessage": "Event bus " + busName + " does not exist."})
+			out = append(out, map[string]any{"ErrorCode": "ResourceNotFoundException", "ErrorMessage": "Event bus " + eventBusDisplayName(ref) + " does not exist."})
 			continue
 		}
+		busName := stringField(bus, "name")
 		source := stringValue(entry["Source"])
 		detailType := stringValue(entry["DetailType"])
 		detailText := stringValue(entry["Detail"])
@@ -598,17 +624,17 @@ func (h *Handler) ruleResponse(rule corestore.Record) map[string]any {
 	return out
 }
 
-func (h *Handler) requireBus(ctx gateway.AwsRequestContext, name string, requestID string) (corestore.Record, protocols.ErrorResponse, bool) {
-	name = busNameFromInput(name)
-	if name == "" {
-		name = "default"
+func (h *Handler) requireBus(ctx gateway.AwsRequestContext, value any, requestID string) (corestore.Record, protocols.ErrorResponse, bool) {
+	ref := eventBusReference(value)
+	if ref.Name == "" {
+		ref = eventBusReference("default")
 	}
-	bus, ok := h.findBus(ctx, name)
+	bus, ok := h.findBus(ctx, ref.Raw)
 	if !ok {
-		if name == "default" {
+		if ref.Name == "default" && h.eventBusReferenceMatchesCaller(ctx, ref) {
 			return h.insertDefaultBus(ctx), protocols.ErrorResponse{}, true
 		}
-		return nil, h.notFound("Event bus "+name+" does not exist.", requestID), false
+		return nil, h.notFound("Event bus "+eventBusDisplayName(ref)+" does not exist.", requestID), false
 	}
 	return bus, protocols.ErrorResponse{}, true
 }
@@ -620,7 +646,7 @@ func (h *Handler) requireRule(ctx gateway.AwsRequestContext, busName string, rul
 	}
 	rule, ok := h.findRule(ctx, busName, ruleName)
 	if !ok {
-		return nil, h.notFound("Rule "+ruleName+" does not exist on event bus "+busName+".", requestID), false
+		return nil, h.notFound("Rule "+ruleName+" does not exist on event bus "+eventBusDisplayName(eventBusReference(busName))+".", requestID), false
 	}
 	return rule, protocols.ErrorResponse{}, true
 }
@@ -652,9 +678,12 @@ func (h *Handler) pageBounds(input map[string]any, total int, requestID string) 
 	return start, end, nextToken, protocols.ErrorResponse{}, true
 }
 
-func (h *Handler) findBus(ctx gateway.AwsRequestContext, name string) (corestore.Record, bool) {
-	name = busNameFromInput(name)
-	for _, bus := range h.EventBuses.FindBy("name", name) {
+func (h *Handler) findBus(ctx gateway.AwsRequestContext, value any) (corestore.Record, bool) {
+	ref := eventBusReference(value)
+	if ref.Name == "" || !h.eventBusReferenceMatchesCaller(ctx, ref) {
+		return nil, false
+	}
+	for _, bus := range h.EventBuses.FindBy("name", ref.Name) {
 		if h.sameScope(ctx, bus) {
 			return bus, true
 		}
@@ -680,9 +709,12 @@ func (h *Handler) insertDefaultBus(ctx gateway.AwsRequestContext) corestore.Reco
 }
 
 func (h *Handler) findRule(ctx gateway.AwsRequestContext, busName string, ruleName string) (corestore.Record, bool) {
-	busName = busNameFromInput(firstNonEmpty(busName, "default"))
+	ref := eventBusReference(firstNonEmpty(busName, "default"))
+	if ref.Name == "" || !h.eventBusReferenceMatchesCaller(ctx, ref) {
+		return nil, false
+	}
 	for _, rule := range h.EventRules.FindBy("name", ruleName) {
-		if stringField(rule, "event_bus_name") == busName && h.sameScope(ctx, rule) {
+		if stringField(rule, "event_bus_name") == ref.Name && h.sameScope(ctx, rule) {
 			return rule, true
 		}
 	}
@@ -867,19 +899,36 @@ func parseDetail(raw string) (map[string]any, bool) {
 	return detail, true
 }
 
-func eventBusName(input map[string]any) string {
-	return busNameFromInput(firstNonEmpty(stringInput(input, "EventBusName"), "default"))
+func eventBusValue(input map[string]any) string {
+	return firstNonEmpty(stringInput(input, "EventBusName"), "default")
 }
 
-func busNameFromInput(value any) string {
+func eventBusReference(value any) eventBusRef {
 	text := strings.TrimSpace(stringValue(value))
 	if text == "" {
-		return ""
+		return eventBusRef{}
+	}
+	parts := strings.SplitN(text, ":", 6)
+	if len(parts) == 6 && parts[0] == "arn" && parts[2] == "events" && strings.HasPrefix(parts[5], "event-bus/") {
+		return eventBusRef{
+			Raw:       text,
+			Name:      strings.TrimPrefix(parts[5], "event-bus/"),
+			Region:    parts[3],
+			AccountID: parts[4],
+			IsARN:     true,
+		}
 	}
 	if strings.Contains(text, ":event-bus/") {
-		return text[strings.LastIndex(text, "/")+1:]
+		return eventBusRef{Raw: text, Name: text, IsARN: true}
 	}
-	return text
+	return eventBusRef{Raw: text, Name: text}
+}
+
+func eventBusDisplayName(ref eventBusRef) string {
+	if ref.Raw != "" {
+		return ref.Raw
+	}
+	return ref.Name
 }
 
 func busARN(region string, accountID string, name string) string {
@@ -891,6 +940,13 @@ func ruleARN(region string, accountID string, busName string, name string) strin
 		return "arn:aws:events:" + region + ":" + accountID + ":rule/" + name
 	}
 	return "arn:aws:events:" + region + ":" + accountID + ":rule/" + busName + "/" + name
+}
+
+func (h *Handler) eventBusReferenceMatchesCaller(ctx gateway.AwsRequestContext, ref eventBusRef) bool {
+	if !ref.IsARN {
+		return true
+	}
+	return ref.AccountID == h.accountID(ctx) && ref.Region == h.region(ctx)
 }
 
 func (h *Handler) sameScope(ctx gateway.AwsRequestContext, record corestore.Record) bool {
