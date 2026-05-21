@@ -313,6 +313,29 @@ okta:
       audiences: ["api://default"]
 ```
 
+## Clerk Seed Config
+
+```yaml
+clerk:
+  users:
+    - email_addresses: ["test@example.com"]
+      first_name: Test
+      last_name: User
+      password: clerk_test_password
+  organizations:
+    - name: My Company
+      slug: my-company
+      members:
+        - email: test@example.com
+          role: admin
+  oauth_applications:
+    - client_id: clerk_emulate_client
+      client_secret: clerk_emulate_secret
+      name: Emulate App
+      redirect_uris:
+        - http://localhost:3000/api/auth/callback/clerk
+```
+
 ## MongoDB Atlas Seed Config
 
 ```yaml

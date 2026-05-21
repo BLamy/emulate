@@ -11,6 +11,7 @@ export const PAGE_TITLES: Record<string, string> = {
   microsoft: "Microsoft Entra ID",
   aws: "AWS",
   okta: "Okta",
+  clerk: "Clerk",
   mongoatlas: "MongoDB Atlas",
   resend: "Resend",
   stripe: "Stripe",

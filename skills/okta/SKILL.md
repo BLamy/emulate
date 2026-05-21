@@ -102,4 +102,4 @@ okta:
 
 ## Multi-Service OIDC Discovery
 
-When more than one of Apple, Google, Microsoft, and Okta is enabled on one native Go server, use `/okta/.well-known/openid-configuration` to avoid the shared root discovery path.
+When more than one of Apple, Google, Microsoft, Okta, and Clerk is enabled on one native Go server, use `/okta/.well-known/openid-configuration` to avoid the shared root discovery path.

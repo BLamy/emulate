@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 export const SUPPORTED_VERCEL_SERVICES = [
   "apple",
   "aws",
+  "clerk",
   "github",
   "google",
   "microsoft",

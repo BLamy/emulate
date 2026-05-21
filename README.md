@@ -584,7 +584,7 @@ OAuth 2.0, OpenID Connect, and mutable Google Workspace-style surfaces for local
 
 The native Go runtime implements the OAuth/OIDC flow with RS256 ID tokens and JWKS, plus Gmail messages, drafts, threads, labels, history, settings filters, Calendar list/events/freebusy, and Drive file list/upload/download routes for local CLI runs and Vercel Go Function previews. To expose Google on a Vercel preview without separate infrastructure, run `npx emulate vercel init --service google`. The generated route serves Google at `/emulate/google/*`.
 
-When more than one of Apple, Google, Microsoft, and Okta is enabled on one native Go server, use the service specific discovery paths, for example `/google/.well-known/openid-configuration` or `/okta/.well-known/openid-configuration`, because those providers all use the root OIDC discovery path when run alone.
+When more than one of Apple, Google, Microsoft, Okta, and Clerk is enabled on one native Go server, use the service specific discovery paths, for example `/google/.well-known/openid-configuration` or `/okta/.well-known/openid-configuration`, because those providers all use the root OIDC discovery path when run alone.
 
 - `GET /o/oauth2/v2/auth` - authorization endpoint
 - `POST /oauth2/token` - token exchange
@@ -698,6 +698,19 @@ The native Go runtime implements the Okta OIDC and management API routes below f
 - `GET /oauth2/v1/logout`, `GET /oauth2/:authServerId/v1/logout` - end session
 - `GET`, `POST`, `PUT`, `DELETE` under `/api/v1/users`, `/api/v1/groups`, `/api/v1/apps`, and `/api/v1/authorizationServers`
 
+## Clerk
+
+Clerk authentication and user management emulation with OAuth 2.0 / OIDC, RS256 ID tokens, JWKS, users, email addresses, organizations, memberships, invitations, and sessions.
+
+The native Go runtime implements the Clerk OIDC and management API routes below for local CLI runs and Vercel Go Function previews. To expose Clerk on a Vercel preview without separate infrastructure, run `npx emulate vercel init --service clerk`. The generated route serves Clerk at `/emulate/clerk/*`.
+
+- `GET /.well-known/openid-configuration` - OIDC discovery document
+- `GET /v1/jwks` - JSON Web Key Set (JWKS)
+- `GET /oauth/authorize` - authorization endpoint (shows user picker)
+- `POST /oauth/token` - token exchange
+- `GET /oauth/userinfo` - OpenID Connect user info
+- `GET`, `POST`, `PATCH`, `DELETE` under `/v1/users`, `/v1/email_addresses`, `/v1/organizations`, `/v1/organizations/:orgId/memberships`, `/v1/organizations/:orgId/invitations`, and `/v1/sessions`
+
 ## AWS
 
 S3, SQS, SNS, DynamoDB, IAM, and STS emulation with AWS SDK-compatible S3 paths, AWS JSON RPC endpoints for SQS and DynamoDB, and AWS Query endpoints for SNS/SQS/IAM/STS. Query and REST XML operations return AWS-compatible XML. The native Go runtime is verified against current AWS SDK v3 clients for SQS, SNS, DynamoDB, IAM, and STS; SQS and DynamoDB use JSON target requests, and SNS/IAM/STS use AWS Query XML.
@@ -803,7 +816,7 @@ This creates:
 - `vercel.json`, with `/emulate/:path*` rewritten to `/api/emulate?path=:path*`
 - `go.mod`, pinned to the installed `emulate` package version
 
-The scaffold currently enables the native `apple`, `aws`, `github`, `google`, `microsoft`, `okta`, `resend`, `slack`, `stripe`, and `vercel` handlers. Use `npx emulate vercel init --service github` to limit the function to one service.
+The scaffold currently enables the native `apple`, `aws`, `clerk`, `github`, `google`, `microsoft`, `okta`, `resend`, `slack`, `stripe`, and `vercel` handlers. Use `npx emulate vercel init --service github` to limit the function to one service.
 
 State uses warm memory by default: cold starts reset to a fresh store, warm invocations reuse mutations, and concurrent function instances can diverge. For snapshots across cold starts, implement `vercel.Persistence` in `api/emulate.go` and pass it to `emulate.NewHandler`.
 
@@ -844,7 +857,7 @@ export const { GET, POST, PUT, PATCH, DELETE } = createEmulateHandler({
 })
 ```
 
-Embedded mode is the broadest zero infra path for JavaScript emulator packages on Vercel preview deployments. The emulator code runs in the Next.js function, so OAuth callback URLs can point at the preview origin. For native Go `apple`, `aws`, `github`, `google`, `microsoft`, `okta`, `resend`, `slack`, `stripe`, and `vercel` previews, use `npx emulate vercel init`.
+Embedded mode is the broadest zero infra path for JavaScript emulator packages on Vercel preview deployments. The emulator code runs in the Next.js function, so OAuth callback URLs can point at the preview origin. For native Go `apple`, `aws`, `clerk`, `github`, `google`, `microsoft`, `okta`, `resend`, `slack`, `stripe`, and `vercel` previews, use `npx emulate vercel init`.
 
 ### Native runtime proxy
 

@@ -360,9 +360,24 @@ func TestNewHandlerMountsOktaWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestNewHandlerMountsClerkWhenEnabled(t *testing.T) {
+	handler := NewHandler(ServerOptions{Services: []string{"clerk"}, BaseURL: "http://localhost:4017"})
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil))
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"issuer":"http://localhost:4017"`) ||
+		!strings.Contains(res.Body.String(), `"jwks_uri":"http://localhost:4017/v1/jwks"`) {
+		t.Fatalf("unexpected body: %s", res.Body.String())
+	}
+}
+
 func TestNewHandlerMultiServiceOIDCDiscoveryUsesServicePrefixes(t *testing.T) {
 	handler := NewHandler(ServerOptions{
-		Services: []string{"apple", "google", "microsoft", "okta"},
+		Services: []string{"apple", "google", "microsoft", "okta", "clerk"},
 		BaseURL:  "http://localhost:4010",
 	})
 
@@ -383,6 +398,7 @@ func TestNewHandlerMultiServiceOIDCDiscoveryUsesServicePrefixes(t *testing.T) {
 		{path: "/apple/.well-known/openid-configuration", want: `"issuer":"http://localhost:4010/apple"`},
 		{path: "/microsoft/.well-known/openid-configuration", want: `"issuer":"http://localhost:4010/microsoft/9188040d-6c67-4c5b-b112-36a304b66dad/v2.0"`},
 		{path: "/okta/oauth2/default/.well-known/openid-configuration", want: `"issuer":"http://localhost:4010/okta/oauth2/default"`},
+		{path: "/clerk/.well-known/openid-configuration", want: `"issuer":"http://localhost:4010/clerk"`},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			res := httptest.NewRecorder()
@@ -402,6 +418,17 @@ func TestNewHandlerDoesNotMountOktaWhenDisabled(t *testing.T) {
 
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/oauth2/default/v1/keys", nil))
+
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestNewHandlerDoesNotMountClerkWhenDisabled(t *testing.T) {
+	handler := NewHandler(ServerOptions{Services: []string{"resend"}})
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/v1/jwks", nil))
 
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())

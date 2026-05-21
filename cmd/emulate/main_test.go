@@ -370,6 +370,69 @@ func TestRunStartSeedsStripeFromJSONConfig(t *testing.T) {
 	}
 }
 
+func TestRunStartSeedsClerkFromJSONConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	seedPath := filepath.Join(tempDir, "emulate.config.json")
+	if err := os.WriteFile(seedPath, []byte(`{"clerk":{"users":[{"email_addresses":["alice@example.com"],"first_name":"Alice","password":"alice123"}],"organizations":[{"name":"Acme","slug":"acme","members":[{"email":"alice@example.com","role":"admin"}]}],"oauth_applications":[{"client_id":"test-client","client_secret":"test-secret","name":"Test App","redirect_uris":["http://localhost:3000/callback"]}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	port := freePort(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var stdout, stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- runWithContext(ctx, []string{"start", "--port", strconv.Itoa(port), "--seed", seedPath}, &stdout, &stderr)
+	}()
+
+	var health struct {
+		OK       bool     `json:"ok"`
+		Services []string `json:"services"`
+	}
+	waitForJSON(t, fmt.Sprintf("http://127.0.0.1:%d%s", port, emuruntime.HealthPath), &health)
+	if !health.OK || len(health.Services) != 1 || health.Services[0] != "clerk" {
+		t.Fatalf("unexpected health body: %#v", health)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/v1/users?query=alice", port), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer sk_test_emulate")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("users status = %d", resp.StatusCode)
+	}
+	var users struct {
+		TotalCount int `json:"total_count"`
+		Data       []struct {
+			FirstName string `json:"first_name"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&users); err != nil {
+		t.Fatal(err)
+	}
+	if users.TotalCount != 1 || len(users.Data) != 1 || users.Data[0].FirstName != "Alice" {
+		t.Fatalf("unexpected seeded users: %#v", users)
+	}
+
+	cancel()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("start exited with %d, stderr: %s", code, stderr.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("start did not shut down after context cancellation")
+	}
+}
+
 func TestRunStartSeedsAppleFromJSONConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	seedPath := filepath.Join(tempDir, "emulate.config.json")
@@ -550,7 +613,7 @@ func TestRunStartRejectsUnsupportedNativeSeedServices(t *testing.T) {
 				t.Fatal("start with unsupported seed service exited successfully")
 			}
 			errText := stderr.String()
-			if !strings.Contains(errText, "only supports --seed for apple, github, google, microsoft, okta, resend, slack, stripe, and vercel") || !strings.Contains(errText, "aws") {
+			if !strings.Contains(errText, "only supports --seed for apple, clerk, github, google, microsoft, okta, resend, slack, stripe, and vercel") || !strings.Contains(errText, "aws") {
 				t.Fatalf("unexpected stderr: %s", errText)
 			}
 		})

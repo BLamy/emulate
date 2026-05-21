@@ -14,6 +14,7 @@ const oldDocsSlugs = [
   "microsoft",
   "aws",
   "okta",
+  "clerk",
   "mongoatlas",
   "resend",
   "stripe",

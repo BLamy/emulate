@@ -12,7 +12,7 @@ export const maxDuration = 60;
 
 const DEFAULT_MODEL = "anthropic/claude-haiku-4.5";
 
-const SYSTEM_PROMPT = `You are a helpful documentation assistant for emulate, a local drop-in replacement for Vercel, GitHub, Google, Slack, Apple, Microsoft, AWS, Okta, MongoDB Atlas, Resend, and Stripe APIs used in CI and no-network sandboxes.
+const SYSTEM_PROMPT = `You are a helpful documentation assistant for emulate, a local drop-in replacement for Vercel, GitHub, Google, Slack, Apple, Microsoft, AWS, Okta, Clerk, MongoDB Atlas, Resend, and Stripe APIs used in CI and no-network sandboxes.
 
 emulate provides fully stateful, production-fidelity API emulation, not mocks. The CLI is installed as the "emulate" npm package and run via "npx emulate". It also supports a programmatic API via createEmulator and a Next.js adapter (@emulators/adapter-next) for embedded emulators or native runtime proxy routes in your app.
 

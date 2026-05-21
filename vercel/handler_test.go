@@ -35,7 +35,7 @@ func TestHandlerServesPreviewHealth(t *testing.T) {
 	if !body.OK || body.Adapter != "vercel" || body.Runtime != "go" || body.Version != "test" || body.RoutePrefix != "/emulate" {
 		t.Fatalf("unexpected body: %#v", body)
 	}
-	if strings.Join(body.Services, ",") != "apple,aws,github,google,microsoft,okta,resend,slack,stripe,vercel" {
+	if strings.Join(body.Services, ",") != "apple,aws,clerk,github,google,microsoft,okta,resend,slack,stripe,vercel" {
 		t.Fatalf("services = %#v", body.Services)
 	}
 }
@@ -191,6 +191,23 @@ func TestHandlerForwardsOktaService(t *testing.T) {
 	}
 }
 
+func TestHandlerForwardsClerkService(t *testing.T) {
+	handler := NewHandler(Options{Services: []string{"clerk"}})
+	req := httptest.NewRequest(http.MethodGet, "https://preview.example.com/emulate/clerk/.well-known/openid-configuration", nil)
+	req.Host = "preview.example.com"
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"issuer":"https://preview.example.com/emulate/clerk"`) ||
+		!strings.Contains(res.Body.String(), `"jwks_uri":"https://preview.example.com/emulate/clerk/v1/jwks"`) {
+		t.Fatalf("unexpected body: %s", res.Body.String())
+	}
+}
+
 func TestHandlerForwardsSlackService(t *testing.T) {
 	handler := NewHandler(Options{Services: []string{"slack"}})
 	req := httptest.NewRequest(http.MethodPost, "https://preview.example.com/emulate/slack/api/auth.test", nil)
@@ -286,7 +303,7 @@ func TestHandlerRewritesHTMLRootPathsThroughPublicServicePrefix(t *testing.T) {
 
 func TestHandlerReturnsUnknownService(t *testing.T) {
 	handler := NewHandler(Options{})
-	req := httptest.NewRequest(http.MethodGet, "https://preview.example.com/emulate/clerk/user", nil)
+	req := httptest.NewRequest(http.MethodGet, "https://preview.example.com/emulate/mongoatlas/user", nil)
 
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
@@ -294,7 +311,7 @@ func TestHandlerReturnsUnknownService(t *testing.T) {
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
 	}
-	if !strings.Contains(res.Body.String(), "Unknown service: clerk") {
+	if !strings.Contains(res.Body.String(), "Unknown service: mongoatlas") {
 		t.Fatalf("unexpected body: %s", res.Body.String())
 	}
 }
