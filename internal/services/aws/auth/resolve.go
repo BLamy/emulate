@@ -83,7 +83,17 @@ func Resolve(req *http.Request, options Options) Context {
 		return ctx
 	}
 
-	if credential, ok := options.Store.Resolve(signature.AccessKeyID); ok {
+	credential, resolution := options.Store.resolve(signature.AccessKeyID)
+	if resolution == credentialExpired {
+		ctx.Status = StatusInvalid
+		ctx.Error = &Error{
+			Code:       "ExpiredToken",
+			Message:    "The security token included in the request is expired.",
+			StatusCode: http.StatusForbidden,
+		}
+		return ctx
+	}
+	if resolution == credentialResolved {
 		if credential.SessionToken != "" && signature.SessionToken != credential.SessionToken {
 			ctx.Status = StatusInvalid
 			ctx.Error = &Error{

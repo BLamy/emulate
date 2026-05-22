@@ -22,6 +22,14 @@ type Store struct {
 	credentials map[string]Credential
 }
 
+type credentialResolution int
+
+const (
+	credentialMissing credentialResolution = iota
+	credentialResolved
+	credentialExpired
+)
+
 func NewStore(credentials ...Credential) *Store {
 	store := &Store{credentials: map[string]Credential{}}
 	for _, credential := range credentials {
@@ -34,19 +42,24 @@ func NewStore(credentials ...Credential) *Store {
 }
 
 func (store *Store) Resolve(accessKeyID string) (Credential, bool) {
+	credential, resolution := store.resolve(accessKeyID)
+	return credential, resolution == credentialResolved
+}
+
+func (store *Store) resolve(accessKeyID string) (Credential, credentialResolution) {
 	if store == nil || accessKeyID == "" {
-		return Credential{}, false
+		return Credential{}, credentialMissing
 	}
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	credential, ok := store.credentials[accessKeyID]
 	if !ok || credential.Disabled {
-		return Credential{}, false
+		return Credential{}, credentialMissing
 	}
 	if !credential.ExpiresAt.IsZero() && time.Now().UTC().After(credential.ExpiresAt) {
-		return Credential{}, false
+		return Credential{}, credentialExpired
 	}
-	return cloneCredential(credential), true
+	return cloneCredential(credential), credentialResolved
 }
 
 func (store *Store) Put(credential Credential) bool {
