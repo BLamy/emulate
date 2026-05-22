@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestParseSigV4Header(t *testing.T) {
@@ -138,6 +139,30 @@ func TestResolveKnownKeysAcceptsStoredSessionToken(t *testing.T) {
 	}
 	if ctx.Error != nil {
 		t.Fatalf("error = %#v, want nil", ctx.Error)
+	}
+}
+
+func TestResolveRejectsExpiredStoredCredential(t *testing.T) {
+	for _, mode := range []Mode{ModeRelaxed, ModeKnownKeys, ModeStrict} {
+		t.Run(mode.String(), func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "https://sts.amazonaws.com/", nil)
+			req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAEXPIRED/20260519/us-east-1/sts/aws4_request, SignedHeaders=host, Signature=abcdef")
+			req.Header.Set("X-Amz-Security-Token", "session-123")
+			store := NewStore(Credential{
+				AccessKeyID:  "AKIAEXPIRED",
+				SessionToken: "session-123",
+				ExpiresAt:    time.Now().UTC().Add(-time.Minute),
+			})
+
+			ctx := Resolve(req, Options{Mode: mode, Store: store})
+
+			if ctx.Status != StatusInvalid {
+				t.Fatalf("status = %q, want %q", ctx.Status, StatusInvalid)
+			}
+			if ctx.Error == nil || ctx.Error.Code != "ExpiredToken" {
+				t.Fatalf("error = %#v, want ExpiredToken", ctx.Error)
+			}
+		})
 	}
 }
 

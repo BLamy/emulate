@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -28,6 +29,12 @@ type Handler struct {
 
 var fallbackIDCounter atomic.Uint64
 
+const (
+	defaultAssumeRoleDurationSeconds = 3600
+	minAssumeRoleDurationSeconds     = 900
+	maxAssumeRoleDurationSeconds     = 43200
+)
+
 func (h *Handler) Handle(_ *http.Request, ctx gateway.AwsRequestContext) protocols.ErrorResponse {
 	requestID := ctx.RequestID
 	if requestID == "" {
@@ -38,7 +45,7 @@ func (h *Handler) Handle(_ *http.Request, ctx gateway.AwsRequestContext) protoco
 	case "GetCallerIdentity":
 		response = h.getCallerIdentity(ctx, requestID)
 	case "AssumeRole":
-		response = h.assumeRole(ctx.Query, requestID)
+		response = h.assumeRole(ctx, requestID)
 	default:
 		action := ctx.Action
 		response = h.queryError("InvalidAction", "The action "+action+" is not valid for this endpoint.", http.StatusBadRequest, requestID)
@@ -67,7 +74,8 @@ func (h *Handler) getCallerIdentity(ctx gateway.AwsRequestContext, requestID str
 	return xmlResponse(http.StatusOK, body)
 }
 
-func (h *Handler) assumeRole(params map[string]string, requestID string) protocols.ErrorResponse {
+func (h *Handler) assumeRole(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
+	params := ctx.Query
 	roleARN := params["RoleArn"]
 	sessionName := params["RoleSessionName"]
 	if sessionName == "" {
@@ -80,14 +88,26 @@ func (h *Handler) assumeRole(params map[string]string, requestID string) protoco
 	accessKeyID := "ASIA" + h.generateID("")[0:16]
 	secretAccessKey := h.generateSecret(30)
 	sessionToken := h.generateSecret(64)
-	expiration := h.now().Add(time.Hour).Format(time.RFC3339Nano)
-	principalARN := roleARN + "/" + sessionName
+	maxDuration := roleMaxSessionDurationFromRecord(role)
+	if isRoleChaining(ctx) && maxDuration > defaultAssumeRoleDurationSeconds {
+		maxDuration = defaultAssumeRoleDurationSeconds
+	}
+	durationSeconds, durationOK := assumeRoleDuration(params["DurationSeconds"], maxDuration)
+	if !durationOK {
+		return h.queryError("ValidationError", "DurationSeconds must be between 900 and "+strconv.Itoa(maxDuration)+" seconds.", http.StatusBadRequest, requestID)
+	}
+	expirationTime := h.now().Add(time.Duration(durationSeconds) * time.Second)
+	expiration := expirationTime.Format(time.RFC3339Nano)
+	principalARN := assumedRoleARN(h.accountID(), stringField(role, "role_name"), sessionName)
 	h.CredentialStore.Put(auth.Credential{
 		AccessKeyID:     accessKeyID,
 		SecretAccessKey: secretAccessKey,
 		SessionToken:    sessionToken,
 		AccountID:       h.accountID(),
 		PrincipalARN:    principalARN,
+		ExpiresAt:       expirationTime,
+		SessionTags:     indexedTags(params),
+		TransitiveTags:  indexedNames(params, "TransitiveTagKeys.member"),
 	})
 	body := `<?xml version="1.0" encoding="UTF-8"?>
 <AssumeRoleResponse>
@@ -102,6 +122,7 @@ func (h *Handler) assumeRole(params map[string]string, requestID string) protoco
       <Arn>` + xmlEscape(principalARN) + `</Arn>
       <AssumedRoleId>` + xmlEscape(stringField(role, "role_id")+":"+sessionName) + `</AssumedRoleId>
     </AssumedRoleUser>
+    <PackedPolicySize>0</PackedPolicySize>
   </AssumeRoleResult>
   <ResponseMetadata><RequestId>` + xmlEscape(requestID) + `</RequestId></ResponseMetadata>
 </AssumeRoleResponse>`
@@ -115,7 +136,12 @@ func (h *Handler) userIDForPrincipal(arn string) string {
 		}
 	}
 	for _, role := range h.Roles.All() {
-		prefix := stringField(role, "arn") + "/"
+		prefix := "arn:aws:sts::" + h.accountID() + ":assumed-role/" + stringField(role, "role_name") + "/"
+		if strings.HasPrefix(arn, prefix) {
+			sessionName := strings.TrimPrefix(arn, prefix)
+			return stringField(role, "role_id") + ":" + sessionName
+		}
+		prefix = stringField(role, "arn") + "/"
 		if strings.HasPrefix(arn, prefix) {
 			sessionName := strings.TrimPrefix(arn, prefix)
 			return stringField(role, "role_id") + ":" + sessionName
@@ -136,6 +162,10 @@ func (h *Handler) findRoleByARN(roleARN string) (corestore.Record, bool) {
 		}
 	}
 	return nil, false
+}
+
+func assumedRoleARN(accountID string, roleName string, sessionName string) string {
+	return "arn:aws:sts::" + accountID + ":assumed-role/" + roleName + "/" + sessionName
 }
 
 func (h *Handler) userByName(userName string) corestore.Record {
@@ -200,6 +230,79 @@ func stringField(record corestore.Record, name string) string {
 		}
 		return fmt.Sprint(value)
 	}
+}
+
+func assumeRoleDuration(raw string, maxDuration int) (int, bool) {
+	if maxDuration <= 0 || maxDuration > maxAssumeRoleDurationSeconds {
+		maxDuration = defaultAssumeRoleDurationSeconds
+	}
+	if raw == "" {
+		return defaultAssumeRoleDurationSeconds, true
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false
+	}
+	if value < minAssumeRoleDurationSeconds || value > maxDuration {
+		return 0, false
+	}
+	return value, true
+}
+
+func roleMaxSessionDurationFromRecord(role corestore.Record) int {
+	switch value := role["max_session_duration"].(type) {
+	case int:
+		if value > 0 {
+			return value
+		}
+	case int64:
+		if value > 0 {
+			return int(value)
+		}
+	case float64:
+		if value > 0 {
+			return int(value)
+		}
+	case string:
+		parsed, err := strconv.Atoi(value)
+		if err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return defaultAssumeRoleDurationSeconds
+}
+
+func isRoleChaining(ctx gateway.AwsRequestContext) bool {
+	return strings.HasPrefix(ctx.Principal.ARN, "arn:aws:sts::") && strings.Contains(ctx.Principal.ARN, ":assumed-role/")
+}
+
+func indexedTags(params map[string]string) map[string]string {
+	tags := map[string]string{}
+	for index := 1; ; index++ {
+		prefix := "Tags.member." + strconv.Itoa(index)
+		key := params[prefix+".Key"]
+		if key == "" {
+			prefix = "Tag." + strconv.Itoa(index)
+			key = params[prefix+".Key"]
+		}
+		if key == "" {
+			break
+		}
+		tags[key] = params[prefix+".Value"]
+	}
+	return tags
+}
+
+func indexedNames(params map[string]string, prefix string) []string {
+	names := []string{}
+	for index := 1; ; index++ {
+		name := params[prefix+"."+strconv.Itoa(index)]
+		if name == "" {
+			break
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 func xmlResponse(status int, body string) protocols.ErrorResponse {

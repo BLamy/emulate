@@ -2546,13 +2546,691 @@ func TestServiceHandlesIAMRolesAndSTS(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("assumed caller status = %d, body = %s", res.Code, res.Body.String())
 	}
-	if arn := xmlElement(res.Body.String(), "Arn"); arn != roleARN+"/test-session" {
-		t.Fatalf("assumed arn = %q, want %q", arn, roleARN+"/test-session")
+	expectedAssumedARN := "arn:aws:sts::123456789012:assumed-role/worker/test-session"
+	if arn := xmlElement(res.Body.String(), "Arn"); arn != expectedAssumedARN {
+		t.Fatalf("assumed arn = %q, want %q", arn, expectedAssumedARN)
 	}
 
 	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteRole&RoleName=worker")
 	if res.Code != http.StatusOK {
 		t.Fatalf("delete role status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestServiceHandlesIAMPoliciesAndSTSSessionMetadata(t *testing.T) {
+	handler := newTestHandler()
+	policyDocument := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*"}]}`
+
+	res := executeAWSQueryRequest(handler, "iam", "Action=CreateUser&UserName=policy-user")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create user status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values := url.Values{}
+	values.Set("Action", "PutUserPolicy")
+	values.Set("UserName", "policy-user")
+	values.Set("PolicyName", "inline-user")
+	values.Set("PolicyDocument", policyDocument)
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("put user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListUserPolicies&UserName=policy-user")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "<member>inline-user</member>") {
+		t.Fatalf("list user policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=GetUserPolicy&UserName=policy-user&PolicyName=inline-user")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), url.QueryEscape(policyDocument)) {
+		t.Fatalf("get user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	assumePolicy := `{"Version":"2012-10-17","Statement":[]}`
+	res = executeAWSQueryRequest(handler, "iam", "Action=CreateRole&RoleName=policy-role&AssumeRolePolicyDocument="+url.QueryEscape(assumePolicy))
+	if res.Code != http.StatusOK {
+		t.Fatalf("create role status = %d, body = %s", res.Code, res.Body.String())
+	}
+	roleARN := xmlElement(res.Body.String(), "Arn")
+
+	values = url.Values{}
+	values.Set("Action", "PutRolePolicy")
+	values.Set("RoleName", "policy-role")
+	values.Set("PolicyName", "inline-role")
+	values.Set("PolicyDocument", policyDocument)
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("put role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListRolePolicies&RoleName=policy-role")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "<member>inline-role</member>") {
+		t.Fatalf("list role policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values = url.Values{}
+	values.Set("Action", "CreatePolicy")
+	values.Set("PolicyName", "managed-policy")
+	values.Set("Path", "/team/")
+	values.Set("Description", "Managed policy")
+	values.Set("PolicyDocument", policyDocument)
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	policyARN := xmlElement(res.Body.String(), "Arn")
+	if policyARN != "arn:aws:iam::123456789012:policy/team/managed-policy" {
+		t.Fatalf("policy arn = %q, body = %s", policyARN, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=GetPolicy&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "<AttachmentCount>0</AttachmentCount>") {
+		t.Fatalf("get policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=GetPolicyVersion&PolicyArn="+url.QueryEscape(policyARN)+"&VersionId=v1")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), url.QueryEscape(policyDocument)) {
+		t.Fatalf("get policy version status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=GetPolicyVersion&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "ValidationError") {
+		t.Fatalf("get policy version without version status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=AttachUserPolicy&UserName=policy-user&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("attach user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=AttachRolePolicy&RoleName=policy-role&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("attach role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListAttachedUserPolicies&UserName=policy-user")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "<PolicyArn>"+policyARN+"</PolicyArn>") {
+		t.Fatalf("list attached user policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListAttachedRolePolicies&RoleName=policy-role")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "<PolicyArn>"+policyARN+"</PolicyArn>") {
+		t.Fatalf("list attached role policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=GetPolicy&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "<AttachmentCount>2</AttachmentCount>") {
+		t.Fatalf("get attached policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values = url.Values{}
+	values.Set("Action", "AssumeRole")
+	values.Set("RoleArn", roleARN)
+	values.Set("RoleSessionName", "tagged-session")
+	values.Set("DurationSeconds", "1800")
+	values.Set("Tags.member.1.Key", "env")
+	values.Set("Tags.member.1.Value", "test")
+	values.Set("TransitiveTagKeys.member.1", "env")
+	res = executeAWSQueryRequest(handler, "sts", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("assume role with tags status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if body := res.Body.String(); !strings.Contains(body, "<PackedPolicySize>0</PackedPolicySize>") || !strings.Contains(body, "<Expiration>") {
+		t.Fatalf("unexpected assume role metadata body: %s", body)
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=DetachUserPolicy&UserName=policy-user&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("detach user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DetachRolePolicy&RoleName=policy-role&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("detach role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeletePolicy&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("delete policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestServiceHandlesAWSManagedPolicyAttachments(t *testing.T) {
+	handler := newTestHandler()
+	assumePolicy := `{"Version":"2012-10-17","Statement":[]}`
+	managedPolicyARN := "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+
+	res := executeAWSQueryRequest(handler, "iam", "Action=CreateUser&UserName=aws-managed-policy-user")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create user status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=CreateRole&RoleName=aws-managed-policy-role&AssumeRolePolicyDocument="+url.QueryEscape(assumePolicy))
+	if res.Code != http.StatusOK {
+		t.Fatalf("create role status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=AttachUserPolicy&UserName=aws-managed-policy-user&PolicyArn="+url.QueryEscape(managedPolicyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("attach user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=AttachRolePolicy&RoleName=aws-managed-policy-role&PolicyArn="+url.QueryEscape(managedPolicyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("attach role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListAttachedUserPolicies&UserName=aws-managed-policy-user&PathPrefix=%2Fservice-role%2F")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list attached user policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if body := res.Body.String(); !strings.Contains(body, "<PolicyName>AWSLambdaBasicExecutionRole</PolicyName>") || !strings.Contains(body, "<PolicyArn>"+managedPolicyARN+"</PolicyArn>") {
+		t.Fatalf("unexpected user attached policy body: %s", body)
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListAttachedRolePolicies&RoleName=aws-managed-policy-role&PathPrefix=%2Fservice-role%2F")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list attached role policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if body := res.Body.String(); !strings.Contains(body, "<PolicyName>AWSLambdaBasicExecutionRole</PolicyName>") || !strings.Contains(body, "<PolicyArn>"+managedPolicyARN+"</PolicyArn>") {
+		t.Fatalf("unexpected role attached policy body: %s", body)
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=DetachUserPolicy&UserName=aws-managed-policy-user&PolicyArn="+url.QueryEscape(managedPolicyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("detach user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DetachRolePolicy&RoleName=aws-managed-policy-role&PolicyArn="+url.QueryEscape(managedPolicyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("detach role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestServiceRejectsDuplicateManagedPolicyNames(t *testing.T) {
+	handler := newTestHandler()
+	policyDocument := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*"}]}`
+
+	values := url.Values{}
+	values.Set("Action", "CreatePolicy")
+	values.Set("PolicyName", "duplicate-managed-policy")
+	values.Set("Path", "/team-a/")
+	values.Set("PolicyDocument", policyDocument)
+	res := executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create first policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values.Set("Path", "/team-b/")
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusConflict {
+		t.Fatalf("create duplicate policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "EntityAlreadyExists") {
+		t.Fatalf("create duplicate policy body = %s", res.Body.String())
+	}
+
+	values.Set("PolicyName", "DUPLICATE-MANAGED-POLICY")
+	values.Set("Path", "/team-c/")
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusConflict {
+		t.Fatalf("create case duplicate policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "EntityAlreadyExists") {
+		t.Fatalf("create case duplicate policy body = %s", res.Body.String())
+	}
+}
+
+func TestServiceFiltersManagedPolicies(t *testing.T) {
+	handler := newTestHandler()
+	policyDocument := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*"}]}`
+
+	res := executeAWSQueryRequest(handler, "iam", "Action=CreateUser&UserName=list-policy-filter-user")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create user status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values := url.Values{}
+	values.Set("Action", "CreatePolicy")
+	values.Set("PolicyName", "attached-filter-policy")
+	values.Set("PolicyDocument", policyDocument)
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create attached policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	attachedARN := xmlElement(res.Body.String(), "Arn")
+
+	values.Set("PolicyName", "unattached-filter-policy")
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create unattached policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=AttachUserPolicy&UserName=list-policy-filter-user&PolicyArn="+url.QueryEscape(attachedARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("attach policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListPolicies&Scope=AWS")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list aws scoped policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "attached-filter-policy") || strings.Contains(res.Body.String(), "unattached-filter-policy") {
+		t.Fatalf("aws scoped policies included local policies: %s", res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListPolicies&Scope=Local")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list local policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "attached-filter-policy") || !strings.Contains(res.Body.String(), "unattached-filter-policy") {
+		t.Fatalf("local scoped policies missing local policies: %s", res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListPolicies&OnlyAttached=true")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list attached policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "attached-filter-policy") || strings.Contains(res.Body.String(), "unattached-filter-policy") {
+		t.Fatalf("attached-only policies were not filtered: %s", res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListPolicies&Scope=Invalid")
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("invalid scope status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "InvalidInput") {
+		t.Fatalf("invalid scope body = %s", res.Body.String())
+	}
+}
+
+func TestServiceFiltersAttachedManagedPolicyPathPrefixes(t *testing.T) {
+	handler := newTestHandler()
+	policyDocument := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*"}]}`
+	assumePolicy := `{"Version":"2012-10-17","Statement":[]}`
+
+	res := executeAWSQueryRequest(handler, "iam", "Action=CreateUser&UserName=attached-path-user")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create user status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=CreateRole&RoleName=attached-path-role&AssumeRolePolicyDocument="+url.QueryEscape(assumePolicy))
+	if res.Code != http.StatusOK {
+		t.Fatalf("create role status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values := url.Values{}
+	values.Set("Action", "CreatePolicy")
+	values.Set("PolicyName", "team-attached-path-policy")
+	values.Set("Path", "/team/")
+	values.Set("PolicyDocument", policyDocument)
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create team policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	teamARN := xmlElement(res.Body.String(), "Arn")
+
+	values.Set("PolicyName", "other-attached-path-policy")
+	values.Set("Path", "/other/")
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create other policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	otherARN := xmlElement(res.Body.String(), "Arn")
+
+	for _, policyARN := range []string{teamARN, otherARN} {
+		res = executeAWSQueryRequest(handler, "iam", "Action=AttachUserPolicy&UserName=attached-path-user&PolicyArn="+url.QueryEscape(policyARN))
+		if res.Code != http.StatusOK {
+			t.Fatalf("attach user policy %s status = %d, body = %s", policyARN, res.Code, res.Body.String())
+		}
+		res = executeAWSQueryRequest(handler, "iam", "Action=AttachRolePolicy&RoleName=attached-path-role&PolicyArn="+url.QueryEscape(policyARN))
+		if res.Code != http.StatusOK {
+			t.Fatalf("attach role policy %s status = %d, body = %s", policyARN, res.Code, res.Body.String())
+		}
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListAttachedUserPolicies&UserName=attached-path-user&PathPrefix=%2Fteam%2F")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list attached user policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if body := res.Body.String(); !strings.Contains(body, "team-attached-path-policy") || strings.Contains(body, "other-attached-path-policy") {
+		t.Fatalf("user path prefix filter body = %s", body)
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListAttachedRolePolicies&RoleName=attached-path-role&PathPrefix=%2Fteam%2F")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list attached role policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if body := res.Body.String(); !strings.Contains(body, "team-attached-path-policy") || strings.Contains(body, "other-attached-path-policy") {
+		t.Fatalf("role path prefix filter body = %s", body)
+	}
+}
+
+func TestServiceRejectsMalformedIAMPolicyDocuments(t *testing.T) {
+	handler := newTestHandler()
+	assumePolicy := `{"Version":"2012-10-17","Statement":[]}`
+
+	res := executeAWSQueryRequest(handler, "iam", "Action=CreateUser&UserName=malformed-policy-user")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create user status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=CreateRole&RoleName=malformed-policy-role&AssumeRolePolicyDocument="+url.QueryEscape(assumePolicy))
+	if res.Code != http.StatusOK {
+		t.Fatalf("create role status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	tests := []struct {
+		name   string
+		values url.Values
+	}{
+		{
+			name: "inline user policy",
+			values: url.Values{
+				"Action":         {"PutUserPolicy"},
+				"UserName":       {"malformed-policy-user"},
+				"PolicyName":     {"bad-inline-user"},
+				"PolicyDocument": {"{"},
+			},
+		},
+		{
+			name: "inline role policy",
+			values: url.Values{
+				"Action":         {"PutRolePolicy"},
+				"RoleName":       {"malformed-policy-role"},
+				"PolicyName":     {"bad-inline-role"},
+				"PolicyDocument": {"[]"},
+			},
+		},
+		{
+			name: "managed policy",
+			values: url.Values{
+				"Action":         {"CreatePolicy"},
+				"PolicyName":     {"bad-managed-policy"},
+				"PolicyDocument": {""},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			res := executeAWSQueryRequest(handler, "iam", test.values.Encode())
+			if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "MalformedPolicyDocument") {
+				t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
+func TestServiceRejectsPolicyDeleteAndDetachInconsistentState(t *testing.T) {
+	handler := newTestHandler()
+	policyDocument := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*"}]}`
+	assumePolicy := `{"Version":"2012-10-17","Statement":[]}`
+
+	res := executeAWSQueryRequest(handler, "iam", "Action=CreateUser&UserName=attached-policy-user")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create user status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=CreateRole&RoleName=attached-policy-role&AssumeRolePolicyDocument="+url.QueryEscape(assumePolicy))
+	if res.Code != http.StatusOK {
+		t.Fatalf("create role status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values := url.Values{}
+	values.Set("Action", "CreatePolicy")
+	values.Set("PolicyName", "attached-managed-policy")
+	values.Set("PolicyDocument", policyDocument)
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	policyARN := xmlElement(res.Body.String(), "Arn")
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=AttachUserPolicy&UserName=attached-policy-user&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("attach user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=AttachRolePolicy&RoleName=attached-policy-role&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("attach role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	missingPolicyARN := "arn:aws:iam::123456789012:policy/missing"
+	res = executeAWSQueryRequest(handler, "iam", "Action=DetachUserPolicy&UserName=attached-policy-user&PolicyArn="+url.QueryEscape(missingPolicyARN))
+	if res.Code != http.StatusNotFound || !strings.Contains(res.Body.String(), "NoSuchEntity") {
+		t.Fatalf("detach missing user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DetachRolePolicy&RoleName=attached-policy-role&PolicyArn="+url.QueryEscape(missingPolicyARN))
+	if res.Code != http.StatusNotFound || !strings.Contains(res.Body.String(), "NoSuchEntity") {
+		t.Fatalf("detach missing role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeletePolicy&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusConflict || !strings.Contains(res.Body.String(), "DeleteConflict") {
+		t.Fatalf("delete attached policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=GetPolicy&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "<AttachmentCount>2</AttachmentCount>") {
+		t.Fatalf("get attached policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=DetachUserPolicy&UserName=attached-policy-user&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("detach user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeletePolicy&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusConflict || !strings.Contains(res.Body.String(), "DeleteConflict") {
+		t.Fatalf("delete policy with role attachment status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DetachRolePolicy&RoleName=attached-policy-role&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("detach role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeletePolicy&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("delete detached policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestServiceRejectsIAMOwnerDeleteWithPolicies(t *testing.T) {
+	handler := newTestHandler()
+	policyDocument := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*"}]}`
+	assumePolicy := `{"Version":"2012-10-17","Statement":[]}`
+
+	res := executeAWSQueryRequest(handler, "iam", "Action=CreateUser&UserName=delete-policy-user")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create user status = %d, body = %s", res.Code, res.Body.String())
+	}
+	values := url.Values{}
+	values.Set("Action", "PutUserPolicy")
+	values.Set("UserName", "delete-policy-user")
+	values.Set("PolicyName", "inline-user")
+	values.Set("PolicyDocument", policyDocument)
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("put user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteUser&UserName=delete-policy-user")
+	if res.Code != http.StatusConflict {
+		t.Fatalf("delete user with inline policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "DeleteConflict") {
+		t.Fatalf("delete user with inline policy body = %s", res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteUserPolicy&UserName=delete-policy-user&PolicyName=inline-user")
+	if res.Code != http.StatusOK {
+		t.Fatalf("delete user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=CreateRole&RoleName=delete-policy-role&AssumeRolePolicyDocument="+url.QueryEscape(assumePolicy))
+	if res.Code != http.StatusOK {
+		t.Fatalf("create role status = %d, body = %s", res.Code, res.Body.String())
+	}
+	values = url.Values{}
+	values.Set("Action", "PutRolePolicy")
+	values.Set("RoleName", "delete-policy-role")
+	values.Set("PolicyName", "inline-role")
+	values.Set("PolicyDocument", policyDocument)
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("put role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteRole&RoleName=delete-policy-role")
+	if res.Code != http.StatusConflict {
+		t.Fatalf("delete role with inline policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "DeleteConflict") {
+		t.Fatalf("delete role with inline policy body = %s", res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteRolePolicy&RoleName=delete-policy-role&PolicyName=inline-role")
+	if res.Code != http.StatusOK {
+		t.Fatalf("delete role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values = url.Values{}
+	values.Set("Action", "CreatePolicy")
+	values.Set("PolicyName", "delete-owner-managed-policy")
+	values.Set("PolicyDocument", policyDocument)
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create managed policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	policyARN := xmlElement(res.Body.String(), "Arn")
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=AttachUserPolicy&UserName=delete-policy-user&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("attach user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=AttachRolePolicy&RoleName=delete-policy-role&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("attach role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteUser&UserName=delete-policy-user")
+	if res.Code != http.StatusConflict {
+		t.Fatalf("delete user with attached policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "DeleteConflict") {
+		t.Fatalf("delete user with attached policy body = %s", res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteRole&RoleName=delete-policy-role")
+	if res.Code != http.StatusConflict {
+		t.Fatalf("delete role with attached policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "DeleteConflict") {
+		t.Fatalf("delete role with attached policy body = %s", res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=DetachUserPolicy&UserName=delete-policy-user&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("detach user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DetachRolePolicy&RoleName=delete-policy-role&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("detach role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteUser&UserName=delete-policy-user")
+	if res.Code != http.StatusOK {
+		t.Fatalf("delete cleaned user status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteRole&RoleName=delete-policy-role")
+	if res.Code != http.StatusOK {
+		t.Fatalf("delete cleaned role status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestServiceRejectsMissingInlinePolicyDeletes(t *testing.T) {
+	handler := newTestHandler()
+	assumePolicy := `{"Version":"2012-10-17","Statement":[]}`
+
+	res := executeAWSQueryRequest(handler, "iam", "Action=CreateUser&UserName=missing-inline-policy-user")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create user status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=CreateRole&RoleName=missing-inline-policy-role&AssumeRolePolicyDocument="+url.QueryEscape(assumePolicy))
+	if res.Code != http.StatusOK {
+		t.Fatalf("create role status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteUserPolicy&UserName=missing-inline-policy-user&PolicyName=missing")
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("delete missing user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "NoSuchEntity") {
+		t.Fatalf("delete missing user policy body = %s", res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteRolePolicy&RoleName=missing-inline-policy-role&PolicyName=missing")
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("delete missing role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "NoSuchEntity") {
+		t.Fatalf("delete missing role policy body = %s", res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteUserPolicy&UserName=missing-inline-policy-user")
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("delete unnamed user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "ValidationError") {
+		t.Fatalf("delete unnamed user policy body = %s", res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteRolePolicy&RoleName=missing-inline-policy-role")
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("delete unnamed role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "ValidationError") {
+		t.Fatalf("delete unnamed role policy body = %s", res.Body.String())
+	}
+}
+
+func TestServiceRejectsInvalidAssumeRoleDuration(t *testing.T) {
+	handler := newTestHandler()
+	assumePolicy := `{"Version":"2012-10-17","Statement":[]}`
+
+	res := executeAWSQueryRequest(handler, "iam", "Action=CreateRole&RoleName=duration-role&AssumeRolePolicyDocument="+url.QueryEscape(assumePolicy))
+	if res.Code != http.StatusOK {
+		t.Fatalf("create role status = %d, body = %s", res.Code, res.Body.String())
+	}
+	roleARN := xmlElement(res.Body.String(), "Arn")
+
+	for _, duration := range []string{"abc", "899", "3601", "43201"} {
+		values := url.Values{}
+		values.Set("Action", "AssumeRole")
+		values.Set("RoleArn", roleARN)
+		values.Set("RoleSessionName", "bad-duration")
+		values.Set("DurationSeconds", duration)
+		res = executeAWSQueryRequest(handler, "sts", values.Encode())
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("duration %q status = %d, body = %s", duration, res.Code, res.Body.String())
+		}
+		if !strings.Contains(res.Body.String(), "ValidationError") {
+			t.Fatalf("duration %q body = %s", duration, res.Body.String())
+		}
+	}
+}
+
+func TestServiceEnforcesRoleMaxSessionDurationAndChaining(t *testing.T) {
+	handler := newTestHandler()
+	assumePolicy := `{"Version":"2012-10-17","Statement":[]}`
+
+	values := url.Values{}
+	values.Set("Action", "CreateRole")
+	values.Set("RoleName", "long-duration-role")
+	values.Set("AssumeRolePolicyDocument", assumePolicy)
+	values.Set("MaxSessionDuration", "7200")
+	res := executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create role status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "<MaxSessionDuration>7200</MaxSessionDuration>") {
+		t.Fatalf("create role missing max session duration: %s", res.Body.String())
+	}
+	roleARN := xmlElement(res.Body.String(), "Arn")
+
+	values = url.Values{}
+	values.Set("Action", "AssumeRole")
+	values.Set("RoleArn", roleARN)
+	values.Set("RoleSessionName", "long-session")
+	values.Set("DurationSeconds", "7200")
+	res = executeAWSQueryRequest(handler, "sts", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("assume long role status = %d, body = %s", res.Code, res.Body.String())
+	}
+	assumedAccessKey := xmlElement(res.Body.String(), "AccessKeyId")
+	sessionToken := xmlElement(res.Body.String(), "SessionToken")
+
+	values.Set("RoleSessionName", "too-long-chain")
+	values.Set("DurationSeconds", "3601")
+	res = executeAWSQueryRequestWithAccessKeyAndToken(handler, "sts", values.Encode(), assumedAccessKey, sessionToken)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "ValidationError") {
+		t.Fatalf("chained assume role status = %d, body = %s", res.Code, res.Body.String())
 	}
 }
 
@@ -3449,7 +4127,7 @@ func TestNewStoreCreatesAWSCollections(t *testing.T) {
 	awsStore.KMSKeys.Insert(corestore.Record{"account_id": "123456789012", "region": "us-east-1", "key_id": "key-1", "arn": "arn:aws:kms:us-east-1:123456789012:key/key-1"})
 
 	snapshot := runtimeStore.Snapshot()
-	for _, name := range []string{"aws.s3_buckets", "aws.s3_objects", "aws.sqs_queues", "aws.sqs_messages", "aws.sns_topics", "aws.sns_subscriptions", "aws.sns_deliveries", "aws.event_buses", "aws.event_rules", "aws.event_targets", "aws.event_deliveries", "aws.log_groups", "aws.log_streams", "aws.log_events", "aws.secretsmanager_secrets", "aws.secretsmanager_versions", "aws.ssm_parameters", "aws.ssm_parameter_versions", "aws.kms_keys", "aws.kms_aliases", "aws.iam_users", "aws.iam_roles", "aws.dynamodb_tables", "aws.dynamodb_items"} {
+	for _, name := range []string{"aws.s3_buckets", "aws.s3_objects", "aws.sqs_queues", "aws.sqs_messages", "aws.sns_topics", "aws.sns_subscriptions", "aws.sns_deliveries", "aws.event_buses", "aws.event_rules", "aws.event_targets", "aws.event_deliveries", "aws.log_groups", "aws.log_streams", "aws.log_events", "aws.secretsmanager_secrets", "aws.secretsmanager_versions", "aws.ssm_parameters", "aws.ssm_parameter_versions", "aws.kms_keys", "aws.kms_aliases", "aws.iam_users", "aws.iam_roles", "aws.iam_policies", "aws.dynamodb_tables", "aws.dynamodb_items"} {
 		if _, ok := snapshot.Collections[name]; !ok {
 			t.Fatalf("missing collection %s", name)
 		}

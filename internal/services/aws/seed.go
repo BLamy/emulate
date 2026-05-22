@@ -53,10 +53,11 @@ type IAMUserSeed struct {
 }
 
 type IAMRoleSeed struct {
-	RoleName         string `json:"role_name"`
-	Path             string `json:"path"`
-	Description      string `json:"description"`
-	AssumeRolePolicy string `json:"assume_role_policy"`
+	RoleName           string `json:"role_name"`
+	Path               string `json:"path"`
+	Description        string `json:"description"`
+	AssumeRolePolicy   string `json:"assume_role_policy"`
+	MaxSessionDuration int    `json:"max_session_duration"`
 }
 
 type SecretsManagerSeed struct {
@@ -195,11 +196,13 @@ func seedIAMFromConfig(store Store, credentialStore *auth.Store, accountID strin
 			})
 		}
 		store.IAMUsers.Insert(corestore.Record{
-			"user_name":   userName,
-			"user_id":     generateAWSID("AIDA"),
-			"arn":         arn,
-			"path":        path,
-			"access_keys": accessKeys,
+			"user_name":         userName,
+			"user_id":           generateAWSID("AIDA"),
+			"arn":               arn,
+			"path":              path,
+			"inline_policies":   []corestore.Record{},
+			"attached_policies": []string{},
+			"access_keys":       accessKeys,
 		})
 	}
 	for _, role := range config.Roles {
@@ -208,6 +211,10 @@ func seedIAMFromConfig(store Store, credentialStore *auth.Store, accountID strin
 			continue
 		}
 		path := firstNonEmpty(role.Path, "/")
+		maxSessionDuration := role.MaxSessionDuration
+		if maxSessionDuration < 3600 || maxSessionDuration > 43200 {
+			maxSessionDuration = 3600
+		}
 		store.IAMRoles.Insert(corestore.Record{
 			"role_name":                   roleName,
 			"role_id":                     generateAWSID("AROA"),
@@ -215,6 +222,9 @@ func seedIAMFromConfig(store Store, credentialStore *auth.Store, accountID strin
 			"path":                        path,
 			"assume_role_policy_document": firstNonEmpty(role.AssumeRolePolicy, "{}"),
 			"description":                 role.Description,
+			"max_session_duration":        maxSessionDuration,
+			"inline_policies":             []corestore.Record{},
+			"attached_policies":           []string{},
 		})
 	}
 }
