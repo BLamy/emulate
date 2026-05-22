@@ -145,6 +145,9 @@ func (h *Handler) deleteUser(params map[string]string, requestID string) protoco
 	if !ok {
 		return h.noSuchUser(userName, requestID)
 	}
+	if len(inlinePolicies(user)) > 0 || len(attachedPolicies(user)) > 0 {
+		return h.deleteConflict("Cannot delete a user with policies attached.", requestID)
+	}
 	for _, key := range accessKeys(user) {
 		h.CredentialStore.Delete(stringField(key, "access_key_id"))
 	}
@@ -312,6 +315,9 @@ func (h *Handler) deleteRole(params map[string]string, requestID string) protoco
 	if !ok {
 		return h.noSuchRole(roleName, requestID)
 	}
+	if len(inlinePolicies(role)) > 0 || len(attachedPolicies(role)) > 0 {
+		return h.deleteConflict("Cannot delete a role with policies attached.", requestID)
+	}
 	h.Roles.Delete(intField(role, "id"))
 	body := `<?xml version="1.0" encoding="UTF-8"?>
 <DeleteRoleResponse>
@@ -390,7 +396,15 @@ func (h *Handler) deleteUserPolicy(params map[string]string, requestID string) p
 	if !ok {
 		return h.noSuchUser(userName, requestID)
 	}
-	h.Users.Update(intField(user, "id"), corestore.Record{"inline_policies": removeInlinePolicy(inlinePolicies(user), params["PolicyName"])})
+	policyName := params["PolicyName"]
+	if policyName == "" {
+		return h.queryError("ValidationError", "The request must contain the parameter PolicyName.", http.StatusBadRequest, requestID)
+	}
+	_, policyExists := findInlinePolicy(user, policyName)
+	if !policyExists {
+		return h.noSuchPolicy(policyName, requestID)
+	}
+	h.Users.Update(intField(user, "id"), corestore.Record{"inline_policies": removeInlinePolicy(inlinePolicies(user), policyName)})
 	return emptyResponse("DeleteUserPolicy", requestID)
 }
 
@@ -442,7 +456,15 @@ func (h *Handler) deleteRolePolicy(params map[string]string, requestID string) p
 	if !ok {
 		return h.noSuchRole(roleName, requestID)
 	}
-	h.Roles.Update(intField(role, "id"), corestore.Record{"inline_policies": removeInlinePolicy(inlinePolicies(role), params["PolicyName"])})
+	policyName := params["PolicyName"]
+	if policyName == "" {
+		return h.queryError("ValidationError", "The request must contain the parameter PolicyName.", http.StatusBadRequest, requestID)
+	}
+	_, policyExists := findInlinePolicy(role, policyName)
+	if !policyExists {
+		return h.noSuchPolicy(policyName, requestID)
+	}
+	h.Roles.Update(intField(role, "id"), corestore.Record{"inline_policies": removeInlinePolicy(inlinePolicies(role), policyName)})
 	return emptyResponse("DeleteRolePolicy", requestID)
 }
 
@@ -544,7 +566,7 @@ func (h *Handler) deletePolicy(params map[string]string, requestID string) proto
 	}
 	policyARN := stringField(policy, "arn")
 	if h.policyAttachmentCount(policyARN) > 0 {
-		return h.queryError("DeleteConflict", "Cannot delete a policy attached to users or roles.", http.StatusConflict, requestID)
+		return h.deleteConflict("Cannot delete a policy attached to users or roles.", requestID)
 	}
 	h.Policies.Delete(intField(policy, "id"))
 	return emptyResponse("DeletePolicy", requestID)
@@ -841,6 +863,10 @@ func (h *Handler) noSuchPolicy(policyName string, requestID string) protocols.Er
 
 func (h *Handler) malformedPolicyDocument(requestID string) protocols.ErrorResponse {
 	return h.queryError("MalformedPolicyDocument", "The policy document is malformed.", http.StatusBadRequest, requestID)
+}
+
+func (h *Handler) deleteConflict(message string, requestID string) protocols.ErrorResponse {
+	return h.queryError("DeleteConflict", message, http.StatusConflict, requestID)
 }
 
 func (h *Handler) queryError(code string, message string, status int, requestID string) protocols.ErrorResponse {

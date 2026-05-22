@@ -29,6 +29,12 @@ type Handler struct {
 
 var fallbackIDCounter atomic.Uint64
 
+const (
+	defaultAssumeRoleDurationSeconds = 3600
+	minAssumeRoleDurationSeconds     = 900
+	maxAssumeRoleDurationSeconds     = 43200
+)
+
 func (h *Handler) Handle(_ *http.Request, ctx gateway.AwsRequestContext) protocols.ErrorResponse {
 	requestID := ctx.RequestID
 	if requestID == "" {
@@ -81,9 +87,9 @@ func (h *Handler) assumeRole(params map[string]string, requestID string) protoco
 	accessKeyID := "ASIA" + h.generateID("")[0:16]
 	secretAccessKey := h.generateSecret(30)
 	sessionToken := h.generateSecret(64)
-	durationSeconds := intParam(params["DurationSeconds"], 3600)
-	if durationSeconds <= 0 {
-		durationSeconds = 3600
+	durationSeconds, durationOK := assumeRoleDuration(params["DurationSeconds"])
+	if !durationOK {
+		return h.queryError("ValidationError", "DurationSeconds must be between 900 and 43200 seconds.", http.StatusBadRequest, requestID)
 	}
 	expirationTime := h.now().Add(time.Duration(durationSeconds) * time.Second)
 	expiration := expirationTime.Format(time.RFC3339Nano)
@@ -212,12 +218,18 @@ func stringField(record corestore.Record, name string) string {
 	}
 }
 
-func intParam(raw string, fallback int) int {
+func assumeRoleDuration(raw string) (int, bool) {
+	if raw == "" {
+		return defaultAssumeRoleDurationSeconds, true
+	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {
-		return fallback
+		return 0, false
 	}
-	return value
+	if value < minAssumeRoleDurationSeconds || value > maxAssumeRoleDurationSeconds {
+		return 0, false
+	}
+	return value, true
 }
 
 func indexedTags(params map[string]string) map[string]string {

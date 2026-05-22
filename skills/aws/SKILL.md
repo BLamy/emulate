@@ -500,7 +500,7 @@ In the native Go runtime, `@aws-sdk/client-kms` can use endpoint `${AWS_EMULATOR
 
 ### IAM
 
-Manual IAM calls can use AWS Query over `POST /iam/` with `Action` as a form-urlencoded parameter. In the native Go runtime, the same operations also work through `@aws-sdk/client-iam` with endpoint `${AWS_EMULATOR_URL}/iam`. Supported IAM operations include users, access keys, roles, inline user/role policies, managed policy storage, and user/role managed policy attachments.
+Manual IAM calls can use AWS Query over `POST /iam/` with `Action` as a form-urlencoded parameter. In the native Go runtime, the same operations also work through `@aws-sdk/client-iam` with endpoint `${AWS_EMULATOR_URL}/iam`. Supported IAM operations include users, access keys, roles, inline user/role policies, managed policy storage, and user/role managed policy attachments. Delete users and roles after deleting inline policies and detaching managed policies.
 
 ```bash
 # Create user
@@ -587,7 +587,7 @@ curl -X POST http://localhost:4000/sts/ \
   -H "Authorization: Bearer $TOKEN" \
   -d "Action=GetCallerIdentity"
 
-# Assume role
+# Assume role. DurationSeconds must be from 900 to 43200 seconds.
 curl -X POST http://localhost:4000/sts/ \
   -H "Authorization: Bearer $TOKEN" \
   -d "Action=AssumeRole&RoleArn=arn:aws:iam::123456789012:role/my-role&RoleSessionName=my-session&DurationSeconds=1800&Tags.member.1.Key=env&Tags.member.1.Value=test"
