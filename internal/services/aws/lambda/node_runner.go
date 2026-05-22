@@ -47,7 +47,7 @@ func (h *Handler) invokeLocalNode(ctx gateway.AwsRequestContext, fn corestore.Re
 	if err != nil {
 		return localInvokeResult{}, false
 	}
-	workingDir, err := os.MkdirTemp("/tmp", "emulate-lambda-*")
+	workingDir, err := os.MkdirTemp("", "emulate-lambda-*")
 	if err != nil {
 		return localInvokeFailure("Runtime.Unknown", err.Error(), nil), true
 	}
@@ -69,9 +69,10 @@ func (h *Handler) invokeLocalNode(ctx gateway.AwsRequestContext, fn corestore.Re
 	contextValue, _ := json.Marshal(lambdaNodeContext(ctx, fn, executedVersion, requestID, timeoutSeconds))
 	runCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, "node", wrapperPath, stringField(fn, "handler"), base64.StdEncoding.EncodeToString(payload), base64.StdEncoding.EncodeToString(contextValue))
+	cmd := exec.CommandContext(runCtx, "node", wrapperPath, stringField(fn, "handler"), base64.StdEncoding.EncodeToString(contextValue))
 	cmd.Dir = workingDir
 	cmd.Env = lambdaNodeEnvironment(ctx, fn, executedVersion)
+	cmd.Stdin = bytes.NewReader(payload)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -258,12 +259,13 @@ func splitLogLines(value string) []string {
 	return out
 }
 
-const lambdaNodeWrapperSource = `import { createRequire } from "node:module";
+const lambdaNodeWrapperSource = `import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const marker = "__EMULATE_LAMBDA_RESULT__";
-const [handlerSpec, eventBase64 = "", contextBase64 = ""] = process.argv.slice(2);
+const [handlerSpec, contextBase64 = ""] = process.argv.slice(2);
 const logs = [];
 
 function formatLog(value) {
@@ -302,7 +304,7 @@ function respond(envelope) {
 }
 
 function parseEvent() {
-  const raw = Buffer.from(eventBase64, "base64").toString("utf8");
+  const raw = readFileSync(0, "utf8");
   if (raw.trim() === "") return {};
   return JSON.parse(raw);
 }
@@ -324,20 +326,29 @@ async function loadHandler(spec) {
   const candidates = [base, base + ".js", base + ".mjs", path.join(base, "index.js"), path.join(base, "index.mjs")];
   let lastError;
   for (const candidate of candidates) {
+    let resolved;
     try {
-      const loaded = require(candidate);
-      const handler = loaded[exportName] || (loaded.default && loaded.default[exportName]) || (exportName === "default" ? loaded.default : undefined);
-      if (typeof handler === "function") return handler;
+      resolved = require.resolve(candidate);
     } catch (error) {
-      lastError = error;
+      if (error && error.code === "MODULE_NOT_FOUND") {
+        lastError = error;
+        continue;
+      }
+      throw error;
     }
+    let loaded;
     try {
-      const loaded = await import(pathToFileURL(path.resolve(process.cwd(), candidate)).href);
-      const handler = loaded[exportName] || (loaded.default && loaded.default[exportName]) || (exportName === "default" ? loaded.default : undefined);
-      if (typeof handler === "function") return handler;
+      loaded = require(resolved);
     } catch (error) {
-      lastError = error;
+      if (error && error.code === "ERR_REQUIRE_ESM") {
+        loaded = await import(pathToFileURL(resolved).href);
+      } else {
+        throw error;
+      }
     }
+    const handler = loaded[exportName] || (loaded.default && loaded.default[exportName]) || (exportName === "default" ? loaded.default : undefined);
+    if (typeof handler === "function") return handler;
+    lastError = new Error("Lambda handler export " + JSON.stringify(exportName) + " was not found in " + JSON.stringify(candidate));
   }
   throw lastError || new Error("Cannot load Lambda handler " + JSON.stringify(spec));
 }

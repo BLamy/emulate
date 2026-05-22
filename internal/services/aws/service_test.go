@@ -4240,6 +4240,46 @@ func TestServiceRunsLocalNodeLambdaHandler(t *testing.T) {
 		t.Fatalf("unexpected open handle body: %#v", openHandleBody)
 	}
 
+	largePayloadZip := zipLambdaSource(t, map[string]string{"index.js": `exports.handler = async (event) => ({ size: event.data.length });`})
+	largePayloadUpdate := executeAWSLambdaRequest(t, handler, http.MethodPut, "/2015-03-31/functions/node-runner/code", map[string]any{"ZipFile": largePayloadZip})
+	if largePayloadUpdate.Code != http.StatusOK {
+		t.Fatalf("update large payload code status = %d, body = %s", largePayloadUpdate.Code, largePayloadUpdate.Body.String())
+	}
+	largePayloadSize := 2 * 1024 * 1024
+	largePayloadInvoke := executeAWSLambdaRawRequestWithAccessKey(t, handler, http.MethodPost, "/2015-03-31/functions/node-runner/invocations", []byte(`{"data":"`+strings.Repeat("x", largePayloadSize)+`"}`), accessKeyID)
+	if largePayloadInvoke.Code != http.StatusOK {
+		t.Fatalf("large payload invoke status = %d, body = %s", largePayloadInvoke.Code, largePayloadInvoke.Body.String())
+	}
+	var largePayloadBody struct {
+		Size int `json:"size"`
+	}
+	decodeJSONBody(t, largePayloadInvoke, &largePayloadBody)
+	if largePayloadBody.Size != largePayloadSize {
+		t.Fatalf("large payload size = %d, want %d, body = %s", largePayloadBody.Size, largePayloadSize, largePayloadInvoke.Body.String())
+	}
+
+	initErrorZip := zipLambdaSource(t, map[string]string{"index.js": `throw new Error("init boom");
+exports.handler = async () => ({ ok: true });
+`})
+	initErrorUpdate := executeAWSLambdaRequest(t, handler, http.MethodPut, "/2015-03-31/functions/node-runner/code", map[string]any{"ZipFile": initErrorZip})
+	if initErrorUpdate.Code != http.StatusOK {
+		t.Fatalf("update init error code status = %d, body = %s", initErrorUpdate.Code, initErrorUpdate.Body.String())
+	}
+	initFailed := executeAWSLambdaRawRequestWithAccessKey(t, handler, http.MethodPost, "/2015-03-31/functions/node-runner/invocations", []byte(`{}`), accessKeyID)
+	if initFailed.Code != http.StatusOK {
+		t.Fatalf("init error invoke status = %d, body = %s", initFailed.Code, initFailed.Body.String())
+	}
+	if got := initFailed.Header().Get("x-amz-function-error"); got != "Unhandled" {
+		t.Fatalf("init error function error = %q, want Unhandled", got)
+	}
+	var initFailedBody struct {
+		ErrorMessage string `json:"errorMessage"`
+	}
+	decodeJSONBody(t, initFailed, &initFailedBody)
+	if initFailedBody.ErrorMessage != "init boom" {
+		t.Fatalf("unexpected init error body: %#v", initFailedBody)
+	}
+
 	errorZip := zipLambdaSource(t, map[string]string{"index.js": `exports.handler = async () => {
   console.error("before boom");
   throw new Error("boom");
