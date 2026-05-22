@@ -111,6 +111,51 @@ func TestHandlerPutsGetsOverwritesAndDescribesParameters(t *testing.T) {
 	}
 }
 
+func TestHandlerOverwritesWithCanonicalParameterName(t *testing.T) {
+	handler := newTestSSMHandler()
+
+	response := handler.call("PutParameter", map[string]any{
+		"Name":  "/app/canonical",
+		"Value": "initial",
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("put status = %d, body = %s", response.StatusCode, response.Body)
+	}
+
+	response = handler.call("PutParameter", map[string]any{
+		"Name":      "app/canonical",
+		"Value":     "rotated",
+		"Overwrite": true,
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("overwrite alias status = %d, body = %s", response.StatusCode, response.Body)
+	}
+
+	response = handler.call("GetParameter", map[string]any{"Name": "app/canonical:2"})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("get aliased version status = %d, body = %s", response.StatusCode, response.Body)
+	}
+	var got struct {
+		Parameter struct {
+			Name    string `json:"Name"`
+			Value   string `json:"Value"`
+			Version int64  `json:"Version"`
+		} `json:"Parameter"`
+	}
+	decodeSSMBody(t, response, &got)
+	if got.Parameter.Name != "/app/canonical" || got.Parameter.Value != "rotated" || got.Parameter.Version != 2 {
+		t.Fatalf("unexpected aliased version response: %#v", got.Parameter)
+	}
+
+	response = handler.call("DeleteParameter", map[string]any{"Name": "app/canonical"})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("delete alias status = %d, body = %s", response.StatusCode, response.Body)
+	}
+	if count := handler.handler.Versions.Count(); count != 0 {
+		t.Fatalf("orphaned versions after delete = %d", count)
+	}
+}
+
 func TestHandlerSupportsStringListSecureStringAndPathQueries(t *testing.T) {
 	handler := newTestSSMHandler()
 	for _, input := range []map[string]any{

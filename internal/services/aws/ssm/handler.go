@@ -74,6 +74,10 @@ func (h *Handler) putParameter(ctx gateway.AwsRequestContext, requestID string) 
 	if exists && !boolInput(ctx.Input, "Overwrite", "overwrite") {
 		return h.error("ParameterAlreadyExists", "The parameter already exists.", http.StatusBadRequest, requestID)
 	}
+	storedName := name
+	if exists {
+		storedName = firstNonEmpty(stringField(existing, "name"), name)
+	}
 	parameterType, response, ok := h.parameterType(ctx.Input, existing, requestID)
 	if !ok {
 		return response
@@ -102,7 +106,7 @@ func (h *Handler) putParameter(ctx gateway.AwsRequestContext, requestID string) 
 			"data_type":          dataType,
 			"last_modified_date": now,
 			"tags":               tags,
-			"path":               parameterPath(name),
+			"path":               parameterPath(storedName),
 		})
 	} else {
 		h.Parameters.Insert(corestore.Record{
@@ -128,7 +132,7 @@ func (h *Handler) putParameter(ctx gateway.AwsRequestContext, requestID string) 
 			"has_secure_material": parameterType == "SecureString",
 		})
 	}
-	h.insertVersion(ctx, name, version, parameterType, value, description, keyID, tier, dataType, now)
+	h.insertVersion(ctx, storedName, version, parameterType, value, description, keyID, tier, dataType, now)
 	return jsonResponse(http.StatusOK, map[string]any{
 		"Version": version,
 		"Tier":    tier,
