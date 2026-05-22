@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -948,6 +949,166 @@ func TestServiceHandlesSQSBatchVisibilityAttributesAndTags(t *testing.T) {
 	}
 	if body := res.Body.String(); strings.Count(body, "<DeleteMessageBatchResultEntry>") != 2 {
 		t.Fatalf("unexpected delete batch body: %s", body)
+	}
+}
+
+func TestServiceRejectsInvalidSQSQueryBatchRequestsBeforeMutating(t *testing.T) {
+	handler := newTestHandler()
+
+	res := executeAWSQueryRequest(handler, "sqs", "Action=CreateQueue&QueueName=query-invalid-batch")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", res.Code, res.Body.String())
+	}
+	queueURL := xmlElement(res.Body.String(), "QueueUrl")
+
+	values := url.Values{}
+	values.Set("Action", "SendMessageBatch")
+	values.Set("QueueUrl", queueURL)
+	assertQueryBatchError(t, handler, values, "EmptyBatchRequest")
+
+	values = url.Values{}
+	values.Set("Action", "SendMessageBatch")
+	values.Set("QueueUrl", queueURL)
+	for index := 1; index <= 11; index++ {
+		prefix := "SendMessageBatchRequestEntry." + strconv.Itoa(index)
+		values.Set(prefix+".Id", "entry"+strconv.Itoa(index))
+		values.Set(prefix+".MessageBody", "body")
+	}
+	assertQueryBatchError(t, handler, values, "TooManyEntriesInBatchRequest")
+
+	values = url.Values{}
+	values.Set("Action", "SendMessageBatch")
+	values.Set("QueueUrl", queueURL)
+	values.Set("SendMessageBatchRequestEntry.1.Id", "bad.id")
+	values.Set("SendMessageBatchRequestEntry.1.MessageBody", "body")
+	assertQueryBatchError(t, handler, values, "InvalidBatchEntryId")
+
+	values = url.Values{}
+	values.Set("Action", "SendMessageBatch")
+	values.Set("QueueUrl", queueURL)
+	values.Set("SendMessageBatchRequestEntry.1.Id", "dup")
+	values.Set("SendMessageBatchRequestEntry.1.MessageBody", "one")
+	values.Set("SendMessageBatchRequestEntry.2.Id", "dup")
+	values.Set("SendMessageBatchRequestEntry.2.MessageBody", "two")
+	assertQueryBatchError(t, handler, values, "BatchEntryIdsNotDistinct")
+
+	values = url.Values{}
+	values.Set("Action", "ReceiveMessage")
+	values.Set("QueueUrl", queueURL)
+	values.Set("MaxNumberOfMessages", "10")
+	res = executeAWSQueryRequest(handler, "sqs", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("receive status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if bodies := xmlElements(res.Body.String(), "Body"); len(bodies) != 0 {
+		t.Fatalf("invalid send batch mutated queue: %#v", bodies)
+	}
+
+	send := url.Values{}
+	send.Set("Action", "SendMessage")
+	send.Set("QueueUrl", queueURL)
+	send.Set("MessageBody", "delete candidate")
+	res = executeAWSQueryRequest(handler, "sqs", send.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("send status = %d, body = %s", res.Code, res.Body.String())
+	}
+	receipt := receiveOneQueryMessage(t, handler, queueURL, "delete candidate")
+
+	values = url.Values{}
+	values.Set("Action", "DeleteMessageBatch")
+	values.Set("QueueUrl", queueURL)
+	values.Set("DeleteMessageBatchRequestEntry.1.Id", "dup")
+	values.Set("DeleteMessageBatchRequestEntry.1.ReceiptHandle", receipt)
+	values.Set("DeleteMessageBatchRequestEntry.2.Id", "dup")
+	values.Set("DeleteMessageBatchRequestEntry.2.ReceiptHandle", "missing")
+	assertQueryBatchError(t, handler, values, "BatchEntryIdsNotDistinct")
+
+	values = url.Values{}
+	values.Set("Action", "ChangeMessageVisibility")
+	values.Set("QueueUrl", queueURL)
+	values.Set("ReceiptHandle", receipt)
+	values.Set("VisibilityTimeout", "0")
+	res = executeAWSQueryRequest(handler, "sqs", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("message was deleted by invalid delete batch, status = %d, body = %s", res.Code, res.Body.String())
+	}
+	receipt = receiveOneQueryMessage(t, handler, queueURL, "delete candidate")
+
+	values = url.Values{}
+	values.Set("Action", "ChangeMessageVisibilityBatch")
+	values.Set("QueueUrl", queueURL)
+	values.Set("ChangeMessageVisibilityBatchRequestEntry.1.Id", "dup")
+	values.Set("ChangeMessageVisibilityBatchRequestEntry.1.ReceiptHandle", receipt)
+	values.Set("ChangeMessageVisibilityBatchRequestEntry.1.VisibilityTimeout", "0")
+	values.Set("ChangeMessageVisibilityBatchRequestEntry.2.Id", "dup")
+	values.Set("ChangeMessageVisibilityBatchRequestEntry.2.ReceiptHandle", "missing")
+	values.Set("ChangeMessageVisibilityBatchRequestEntry.2.VisibilityTimeout", "0")
+	assertQueryBatchError(t, handler, values, "BatchEntryIdsNotDistinct")
+
+	values = url.Values{}
+	values.Set("Action", "ReceiveMessage")
+	values.Set("QueueUrl", queueURL)
+	values.Set("MaxNumberOfMessages", "1")
+	res = executeAWSQueryRequest(handler, "sqs", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("receive after invalid visibility batch status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if bodies := xmlElements(res.Body.String(), "Body"); len(bodies) != 0 {
+		t.Fatalf("invalid visibility batch changed visibility: %#v", bodies)
+	}
+}
+
+func TestServiceRejectsInvalidSQSJSONBatchRequests(t *testing.T) {
+	handler := newTestHandler()
+
+	res := executeAWSJSONRequest(t, handler, "CreateQueue", map[string]any{"QueueName": "json-invalid-batch"})
+	if res.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var created struct {
+		QueueURL string `json:"QueueUrl"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	assertJSONBatchError(t, executeAWSJSONRequest(t, handler, "DeleteMessageBatch", map[string]any{
+		"QueueUrl": created.QueueURL,
+		"Entries":  []any{},
+	}), "EmptyBatchRequest")
+
+	entries := make([]any, 0, 11)
+	for index := 0; index < 11; index++ {
+		entries = append(entries, map[string]any{"Id": "entry" + strconv.Itoa(index), "MessageBody": "body"})
+	}
+	assertJSONBatchError(t, executeAWSJSONRequest(t, handler, "SendMessageBatch", map[string]any{
+		"QueueUrl": created.QueueURL,
+		"Entries":  entries,
+	}), "TooManyEntriesInBatchRequest")
+
+	assertJSONBatchError(t, executeAWSJSONRequest(t, handler, "SendMessageBatch", map[string]any{
+		"QueueUrl": created.QueueURL,
+		"Entries": []any{
+			map[string]any{"Id": "dup", "MessageBody": "one"},
+			map[string]any{"Id": "dup", "MessageBody": "two"},
+		},
+	}), "BatchEntryIdsNotDistinct")
+
+	res = executeAWSJSONRequest(t, handler, "ReceiveMessage", map[string]any{
+		"QueueUrl":            created.QueueURL,
+		"MaxNumberOfMessages": json.Number("10"),
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("receive status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var received struct {
+		Messages []map[string]any `json:"Messages"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &received); err != nil {
+		t.Fatal(err)
+	}
+	if len(received.Messages) != 0 {
+		t.Fatalf("invalid JSON batch mutated queue: %#v", received.Messages)
 	}
 }
 
@@ -3645,6 +3806,55 @@ func xmlValueForName(body string, name string) string {
 		return ""
 	}
 	return xmlElement(body[nameIndex:], "Value")
+}
+
+func assertQueryBatchError(t *testing.T, handler http.Handler, values url.Values, code string) {
+	t.Helper()
+	res := executeAWSQueryRequest(handler, "sqs", values.Encode())
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("batch error status = %d, body = %s", res.Code, res.Body.String())
+	}
+	want := "AWS.SimpleQueueService." + code
+	if got := xmlElement(res.Body.String(), "Code"); got != want {
+		t.Fatalf("batch error code = %q, want %q, body = %s", got, want, res.Body.String())
+	}
+}
+
+func assertJSONBatchError(t *testing.T, res *httptest.ResponseRecorder, code string) {
+	t.Helper()
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("batch error status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("x-amzn-errortype"); got != code {
+		t.Fatalf("batch error header = %q, want %q", got, code)
+	}
+	var parsed map[string]string
+	if err := json.Unmarshal(res.Body.Bytes(), &parsed); err != nil {
+		t.Fatalf("decode batch error %s: %v", res.Body.String(), err)
+	}
+	if got := parsed["__type"]; got != "com.amazonaws.sqs#"+code {
+		t.Fatalf("batch error type = %q, want %q", got, "com.amazonaws.sqs#"+code)
+	}
+}
+
+func receiveOneQueryMessage(t *testing.T, handler http.Handler, queueURL string, body string) string {
+	t.Helper()
+	values := url.Values{}
+	values.Set("Action", "ReceiveMessage")
+	values.Set("QueueUrl", queueURL)
+	values.Set("MaxNumberOfMessages", "1")
+	res := executeAWSQueryRequest(handler, "sqs", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("receive status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if got := xmlElement(res.Body.String(), "Body"); got != body {
+		t.Fatalf("message body = %q, want %q, response = %s", got, body, res.Body.String())
+	}
+	receipt := xmlElement(res.Body.String(), "ReceiptHandle")
+	if receipt == "" {
+		t.Fatalf("missing receipt in %s", res.Body.String())
+	}
+	return receipt
 }
 
 func signAWSRequest(req *http.Request, service string) {

@@ -267,7 +267,11 @@ func (h *Handler) sendMessageBatch(params map[string]string, requestID string) p
 	if !ok {
 		return h.queueNotFound(requestID)
 	}
-	successful, failed := h.sendMessageBatchEntries(queue, params)
+	prefixes, validation := validateBatchRequest(params, "SendMessageBatchRequestEntry", true)
+	if validation != nil {
+		return h.batchQueryError(*validation, requestID)
+	}
+	successful, failed := h.sendMessageBatchEntries(queue, params, prefixes)
 	body := `<?xml version="1.0" encoding="UTF-8"?>
 <SendMessageBatchResponse>
   <SendMessageBatchResult>
@@ -356,7 +360,11 @@ func (h *Handler) deleteMessageBatch(params map[string]string, requestID string)
 	if !ok {
 		return h.queueNotFound(requestID)
 	}
-	successful, failed := h.deleteMessageBatchEntries(queue, params)
+	prefixes, validation := validateBatchRequest(params, "DeleteMessageBatchRequestEntry", false)
+	if validation != nil {
+		return h.batchQueryError(*validation, requestID)
+	}
+	successful, failed := h.deleteMessageBatchEntries(queue, params, prefixes)
 	body := `<?xml version="1.0" encoding="UTF-8"?>
 <DeleteMessageBatchResponse>
   <DeleteMessageBatchResult>
@@ -390,7 +398,11 @@ func (h *Handler) changeMessageVisibilityBatch(params map[string]string, request
 	if !ok {
 		return h.queueNotFound(requestID)
 	}
-	successful, failed := h.changeMessageVisibilityBatchEntries(queue, params)
+	prefixes, validation := validateBatchRequest(params, "ChangeMessageVisibilityBatchRequestEntry", false)
+	if validation != nil {
+		return h.batchQueryError(*validation, requestID)
+	}
+	successful, failed := h.changeMessageVisibilityBatchEntries(queue, params, prefixes)
 	body := `<?xml version="1.0" encoding="UTF-8"?>
 <ChangeMessageVisibilityBatchResponse>
   <ChangeMessageVisibilityBatchResult>
@@ -550,7 +562,11 @@ func (h *Handler) sendMessageBatchJSON(params map[string]string) protocols.Error
 	if !ok {
 		return h.queueNotFoundJSON()
 	}
-	successful, failed := h.sendMessageBatchEntries(queue, params)
+	prefixes, validation := validateBatchRequest(params, "SendMessageBatchRequestEntry", true)
+	if validation != nil {
+		return batchJSONError(*validation)
+	}
+	successful, failed := h.sendMessageBatchEntries(queue, params, prefixes)
 	return jsonResponse(http.StatusOK, map[string]any{"Successful": sendBatchJSON(successful), "Failed": batchFailuresJSON(failed)})
 }
 
@@ -614,7 +630,11 @@ func (h *Handler) deleteMessageBatchJSON(params map[string]string) protocols.Err
 	if !ok {
 		return h.queueNotFoundJSON()
 	}
-	successful, failed := h.deleteMessageBatchEntries(queue, params)
+	prefixes, validation := validateBatchRequest(params, "DeleteMessageBatchRequestEntry", false)
+	if validation != nil {
+		return batchJSONError(*validation)
+	}
+	successful, failed := h.deleteMessageBatchEntries(queue, params, prefixes)
 	return jsonResponse(http.StatusOK, map[string]any{"Successful": batchSuccessIDsJSON(successful), "Failed": batchFailuresJSON(failed)})
 }
 
@@ -637,7 +657,11 @@ func (h *Handler) changeMessageVisibilityBatchJSON(params map[string]string) pro
 	if !ok {
 		return h.queueNotFoundJSON()
 	}
-	successful, failed := h.changeMessageVisibilityBatchEntries(queue, params)
+	prefixes, validation := validateBatchRequest(params, "ChangeMessageVisibilityBatchRequestEntry", false)
+	if validation != nil {
+		return batchJSONError(*validation)
+	}
+	successful, failed := h.changeMessageVisibilityBatchEntries(queue, params, prefixes)
 	return jsonResponse(http.StatusOK, map[string]any{"Successful": batchSuccessIDsJSON(successful), "Failed": batchFailuresJSON(failed)})
 }
 
@@ -704,6 +728,10 @@ func (h *Handler) queryError(code string, message string, status int, requestID 
 		RequestID:  requestID,
 		StatusCode: status,
 	})
+}
+
+func (h *Handler) batchQueryError(validation batchValidationError, requestID string) protocols.ErrorResponse {
+	return h.queryError("AWS.SimpleQueueService."+validation.Code, validation.Message, http.StatusBadRequest, requestID)
 }
 
 func (h *Handler) findQueueByName(queueName string) (corestore.Record, bool) {
@@ -987,10 +1015,10 @@ func (h *Handler) enqueueMessage(queue corestore.Record, messageBody string, mes
 	return batchSendResult{MessageID: messageID, BodyMD5: bodyMD5, AttributesMD5: messageAttributesMD5}
 }
 
-func (h *Handler) sendMessageBatchEntries(queue corestore.Record, params map[string]string) ([]batchSendResult, []batchResultError) {
+func (h *Handler) sendMessageBatchEntries(queue corestore.Record, params map[string]string, prefixes []string) ([]batchSendResult, []batchResultError) {
 	successful := []batchSendResult{}
 	failed := []batchResultError{}
-	for _, prefix := range indexedBatchEntryPrefixes(params, "SendMessageBatchRequestEntry") {
+	for _, prefix := range prefixes {
 		id := params[prefix+".Id"]
 		messageBody := params[prefix+".MessageBody"]
 		if id == "" {
@@ -1012,10 +1040,10 @@ func (h *Handler) sendMessageBatchEntries(queue corestore.Record, params map[str
 	return successful, failed
 }
 
-func (h *Handler) deleteMessageBatchEntries(queue corestore.Record, params map[string]string) ([]string, []batchResultError) {
+func (h *Handler) deleteMessageBatchEntries(queue corestore.Record, params map[string]string, prefixes []string) ([]string, []batchResultError) {
 	successful := []string{}
 	failed := []batchResultError{}
-	for _, prefix := range indexedBatchEntryPrefixes(params, "DeleteMessageBatchRequestEntry") {
+	for _, prefix := range prefixes {
 		id := params[prefix+".Id"]
 		receiptHandle := params[prefix+".ReceiptHandle"]
 		if id == "" {
@@ -1032,10 +1060,10 @@ func (h *Handler) deleteMessageBatchEntries(queue corestore.Record, params map[s
 	return successful, failed
 }
 
-func (h *Handler) changeMessageVisibilityBatchEntries(queue corestore.Record, params map[string]string) ([]string, []batchResultError) {
+func (h *Handler) changeMessageVisibilityBatchEntries(queue corestore.Record, params map[string]string, prefixes []string) ([]string, []batchResultError) {
 	successful := []string{}
 	failed := []batchResultError{}
-	for _, prefix := range indexedBatchEntryPrefixes(params, "ChangeMessageVisibilityBatchRequestEntry") {
+	for _, prefix := range prefixes {
 		id := params[prefix+".Id"]
 		receiptHandle := params[prefix+".ReceiptHandle"]
 		if id == "" {
@@ -1086,6 +1114,85 @@ func indexedBatchEntryPrefixes(params map[string]string, prefix string) []string
 		prefixes = append(prefixes, base)
 	}
 	return prefixes
+}
+
+const (
+	maxBatchEntries       = 10
+	maxBatchEntryIDLength = 80
+	maxBatchRequestBytes  = 1048576
+)
+
+type batchValidationError struct {
+	Code    string
+	Message string
+}
+
+func validateBatchRequest(params map[string]string, prefix string, validatePayloadSize bool) ([]string, *batchValidationError) {
+	prefixes := indexedBatchEntryPrefixes(params, prefix)
+	if len(prefixes) == 0 {
+		return nil, &batchValidationError{
+			Code:    "EmptyBatchRequest",
+			Message: "Batch requests must contain at least one entry.",
+		}
+	}
+	if len(prefixes) > maxBatchEntries {
+		return nil, &batchValidationError{
+			Code:    "TooManyEntriesInBatchRequest",
+			Message: "Batch requests cannot contain more than 10 entries.",
+		}
+	}
+	seen := map[string]bool{}
+	totalBytes := 0
+	for _, itemPrefix := range prefixes {
+		id := params[itemPrefix+".Id"]
+		if id != "" {
+			if !validBatchEntryID(id) {
+				return nil, &batchValidationError{
+					Code:    "InvalidBatchEntryId",
+					Message: "Batch entry IDs can contain only alphanumeric characters, hyphens, and underscores, and cannot exceed 80 characters.",
+				}
+			}
+			if seen[id] {
+				return nil, &batchValidationError{
+					Code:    "BatchEntryIdsNotDistinct",
+					Message: "Two or more batch entries in the request have the same Id.",
+				}
+			}
+			seen[id] = true
+		}
+		if validatePayloadSize {
+			totalBytes += len([]byte(params[itemPrefix+".MessageBody"]))
+		}
+	}
+	if validatePayloadSize && totalBytes > maxBatchRequestBytes {
+		return nil, &batchValidationError{
+			Code:    "BatchRequestTooLong",
+			Message: "Batch requests cannot exceed 1048576 bytes.",
+		}
+	}
+	return prefixes, nil
+}
+
+func validBatchEntryID(id string) bool {
+	if len(id) > maxBatchEntryIDLength {
+		return false
+	}
+	for _, char := range id {
+		if char >= 'a' && char <= 'z' {
+			continue
+		}
+		if char >= 'A' && char <= 'Z' {
+			continue
+		}
+		if char >= '0' && char <= '9' {
+			continue
+		}
+		if char == '-' || char == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 type batchSendResult struct {
@@ -1202,6 +1309,15 @@ func batchFailuresJSON(failed []batchResultError) []map[string]any {
 		})
 	}
 	return results
+}
+
+func batchJSONError(validation batchValidationError) protocols.ErrorResponse {
+	return protocols.SerializeJSONError(protocols.AWSError{
+		Code:       validation.Code,
+		Message:    validation.Message,
+		Service:    "com.amazonaws.sqs",
+		StatusCode: http.StatusBadRequest,
+	})
 }
 
 func indexedTags(params map[string]string, prefix string) corestore.Record {
