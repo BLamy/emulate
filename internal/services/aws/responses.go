@@ -99,6 +99,8 @@ func requestResource(ctx gateway.AwsRequestContext) string {
 
 func jsonErrorService(service string) string {
 	switch service {
+	case "apigatewayv2":
+		return "com.amazonaws.apigatewayv2"
 	case "dynamodb":
 		return "com.amazonaws.dynamodb.v20120810"
 	case "events":
