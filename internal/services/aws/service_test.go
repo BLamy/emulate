@@ -2546,8 +2546,9 @@ func TestServiceHandlesIAMRolesAndSTS(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("assumed caller status = %d, body = %s", res.Code, res.Body.String())
 	}
-	if arn := xmlElement(res.Body.String(), "Arn"); arn != roleARN+"/test-session" {
-		t.Fatalf("assumed arn = %q, want %q", arn, roleARN+"/test-session")
+	expectedAssumedARN := "arn:aws:sts::123456789012:assumed-role/worker/test-session"
+	if arn := xmlElement(res.Body.String(), "Arn"); arn != expectedAssumedARN {
+		t.Fatalf("assumed arn = %q, want %q", arn, expectedAssumedARN)
 	}
 
 	res = executeAWSQueryRequest(handler, "iam", "Action=DeleteRole&RoleName=worker")
@@ -2779,6 +2780,67 @@ func TestServiceFiltersManagedPolicies(t *testing.T) {
 	}
 	if !strings.Contains(res.Body.String(), "InvalidInput") {
 		t.Fatalf("invalid scope body = %s", res.Body.String())
+	}
+}
+
+func TestServiceFiltersAttachedManagedPolicyPathPrefixes(t *testing.T) {
+	handler := newTestHandler()
+	policyDocument := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*"}]}`
+	assumePolicy := `{"Version":"2012-10-17","Statement":[]}`
+
+	res := executeAWSQueryRequest(handler, "iam", "Action=CreateUser&UserName=attached-path-user")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create user status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=CreateRole&RoleName=attached-path-role&AssumeRolePolicyDocument="+url.QueryEscape(assumePolicy))
+	if res.Code != http.StatusOK {
+		t.Fatalf("create role status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values := url.Values{}
+	values.Set("Action", "CreatePolicy")
+	values.Set("PolicyName", "team-attached-path-policy")
+	values.Set("Path", "/team/")
+	values.Set("PolicyDocument", policyDocument)
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create team policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	teamARN := xmlElement(res.Body.String(), "Arn")
+
+	values.Set("PolicyName", "other-attached-path-policy")
+	values.Set("Path", "/other/")
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create other policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	otherARN := xmlElement(res.Body.String(), "Arn")
+
+	for _, policyARN := range []string{teamARN, otherARN} {
+		res = executeAWSQueryRequest(handler, "iam", "Action=AttachUserPolicy&UserName=attached-path-user&PolicyArn="+url.QueryEscape(policyARN))
+		if res.Code != http.StatusOK {
+			t.Fatalf("attach user policy %s status = %d, body = %s", policyARN, res.Code, res.Body.String())
+		}
+		res = executeAWSQueryRequest(handler, "iam", "Action=AttachRolePolicy&RoleName=attached-path-role&PolicyArn="+url.QueryEscape(policyARN))
+		if res.Code != http.StatusOK {
+			t.Fatalf("attach role policy %s status = %d, body = %s", policyARN, res.Code, res.Body.String())
+		}
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListAttachedUserPolicies&UserName=attached-path-user&PathPrefix=%2Fteam%2F")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list attached user policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if body := res.Body.String(); !strings.Contains(body, "team-attached-path-policy") || strings.Contains(body, "other-attached-path-policy") {
+		t.Fatalf("user path prefix filter body = %s", body)
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListAttachedRolePolicies&RoleName=attached-path-role&PathPrefix=%2Fteam%2F")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list attached role policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if body := res.Body.String(); !strings.Contains(body, "team-attached-path-policy") || strings.Contains(body, "other-attached-path-policy") {
+		t.Fatalf("role path prefix filter body = %s", body)
 	}
 }
 

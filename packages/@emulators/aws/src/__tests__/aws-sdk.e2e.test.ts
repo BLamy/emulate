@@ -1700,7 +1700,8 @@ describeExternalIamStsE2E("AWS native runtime - real @aws-sdk/client-iam and @aw
     expect(assumed.Credentials?.SessionToken).toBeTruthy();
     expect(assumed.Credentials?.Expiration).toBeTruthy();
     expect(assumed.PackedPolicySize).toBe(0);
-    expect(assumed.AssumedRoleUser?.Arn).toBe(`${created.Role?.Arn}/sdk-session`);
+    const expectedAssumedArn = `arn:aws:sts::123456789012:assumed-role/${created.Role?.RoleName}/sdk-session`;
+    expect(assumed.AssumedRoleUser?.Arn).toBe(expectedAssumedArn);
 
     const assumedSTS = new STSClient({
       endpoint: `${emulator.url.replace(/\/$/, "")}/sts/`,
@@ -1713,7 +1714,7 @@ describeExternalIamStsE2E("AWS native runtime - real @aws-sdk/client-iam and @aw
     });
     try {
       const identity = await assumedSTS.send(new GetCallerIdentityCommand({}));
-      expect(identity.Arn).toBe(`${created.Role?.Arn}/sdk-session`);
+      expect(identity.Arn).toBe(expectedAssumedArn);
     } finally {
       assumedSTS.destroy();
     }

@@ -93,7 +93,7 @@ func (h *Handler) assumeRole(params map[string]string, requestID string) protoco
 	}
 	expirationTime := h.now().Add(time.Duration(durationSeconds) * time.Second)
 	expiration := expirationTime.Format(time.RFC3339Nano)
-	principalARN := roleARN + "/" + sessionName
+	principalARN := assumedRoleARN(h.accountID(), stringField(role, "role_name"), sessionName)
 	h.CredentialStore.Put(auth.Credential{
 		AccessKeyID:     accessKeyID,
 		SecretAccessKey: secretAccessKey,
@@ -131,7 +131,12 @@ func (h *Handler) userIDForPrincipal(arn string) string {
 		}
 	}
 	for _, role := range h.Roles.All() {
-		prefix := stringField(role, "arn") + "/"
+		prefix := "arn:aws:sts::" + h.accountID() + ":assumed-role/" + stringField(role, "role_name") + "/"
+		if strings.HasPrefix(arn, prefix) {
+			sessionName := strings.TrimPrefix(arn, prefix)
+			return stringField(role, "role_id") + ":" + sessionName
+		}
+		prefix = stringField(role, "arn") + "/"
 		if strings.HasPrefix(arn, prefix) {
 			sessionName := strings.TrimPrefix(arn, prefix)
 			return stringField(role, "role_id") + ":" + sessionName
@@ -152,6 +157,10 @@ func (h *Handler) findRoleByARN(roleARN string) (corestore.Record, bool) {
 		}
 	}
 	return nil, false
+}
+
+func assumedRoleARN(accountID string, roleName string, sessionName string) string {
+	return "arn:aws:sts::" + accountID + ":assumed-role/" + roleName + "/" + sessionName
 }
 
 func (h *Handler) userByName(userName string) corestore.Record {

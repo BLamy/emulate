@@ -633,7 +633,7 @@ func (h *Handler) listAttachedUserPolicies(params map[string]string, requestID s
 	if !ok {
 		return h.noSuchUser(params["UserName"], requestID)
 	}
-	return h.listAttachedPoliciesResponse("ListAttachedUserPolicies", attachedPolicies(user), requestID)
+	return h.listAttachedPoliciesResponse("ListAttachedUserPolicies", attachedPolicies(user), params["PathPrefix"], requestID)
 }
 
 func (h *Handler) attachRolePolicy(params map[string]string, requestID string) protocols.ErrorResponse {
@@ -666,7 +666,7 @@ func (h *Handler) listAttachedRolePolicies(params map[string]string, requestID s
 	if !ok {
 		return h.noSuchRole(params["RoleName"], requestID)
 	}
-	return h.listAttachedPoliciesResponse("ListAttachedRolePolicies", attachedPolicies(role), requestID)
+	return h.listAttachedPoliciesResponse("ListAttachedRolePolicies", attachedPolicies(role), params["PathPrefix"], requestID)
 }
 
 func (h *Handler) userResponse(action string, user corestore.Record, requestID string) protocols.ErrorResponse {
@@ -842,11 +842,17 @@ func listInlinePoliciesResponse(action string, policies []corestore.Record, requ
 	return xmlResponse(http.StatusOK, body)
 }
 
-func (h *Handler) listAttachedPoliciesResponse(action string, policyARNs []string, requestID string) protocols.ErrorResponse {
+func (h *Handler) listAttachedPoliciesResponse(action string, policyARNs []string, pathPrefix string, requestID string) protocols.ErrorResponse {
+	if pathPrefix == "" {
+		pathPrefix = "/"
+	}
 	var rows strings.Builder
 	for _, policyARN := range sortedStrings(policyARNs) {
 		policy, ok := h.findPolicyByARN(policyARN)
 		if !ok {
+			continue
+		}
+		if !strings.HasPrefix(stringField(policy, "path"), pathPrefix) {
 			continue
 		}
 		rows.WriteString(`      <member>
