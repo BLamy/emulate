@@ -473,11 +473,11 @@ func (h *Handler) createPolicy(params map[string]string, requestID string) proto
 	if policyName == "" {
 		return h.queryError("ValidationError", "The request must contain the parameter PolicyName.", http.StatusBadRequest, requestID)
 	}
-	path := normalizePath(params["Path"])
-	arn := "arn:aws:iam::" + h.accountID() + ":policy" + path + policyName
-	if _, ok := h.findPolicyByARN(arn); ok {
+	if _, ok := h.findPolicyByName(policyName); ok {
 		return h.queryError("EntityAlreadyExists", "Policy with name "+policyName+" already exists.", http.StatusConflict, requestID)
 	}
+	path := normalizePath(params["Path"])
+	arn := "arn:aws:iam::" + h.accountID() + ":policy" + path + policyName
 	policyDocument := params["PolicyDocument"]
 	if !validPolicyDocument(policyDocument) {
 		return h.malformedPolicyDocument(requestID)
@@ -535,16 +535,27 @@ func (h *Handler) listPolicies(params map[string]string, requestID string) proto
 	if pathPrefix == "" {
 		pathPrefix = "/"
 	}
+	includeLocal, scopeOK := localPoliciesIncluded(params["Scope"])
+	if !scopeOK {
+		return h.queryError("InvalidInput", "Scope must be All, AWS, or Local.", http.StatusBadRequest, requestID)
+	}
+	onlyAttached := boolParam(params["OnlyAttached"])
 	var rows strings.Builder
-	for _, policy := range h.sortedPolicies() {
-		if !strings.HasPrefix(stringField(policy, "path"), pathPrefix) {
-			continue
+	if includeLocal {
+		for _, policy := range h.sortedPolicies() {
+			policyARN := stringField(policy, "arn")
+			if onlyAttached && h.policyAttachmentCount(policyARN) == 0 {
+				continue
+			}
+			if !strings.HasPrefix(stringField(policy, "path"), pathPrefix) {
+				continue
+			}
+			rows.WriteString(`      <member>
+`)
+			h.writePolicyXML(&rows, policy)
+			rows.WriteString(`      </member>
+`)
 		}
-		rows.WriteString(`      <member>
-`)
-		h.writePolicyXML(&rows, policy)
-		rows.WriteString(`      </member>
-`)
 	}
 	body := `<?xml version="1.0" encoding="UTF-8"?>
 <ListPoliciesResponse>
@@ -557,6 +568,26 @@ func (h *Handler) listPolicies(params map[string]string, requestID string) proto
   <ResponseMetadata><RequestId>` + xmlEscape(requestID) + `</RequestId></ResponseMetadata>
 </ListPoliciesResponse>`
 	return xmlResponse(http.StatusOK, body)
+}
+
+func localPoliciesIncluded(scope string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "", "all", "local":
+		return true, true
+	case "aws":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func boolParam(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *Handler) deletePolicy(params map[string]string, requestID string) protocols.ErrorResponse {
@@ -898,6 +929,18 @@ func (h *Handler) findPolicyByARN(policyARN string) (corestore.Record, bool) {
 	}
 	for _, policy := range h.Policies.FindBy("arn", policyARN) {
 		return policy, true
+	}
+	return nil, false
+}
+
+func (h *Handler) findPolicyByName(policyName string) (corestore.Record, bool) {
+	if h.Policies == nil {
+		return nil, false
+	}
+	for _, policy := range h.Policies.All() {
+		if strings.EqualFold(stringField(policy, "policy_name"), policyName) {
+			return policy, true
+		}
 	}
 	return nil, false
 }

@@ -2685,6 +2685,103 @@ func TestServiceHandlesIAMPoliciesAndSTSSessionMetadata(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsDuplicateManagedPolicyNames(t *testing.T) {
+	handler := newTestHandler()
+	policyDocument := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*"}]}`
+
+	values := url.Values{}
+	values.Set("Action", "CreatePolicy")
+	values.Set("PolicyName", "duplicate-managed-policy")
+	values.Set("Path", "/team-a/")
+	values.Set("PolicyDocument", policyDocument)
+	res := executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create first policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values.Set("Path", "/team-b/")
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusConflict {
+		t.Fatalf("create duplicate policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "EntityAlreadyExists") {
+		t.Fatalf("create duplicate policy body = %s", res.Body.String())
+	}
+
+	values.Set("PolicyName", "DUPLICATE-MANAGED-POLICY")
+	values.Set("Path", "/team-c/")
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusConflict {
+		t.Fatalf("create case duplicate policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "EntityAlreadyExists") {
+		t.Fatalf("create case duplicate policy body = %s", res.Body.String())
+	}
+}
+
+func TestServiceFiltersManagedPolicies(t *testing.T) {
+	handler := newTestHandler()
+	policyDocument := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*"}]}`
+
+	res := executeAWSQueryRequest(handler, "iam", "Action=CreateUser&UserName=list-policy-filter-user")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create user status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	values := url.Values{}
+	values.Set("Action", "CreatePolicy")
+	values.Set("PolicyName", "attached-filter-policy")
+	values.Set("PolicyDocument", policyDocument)
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create attached policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	attachedARN := xmlElement(res.Body.String(), "Arn")
+
+	values.Set("PolicyName", "unattached-filter-policy")
+	res = executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create unattached policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=AttachUserPolicy&UserName=list-policy-filter-user&PolicyArn="+url.QueryEscape(attachedARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("attach policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListPolicies&Scope=AWS")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list aws scoped policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "attached-filter-policy") || strings.Contains(res.Body.String(), "unattached-filter-policy") {
+		t.Fatalf("aws scoped policies included local policies: %s", res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListPolicies&Scope=Local")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list local policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "attached-filter-policy") || !strings.Contains(res.Body.String(), "unattached-filter-policy") {
+		t.Fatalf("local scoped policies missing local policies: %s", res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListPolicies&OnlyAttached=true")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list attached policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "attached-filter-policy") || strings.Contains(res.Body.String(), "unattached-filter-policy") {
+		t.Fatalf("attached-only policies were not filtered: %s", res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListPolicies&Scope=Invalid")
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("invalid scope status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "InvalidInput") {
+		t.Fatalf("invalid scope body = %s", res.Body.String())
+	}
+}
+
 func TestServiceRejectsMalformedIAMPolicyDocuments(t *testing.T) {
 	handler := newTestHandler()
 	assumePolicy := `{"Version":"2012-10-17","Statement":[]}`
