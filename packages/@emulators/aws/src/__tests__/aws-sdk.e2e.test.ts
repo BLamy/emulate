@@ -1099,7 +1099,9 @@ describeExternalKMSE2E("AWS native runtime - real @aws-sdk/client-kms E2E", () =
     );
     expect(Buffer.from(decrypted.Plaintext ?? []).toString()).toBe("hello kms");
 
-    const dataKey = await kms.send(new GenerateDataKeyCommand({ KeyId: created.KeyMetadata?.KeyId, KeySpec: "AES_128" }));
+    const dataKey = await kms.send(
+      new GenerateDataKeyCommand({ KeyId: created.KeyMetadata?.KeyId, KeySpec: "AES_128" }),
+    );
     expect(dataKey.CiphertextBlob?.byteLength).toBeGreaterThan(0);
     expect(Buffer.from(dataKey.Plaintext ?? [])).toHaveLength(16);
     expect(dataKey.KeyId).toBe(created.KeyMetadata?.Arn);
