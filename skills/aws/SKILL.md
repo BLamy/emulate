@@ -116,7 +116,7 @@ const eventbridge = new EventBridgeClient({
 })
 ```
 
-The native Go runtime accepts the EventBridge SDK client's `X-Amz-Target: AWSEvents.<Action>` JSON requests to `/events` and can deliver matching events to SQS queues and SNS topics.
+The native Go runtime accepts the EventBridge SDK client's `X-Amz-Target: AWSEvents.<Action>` JSON requests to `/events` and can deliver matching events to SQS queues, SNS topics, and Lambda functions. Lambda targets create CloudWatch Logs entries; zipped Node.js handlers run only when `npx emulate` is started with `--allow-local-lambda` and the EventBridge request uses a signed direct localhost endpoint.
 
 ```typescript
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb'
