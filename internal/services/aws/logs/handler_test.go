@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -173,6 +174,88 @@ func TestHandlerSupportsLogGroupIdentifier(t *testing.T) {
 	}
 }
 
+func TestHandlerRejectsForeignLogGroupARNs(t *testing.T) {
+	handler := newTestLogsHandler()
+	handler.callWithScope("CreateLogGroup", map[string]any{"logGroupName": "shared"}, "222222222222", "us-east-1")
+
+	foreignARN := "arn:aws:logs:us-east-1:222222222222:log-group:shared"
+	response := handler.callWithScope("DescribeLogStreams", map[string]any{"logGroupIdentifier": foreignARN}, "123456789012", "us-east-1")
+	if response.StatusCode != http.StatusBadRequest || response.Headers["x-amzn-errortype"] != "ResourceNotFoundException" {
+		t.Fatalf("foreign describe status = %d, headers = %#v, body = %s", response.StatusCode, response.Headers, response.Body)
+	}
+
+	response = handler.callWithScope("TagResource", map[string]any{"resourceArn": foreignARN, "tags": map[string]any{"team": "platform"}}, "123456789012", "us-east-1")
+	if response.StatusCode != http.StatusBadRequest || response.Headers["x-amzn-errortype"] != "ResourceNotFoundException" {
+		t.Fatalf("foreign tag status = %d, headers = %#v, body = %s", response.StatusCode, response.Headers, response.Body)
+	}
+
+	response = handler.callWithScope("DescribeLogGroups", map[string]any{"logGroupIdentifiers": []string{foreignARN}}, "123456789012", "us-east-1")
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("foreign identifier list status = %d, body = %s", response.StatusCode, response.Body)
+	}
+	var body struct {
+		LogGroups []struct {
+			LogGroupName string `json:"logGroupName"`
+		} `json:"logGroups"`
+	}
+	decodeLogsBody(t, response, &body)
+	if len(body.LogGroups) != 0 {
+		t.Fatalf("foreign identifier returned groups: %#v", body.LogGroups)
+	}
+}
+
+func TestHandlerDescribeLogGroupsSupportsPatternAndIdentifiers(t *testing.T) {
+	handler := newTestLogsHandler()
+	for _, name := range []string{"app/api", "data/app", "other"} {
+		response := handler.call("CreateLogGroup", map[string]any{"logGroupName": name})
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("create %s status = %d, body = %s", name, response.StatusCode, response.Body)
+		}
+	}
+
+	response := handler.call("DescribeLogGroups", map[string]any{"logGroupNamePattern": "app"})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("pattern status = %d, body = %s", response.StatusCode, response.Body)
+	}
+	var patternBody struct {
+		LogGroups []map[string]any `json:"logGroups"`
+	}
+	decodeLogsBody(t, response, &patternBody)
+	if got := logGroupNames(patternBody.LogGroups); strings.Join(got, ",") != "app/api,data/app" {
+		t.Fatalf("pattern groups = %#v", got)
+	}
+	if _, ok := patternBody.LogGroups[0]["storedBytes"]; ok {
+		t.Fatalf("pattern response included full log group fields: %#v", patternBody.LogGroups[0])
+	}
+
+	response = handler.call("DescribeLogGroups", map[string]any{
+		"logGroupIdentifiers": []string{
+			"other",
+			"arn:aws:logs:us-east-1:123456789012:log-group:data/app",
+		},
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("identifiers status = %d, body = %s", response.StatusCode, response.Body)
+	}
+	var identifierBody struct {
+		LogGroups []map[string]any `json:"logGroups"`
+	}
+	decodeLogsBody(t, response, &identifierBody)
+	if got := logGroupNames(identifierBody.LogGroups); strings.Join(got, ",") != "data/app,other" {
+		t.Fatalf("identifier groups = %#v", got)
+	}
+
+	response = handler.call("DescribeLogGroups", map[string]any{"logGroupNamePrefix": "app", "logGroupNamePattern": "app"})
+	if response.StatusCode != http.StatusBadRequest || response.Headers["x-amzn-errortype"] != "InvalidParameterException" {
+		t.Fatalf("prefix and pattern status = %d, headers = %#v, body = %s", response.StatusCode, response.Headers, response.Body)
+	}
+
+	response = handler.call("DescribeLogGroups", map[string]any{"logGroupIdentifiers": []string{"other"}, "logGroupNamePrefix": "o"})
+	if response.StatusCode != http.StatusBadRequest || response.Headers["x-amzn-errortype"] != "InvalidParameterException" {
+		t.Fatalf("identifiers and prefix status = %d, headers = %#v, body = %s", response.StatusCode, response.Headers, response.Body)
+	}
+}
+
 func TestHandlerGetLogEventsEndTimeIsExclusive(t *testing.T) {
 	handler := newTestLogsHandler()
 	handler.call("CreateLogGroup", map[string]any{"logGroupName": "app"})
@@ -236,6 +319,56 @@ func TestHandlerRejectsOutOfOrderLogEventBatches(t *testing.T) {
 	}
 	if handler.LogEvents.Count() != 0 {
 		t.Fatalf("out of order batch inserted events")
+	}
+}
+
+func TestHandlerPutLogEventsMergesStreamMetadataAcrossConcurrentCalls(t *testing.T) {
+	handler := newTestLogsHandler()
+	handler.IDGenerator = nil
+	handler.call("CreateLogGroup", map[string]any{"logGroupName": "app"})
+	handler.call("CreateLogStream", map[string]any{"logGroupName": "app", "logStreamName": "web"})
+
+	var wg sync.WaitGroup
+	for index := 0; index < 32; index++ {
+		index := index
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			response := handler.call("PutLogEvents", map[string]any{
+				"logGroupName":  "app",
+				"logStreamName": "web",
+				"logEvents": []map[string]any{
+					{"timestamp": int64(1000 + index), "message": "x"},
+				},
+			})
+			if response.StatusCode != http.StatusOK {
+				t.Errorf("put %d status = %d, body = %s", index, response.StatusCode, response.Body)
+			}
+		}()
+	}
+	wg.Wait()
+
+	response := handler.call("DescribeLogStreams", map[string]any{"logGroupName": "app"})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("describe streams status = %d, body = %s", response.StatusCode, response.Body)
+	}
+	var body struct {
+		LogStreams []struct {
+			StoredBytes         int   `json:"storedBytes"`
+			FirstEventTimestamp int64 `json:"firstEventTimestamp"`
+			LastEventTimestamp  int64 `json:"lastEventTimestamp"`
+		} `json:"logStreams"`
+	}
+	decodeLogsBody(t, response, &body)
+	if len(body.LogStreams) != 1 {
+		t.Fatalf("streams = %#v", body.LogStreams)
+	}
+	stream := body.LogStreams[0]
+	if stream.StoredBytes != 32 || stream.FirstEventTimestamp != 1000 || stream.LastEventTimestamp != 1031 {
+		t.Fatalf("stream metadata = %#v", stream)
+	}
+	if handler.LogEvents.Count() != 32 {
+		t.Fatalf("event count = %d", handler.LogEvents.Count())
 	}
 }
 
@@ -337,15 +470,27 @@ func newTestLogsHandler() *testLogsHandler {
 }
 
 func (h *testLogsHandler) call(action string, input map[string]any) protocols.ErrorResponse {
+	return h.callWithScope(action, input, "123456789012", "us-east-1")
+}
+
+func (h *testLogsHandler) callWithScope(action string, input map[string]any, accountID string, region string) protocols.ErrorResponse {
 	return h.Handle(nil, gateway.AwsRequestContext{
 		RequestID: "req-test",
 		Service:   "logs",
 		Action:    action,
 		Protocol:  protocols.ProtocolJSONRPC,
-		AccountID: "123456789012",
-		Region:    "us-east-1",
+		AccountID: accountID,
+		Region:    region,
 		Input:     input,
 	})
+}
+
+func logGroupNames(groups []map[string]any) []string {
+	out := make([]string, 0, len(groups))
+	for _, group := range groups {
+		out = append(out, stringValue(group["logGroupName"]))
+	}
+	return out
 }
 
 func decodeLogsBody(t *testing.T, response protocols.ErrorResponse, target any) {

@@ -110,12 +110,29 @@ func (h *Handler) deleteLogGroup(ctx gateway.AwsRequestContext, requestID string
 
 func (h *Handler) describeLogGroups(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
 	prefix := stringInput(ctx.Input, "logGroupNamePrefix", "LogGroupNamePrefix")
+	pattern := stringInput(ctx.Input, "logGroupNamePattern", "LogGroupNamePattern")
+	if prefix != "" && pattern != "" {
+		return h.validation("logGroupNamePrefix and logGroupNamePattern cannot both be specified.", requestID)
+	}
+	identifierKeys, hasIdentifierFilter, response, ok := h.logGroupIdentifierKeys(ctx, inputValue(ctx.Input, "logGroupIdentifiers", "LogGroupIdentifiers"), requestID)
+	if !ok {
+		return response
+	}
+	if hasIdentifierFilter && (prefix != "" || pattern != "") {
+		return h.validation("logGroupIdentifiers cannot be specified with logGroupNamePrefix or logGroupNamePattern.", requestID)
+	}
 	groups := []corestore.Record{}
 	for _, group := range h.LogGroups.All() {
 		if !h.sameScope(ctx, group) {
 			continue
 		}
+		if hasIdentifierFilter && !identifierKeys[logGroupRecordKey(group)] {
+			continue
+		}
 		if prefix != "" && !strings.HasPrefix(stringField(group, "log_group_name"), prefix) {
+			continue
+		}
+		if pattern != "" && !strings.Contains(stringField(group, "log_group_name"), pattern) {
 			continue
 		}
 		groups = append(groups, group)
@@ -129,7 +146,11 @@ func (h *Handler) describeLogGroups(ctx gateway.AwsRequestContext, requestID str
 	}
 	out := make([]map[string]any, 0, end-start)
 	for _, group := range groups[start:end] {
-		out = append(out, h.groupResponse(group))
+		if pattern != "" {
+			out = append(out, h.groupPatternResponse(group))
+		} else {
+			out = append(out, h.groupResponse(group))
+		}
 	}
 	body := map[string]any{"logGroups": out}
 	if nextToken != "" {
@@ -265,17 +286,9 @@ func (h *Handler) putLogEvents(ctx gateway.AwsRequestContext, requestID string) 
 		timestamps[index] = timestamp
 	}
 	ingestionTime := h.now().UnixMilli()
-	firstTimestamp := int64Field(stream, "first_event_timestamp")
-	lastTimestamp := int64Field(stream, "last_event_timestamp")
 	for index, item := range rawEvents {
 		message := stringValue(inputValue(item, "message", "Message"))
 		timestamp := timestamps[index]
-		if firstTimestamp == 0 || timestamp < firstTimestamp {
-			firstTimestamp = timestamp
-		}
-		if timestamp > lastTimestamp {
-			lastTimestamp = timestamp
-		}
 		h.LogEvents.Insert(corestore.Record{
 			"account_id":      h.accountID(ctx),
 			"region":          h.region(ctx),
@@ -287,14 +300,33 @@ func (h *Handler) putLogEvents(ctx gateway.AwsRequestContext, requestID string) 
 			"ingestion_time":  ingestionTime,
 		})
 	}
-	nextToken := strconv.Itoa(intInput(ctx.Input, "sequenceToken", "SequenceToken", 0) + len(rawEvents) + 1)
-	h.LogStreams.Update(intField(stream, "id"), corestore.Record{
-		"first_event_timestamp": firstTimestamp,
-		"last_event_timestamp":  lastTimestamp,
-		"last_ingestion_time":   ingestionTime,
-		"upload_sequence_token": nextToken,
-		"stored_bytes":          intField(stream, "stored_bytes") + logEventsBytes(rawEvents),
-	})
+	nextToken := ""
+	eventBytes := logEventsBytes(rawEvents)
+	if _, ok := h.LogStreams.UpdateFunc(intField(stream, "id"), func(current corestore.Record) (corestore.Record, bool) {
+		firstTimestamp := int64Field(current, "first_event_timestamp")
+		lastTimestamp := int64Field(current, "last_event_timestamp")
+		for _, timestamp := range timestamps {
+			if firstTimestamp == 0 || timestamp < firstTimestamp {
+				firstTimestamp = timestamp
+			}
+			if timestamp > lastTimestamp {
+				lastTimestamp = timestamp
+			}
+		}
+		nextToken = strconv.Itoa(intField(current, "upload_sequence_token") + len(rawEvents) + 1)
+		return corestore.Record{
+			"first_event_timestamp": firstTimestamp,
+			"last_event_timestamp":  lastTimestamp,
+			"last_ingestion_time":   ingestionTime,
+			"upload_sequence_token": nextToken,
+			"stored_bytes":          intField(current, "stored_bytes") + eventBytes,
+		}, true
+	}); !ok {
+		return h.notFound("The specified log stream does not exist.", requestID)
+	}
+	if nextToken == "" {
+		nextToken = strconv.Itoa(len(rawEvents) + 1)
+	}
 	return jsonResponse(http.StatusOK, map[string]any{"nextSequenceToken": nextToken})
 }
 
@@ -479,7 +511,7 @@ func (h *Handler) requireGroupIdentifier(ctx gateway.AwsRequestContext, identifi
 		if !ok {
 			return nil, h.validation("logGroupIdentifier is invalid.", requestID), false
 		}
-		if group, ok := h.findGroupByARNParts(parsed); ok {
+		if group, ok := h.findGroupByARNParts(ctx, parsed); ok {
 			return group, protocols.ErrorResponse{}, true
 		}
 		return nil, h.notFound("The specified log group does not exist.", requestID), false
@@ -492,7 +524,7 @@ func (h *Handler) requireGroupByARN(ctx gateway.AwsRequestContext, arn string, r
 	if !ok {
 		return nil, h.validation("resourceArn is required.", requestID), false
 	}
-	if group, ok := h.findGroupByARNParts(parsed); ok {
+	if group, ok := h.findGroupByARNParts(ctx, parsed); ok {
 		return group, protocols.ErrorResponse{}, true
 	}
 	return nil, h.notFound("The specified log group does not exist.", requestID), false
@@ -519,13 +551,42 @@ func (h *Handler) findGroup(ctx gateway.AwsRequestContext, name string) (coresto
 	return nil, false
 }
 
-func (h *Handler) findGroupByARNParts(parsed logGroupARNParts) (corestore.Record, bool) {
+func (h *Handler) findGroupByARNParts(ctx gateway.AwsRequestContext, parsed logGroupARNParts) (corestore.Record, bool) {
+	if !h.logGroupARNMatchesCaller(ctx, parsed) {
+		return nil, false
+	}
 	for _, group := range h.LogGroups.FindBy("log_group_name", parsed.Name) {
 		if stringField(group, "account_id") == parsed.AccountID && stringField(group, "region") == parsed.Region {
 			return group, true
 		}
 	}
 	return nil, false
+}
+
+func (h *Handler) logGroupIdentifierKeys(ctx gateway.AwsRequestContext, value any, requestID string) (map[string]bool, bool, protocols.ErrorResponse, bool) {
+	identifiers := stringSlice(value)
+	if len(identifiers) == 0 {
+		return nil, false, protocols.ErrorResponse{}, true
+	}
+	keys := map[string]bool{}
+	for _, identifier := range identifiers {
+		identifier = strings.TrimSpace(identifier)
+		if identifier == "" {
+			continue
+		}
+		if strings.HasPrefix(identifier, "arn:") {
+			parsed, ok := parseLogGroupARN(identifier)
+			if !ok {
+				return nil, false, h.validation("logGroupIdentifiers contains an invalid log group identifier.", requestID), false
+			}
+			if h.logGroupARNMatchesCaller(ctx, parsed) {
+				keys[logGroupKey(parsed.AccountID, parsed.Region, parsed.Name)] = true
+			}
+			continue
+		}
+		keys[logGroupKey(h.accountID(ctx), h.region(ctx), identifier)] = true
+	}
+	return keys, true, protocols.ErrorResponse{}, true
 }
 
 func (h *Handler) findStream(group corestore.Record, streamName string) (corestore.Record, bool) {
@@ -588,6 +649,14 @@ func (h *Handler) groupResponse(group corestore.Record) map[string]any {
 		response["kmsKeyId"] = kmsKeyID
 	}
 	return response
+}
+
+func (h *Handler) groupPatternResponse(group corestore.Record) map[string]any {
+	return map[string]any{
+		"logGroupName": stringField(group, "log_group_name"),
+		"creationTime": int64Field(group, "creation_time"),
+		"arn":          logGroupWildcardARN(stringField(group, "arn")),
+	}
 }
 
 func (h *Handler) streamResponse(stream corestore.Record) map[string]any {
@@ -672,6 +741,18 @@ func (h *Handler) sameScope(ctx gateway.AwsRequestContext, record corestore.Reco
 
 func sameRecordScope(left corestore.Record, right corestore.Record) bool {
 	return stringField(left, "account_id") == stringField(right, "account_id") && stringField(left, "region") == stringField(right, "region")
+}
+
+func (h *Handler) logGroupARNMatchesCaller(ctx gateway.AwsRequestContext, parsed logGroupARNParts) bool {
+	return parsed.AccountID == h.accountID(ctx) && parsed.Region == h.region(ctx)
+}
+
+func logGroupRecordKey(group corestore.Record) string {
+	return logGroupKey(stringField(group, "account_id"), stringField(group, "region"), stringField(group, "log_group_name"))
+}
+
+func logGroupKey(accountID string, region string, name string) string {
+	return accountID + "\x00" + region + "\x00" + name
 }
 
 func (h *Handler) accountID(ctx gateway.AwsRequestContext) string {
