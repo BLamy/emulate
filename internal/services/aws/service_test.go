@@ -4303,6 +4303,35 @@ func TestServiceRunsLocalNodeLambdaHandler(t *testing.T) {
 		t.Fatalf("unexpected open handle body: %#v", openHandleBody)
 	}
 
+	successChildMarkerPath := filepath.Join(t.TempDir(), "success-child-marker")
+	successChildConfig := executeAWSLambdaRequest(t, handler, http.MethodPut, "/2015-03-31/functions/node-runner/configuration", map[string]any{
+		"Environment": map[string]any{"Variables": map[string]any{"SUCCESS_CHILD_MARKER": successChildMarkerPath}},
+	})
+	if successChildConfig.Code != http.StatusOK {
+		t.Fatalf("update success child config status = %d, body = %s", successChildConfig.Code, successChildConfig.Body.String())
+	}
+	successChildZip := zipLambdaSource(t, map[string]string{"index.js": `exports.handler = async () => {
+  const { spawn } = require("node:child_process");
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => require('node:fs').writeFileSync(process.env.SUCCESS_CHILD_MARKER, 'alive'), 1200); setInterval(() => {}, 1000);"], { stdio: "ignore" });
+  child.unref();
+  return { ok: true };
+};
+`})
+	successChildUpdate := executeAWSLambdaRequest(t, handler, http.MethodPut, "/2015-03-31/functions/node-runner/code", map[string]any{"ZipFile": successChildZip})
+	if successChildUpdate.Code != http.StatusOK {
+		t.Fatalf("update success child code status = %d, body = %s", successChildUpdate.Code, successChildUpdate.Body.String())
+	}
+	successChildInvoke := executeAWSLambdaRawRequestWithAccessKey(t, handler, http.MethodPost, "/2015-03-31/functions/node-runner/invocations", []byte(`{}`), accessKeyID)
+	if successChildInvoke.Code != http.StatusOK {
+		t.Fatalf("success child invoke status = %d, body = %s", successChildInvoke.Code, successChildInvoke.Body.String())
+	}
+	time.Sleep(1600 * time.Millisecond)
+	if _, err := os.Stat(successChildMarkerPath); err == nil {
+		t.Fatalf("completed Lambda child process wrote marker file: %s", successChildMarkerPath)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("failed to check success child marker file: %v", err)
+	}
+
 	largePayloadZip := zipLambdaSource(t, map[string]string{"index.js": `exports.handler = async (event) => ({ size: event.data.length });`})
 	largePayloadUpdate := executeAWSLambdaRequest(t, handler, http.MethodPut, "/2015-03-31/functions/node-runner/code", map[string]any{"ZipFile": largePayloadZip})
 	if largePayloadUpdate.Code != http.StatusOK {
@@ -4421,6 +4450,70 @@ exports.handler = async () => ({ ok: true });
 		t.Fatalf("timed out Lambda child process wrote marker file: %s", childMarkerPath)
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("failed to check child marker file: %v", err)
+	}
+}
+
+func TestServiceRunsLocalNodeLambdaAliasWithAliasContextARN(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required for local Lambda Node.js runner coverage")
+	}
+	handler := newTestHandlerWithOptions(Options{LambdaLocalCodeExecution: true})
+	const accessKeyID = "AKIAIOSFODNN7EXAMPLE"
+	zipFile := zipLambdaSource(t, map[string]string{"index.js": `exports.handler = async (event, context) => ({
+  functionVersion: context.functionVersion,
+  invokedFunctionArn: context.invokedFunctionArn,
+});
+`})
+
+	create := executeAWSLambdaRequest(t, handler, http.MethodPost, "/2015-03-31/functions", map[string]any{
+		"FunctionName": "node-runner-alias",
+		"Runtime":      "nodejs22.x",
+		"Role":         "arn:aws:iam::123456789012:role/lambda-execution-role",
+		"Handler":      "index.handler",
+		"Code":         map[string]any{"ZipFile": zipFile},
+	})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", create.Code, create.Body.String())
+	}
+	var created struct {
+		FunctionArn string `json:"FunctionArn"`
+	}
+	decodeJSONBody(t, create, &created)
+
+	version := executeAWSLambdaRequest(t, handler, http.MethodPost, "/2015-03-31/functions/node-runner-alias/versions", map[string]any{"Description": "alias target"})
+	if version.Code != http.StatusCreated {
+		t.Fatalf("publish version status = %d, body = %s", version.Code, version.Body.String())
+	}
+	var versionBody struct {
+		Version string `json:"Version"`
+	}
+	decodeJSONBody(t, version, &versionBody)
+	if versionBody.Version != "1" {
+		t.Fatalf("version = %q, want 1", versionBody.Version)
+	}
+
+	alias := executeAWSLambdaRequest(t, handler, http.MethodPost, "/2015-03-31/functions/node-runner-alias/aliases", map[string]any{"Name": "live", "FunctionVersion": "1"})
+	if alias.Code != http.StatusCreated {
+		t.Fatalf("create alias status = %d, body = %s", alias.Code, alias.Body.String())
+	}
+
+	invoke := executeAWSLambdaRawRequestWithAccessKey(t, handler, http.MethodPost, "/2015-03-31/functions/node-runner-alias/invocations?Qualifier=live", []byte(`{}`), accessKeyID)
+	if invoke.Code != http.StatusOK {
+		t.Fatalf("alias invoke status = %d, body = %s", invoke.Code, invoke.Body.String())
+	}
+	if got := invoke.Header().Get("x-amz-executed-version"); got != "1" {
+		t.Fatalf("executed version = %q, want 1", got)
+	}
+	var body struct {
+		FunctionVersion    string `json:"functionVersion"`
+		InvokedFunctionArn string `json:"invokedFunctionArn"`
+	}
+	decodeJSONBody(t, invoke, &body)
+	if body.FunctionVersion != "1" {
+		t.Fatalf("context function version = %q, want 1", body.FunctionVersion)
+	}
+	if body.InvokedFunctionArn != created.FunctionArn+":live" {
+		t.Fatalf("context invoked arn = %q, want %q", body.InvokedFunctionArn, created.FunctionArn+":live")
 	}
 }
 

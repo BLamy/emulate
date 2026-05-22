@@ -36,7 +36,7 @@ type nodeEnvelope struct {
 	Logs         []string `json:"logs"`
 }
 
-func (h *Handler) invokeLocalNode(ctx gateway.AwsRequestContext, fn corestore.Record, executedVersion string, payload []byte, requestID string, logStreamName string) (localInvokeResult, bool) {
+func (h *Handler) invokeLocalNode(ctx gateway.AwsRequestContext, fn corestore.Record, executedVersion string, invokedARN string, payload []byte, requestID string, logStreamName string) (localInvokeResult, bool) {
 	if !strings.HasPrefix(strings.TrimSpace(stringField(fn, "runtime")), "nodejs") {
 		return localInvokeResult{}, false
 	}
@@ -67,7 +67,7 @@ func (h *Handler) invokeLocalNode(ctx gateway.AwsRequestContext, fn corestore.Re
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 3
 	}
-	contextValue, _ := json.Marshal(lambdaNodeContext(ctx, fn, executedVersion, requestID, timeoutSeconds, logStreamName))
+	contextValue, _ := json.Marshal(lambdaNodeContext(ctx, fn, executedVersion, invokedARN, requestID, timeoutSeconds, logStreamName))
 	runCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 	cmd := exec.Command("node", wrapperPath, stringField(fn, "handler"), base64.StdEncoding.EncodeToString(contextValue))
@@ -79,8 +79,10 @@ func (h *Handler) invokeLocalNode(ctx gateway.AwsRequestContext, fn corestore.Re
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	configureLambdaProcess(cmd)
+	started := false
 	err = cmd.Start()
 	if err == nil {
+		started = true
 		waitCh := make(chan error, 1)
 		go func() {
 			waitCh <- cmd.Wait()
@@ -91,6 +93,9 @@ func (h *Handler) invokeLocalNode(ctx gateway.AwsRequestContext, fn corestore.Re
 			terminateLambdaProcess(cmd)
 			err = <-waitCh
 		}
+	}
+	if started {
+		terminateLambdaProcess(cmd)
 	}
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		message := fmt.Sprintf("Task timed out after %d seconds", timeoutSeconds)
@@ -172,11 +177,14 @@ func extractLambdaZip(reader *zip.Reader, destination string) error {
 	return nil
 }
 
-func lambdaNodeContext(ctx gateway.AwsRequestContext, fn corestore.Record, executedVersion string, requestID string, timeoutSeconds int, logStreamName string) map[string]any {
+func lambdaNodeContext(ctx gateway.AwsRequestContext, fn corestore.Record, executedVersion string, invokedARN string, requestID string, timeoutSeconds int, logStreamName string) map[string]any {
 	executedVersion = firstNonEmpty(executedVersion, "$LATEST")
-	arn := stringField(fn, "arn")
-	if executedVersion != "$LATEST" && arn != "" && !strings.HasSuffix(arn, ":"+executedVersion) {
-		arn += ":" + executedVersion
+	arn := invokedARN
+	if arn == "" {
+		arn = stringField(fn, "arn")
+		if executedVersion != "$LATEST" && arn != "" && !strings.HasSuffix(arn, ":"+executedVersion) {
+			arn += ":" + executedVersion
+		}
 	}
 	return map[string]any{
 		"awsRequestId":       requestID,

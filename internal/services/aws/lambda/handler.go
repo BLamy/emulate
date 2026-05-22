@@ -382,7 +382,8 @@ func (h *Handler) invoke(req *http.Request, ctx gateway.AwsRequestContext, route
 	}
 	invocationType := firstNonEmpty(req.URL.Query().Get("InvocationType"), req.Header.Get("X-Amz-Invocation-Type"), "RequestResponse")
 	logType := firstNonEmpty(req.URL.Query().Get("LogType"), req.Header.Get("X-Amz-Log-Type"))
-	invoked, executedVersion, response, ok := h.recordForQualifier(ctx, fn, h.resolveQualifier(route, ctx), requestID)
+	invokedQualifier := h.resolveQualifier(route, ctx)
+	invoked, executedVersion, response, ok := h.recordForQualifier(ctx, fn, invokedQualifier, requestID)
 	if !ok {
 		return response
 	}
@@ -401,7 +402,7 @@ func (h *Handler) invoke(req *http.Request, ctx gateway.AwsRequestContext, route
 	logLines := []string{"Lambda API-only invoke " + invocationType + " RequestId: " + requestID}
 	functionError := ""
 	if h.localCodeExecutionAllowed(req, ctx) {
-		if result, ran := h.invokeLocalNode(ctx, invoked, executedVersion, ctx.RawBody, requestID, logStreamName); ran {
+		if result, ran := h.invokeLocalNode(ctx, invoked, executedVersion, invokedFunctionARN(fn, invokedQualifier), ctx.RawBody, requestID, logStreamName); ran {
 			payload = result.Payload
 			logLines = result.Logs
 			functionError = result.FunctionError
@@ -1329,6 +1330,18 @@ func lambdaLogTail(messages []string) string {
 		raw = raw[len(raw)-4096:]
 	}
 	return base64.StdEncoding.EncodeToString(raw)
+}
+
+func invokedFunctionARN(fn corestore.Record, qualifier string) string {
+	arn := stringField(fn, "arn")
+	qualifier = strings.TrimSpace(qualifier)
+	if arn == "" || qualifier == "" || qualifier == "$LATEST" {
+		return arn
+	}
+	if strings.HasSuffix(arn, ":"+qualifier) {
+		return arn
+	}
+	return arn + ":" + qualifier
 }
 
 func environmentVariables(value any) corestore.Record {
