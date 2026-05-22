@@ -299,6 +299,9 @@ func (s *Service) looksLikeAWSRequest(req *http.Request) bool {
 	if hasKnownServiceEndpointPath(req.URL.Path) {
 		return true
 	}
+	if hasLambdaRESTEndpointPath(req.URL.Path) {
+		return true
+	}
 	return looksLikeS3RESTRequest(req, s.s3PathFallback)
 }
 
@@ -335,6 +338,18 @@ func hasKnownServiceEndpointPath(pathValue string) bool {
 	default:
 		return false
 	}
+}
+
+func hasLambdaRESTEndpointPath(pathValue string) bool {
+	first, rest := splitFirstPathSegment(pathValue)
+	if rest == "" {
+		return false
+	}
+	second, _ := splitFirstPathSegment(rest)
+	if first == "2015-03-31" && second == "functions" {
+		return true
+	}
+	return first == "2017-03-31" && second == "tags"
 }
 
 func looksLikeS3RESTRequest(req *http.Request, pathFallback bool) bool {

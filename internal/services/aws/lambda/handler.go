@@ -179,7 +179,10 @@ func (h *Handler) getFunction(ctx gateway.AwsRequestContext, route route, reques
 		return response
 	}
 	version := h.resolveQualifier(route, ctx)
-	config := h.configForQualifier(ctx, fn, version)
+	config, response, ok := h.configForQualifier(ctx, fn, version, requestID)
+	if !ok {
+		return response
+	}
 	return jsonResponse(http.StatusOK, map[string]any{
 		"Configuration": config,
 		"Code": map[string]any{
@@ -195,7 +198,11 @@ func (h *Handler) getFunctionConfiguration(ctx gateway.AwsRequestContext, route 
 	if !ok {
 		return response
 	}
-	return jsonResponse(http.StatusOK, h.configForQualifier(ctx, fn, h.resolveQualifier(route, ctx)))
+	config, response, ok := h.configForQualifier(ctx, fn, h.resolveQualifier(route, ctx), requestID)
+	if !ok {
+		return response
+	}
+	return jsonResponse(http.StatusOK, config)
 }
 
 func (h *Handler) listFunctions(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
@@ -324,22 +331,22 @@ func (h *Handler) invoke(req *http.Request, ctx gateway.AwsRequestContext, route
 	}
 	invocationType := firstNonEmpty(req.URL.Query().Get("InvocationType"), req.Header.Get("X-Amz-Invocation-Type"), "RequestResponse")
 	logType := firstNonEmpty(req.URL.Query().Get("LogType"), req.Header.Get("X-Amz-Log-Type"))
-	qualifier := h.resolveQualifier(route, ctx)
-	if qualifier == "" {
-		qualifier = "$LATEST"
+	invoked, executedVersion, response, ok := h.recordForQualifier(ctx, fn, h.resolveQualifier(route, ctx), requestID)
+	if !ok {
+		return response
 	}
 	h.recordInvocation(ctx, fn, requestID, invocationType)
 	if invocationType == "DryRun" {
-		return lambdaBodyResponse(http.StatusNoContent, nil, map[string]string{"x-amz-executed-version": qualifier})
+		return lambdaBodyResponse(http.StatusNoContent, nil, map[string]string{"x-amz-executed-version": executedVersion})
 	}
 	if invocationType == "Event" {
-		return lambdaBodyResponse(http.StatusAccepted, nil, map[string]string{"x-amz-executed-version": qualifier})
+		return lambdaBodyResponse(http.StatusAccepted, nil, map[string]string{"x-amz-executed-version": executedVersion})
 	}
-	payload := []byte(strings.TrimSpace(stringField(fn, "invoke_payload")))
+	payload := []byte(strings.TrimSpace(stringField(invoked, "invoke_payload")))
 	if len(payload) == 0 {
 		payload = []byte("{}")
 	}
-	headers := map[string]string{"x-amz-executed-version": qualifier}
+	headers := map[string]string{"x-amz-executed-version": executedVersion}
 	if logType == "Tail" {
 		headers["x-amz-log-result"] = base64.StdEncoding.EncodeToString([]byte("START RequestId: " + requestID + "\nEND RequestId: " + requestID + "\n"))
 	}
@@ -626,20 +633,30 @@ func (h *Handler) removePermission(ctx gateway.AwsRequestContext, route route, r
 	return jsonResponse(http.StatusNoContent, map[string]any{})
 }
 
-func (h *Handler) configForQualifier(ctx gateway.AwsRequestContext, fn corestore.Record, qualifier string) map[string]any {
+func (h *Handler) configForQualifier(ctx gateway.AwsRequestContext, fn corestore.Record, qualifier string, requestID string) (map[string]any, protocols.ErrorResponse, bool) {
+	record, version, response, ok := h.recordForQualifier(ctx, fn, qualifier, requestID)
+	if !ok {
+		return nil, response, false
+	}
+	return h.functionConfiguration(record, version), protocols.ErrorResponse{}, true
+}
+
+func (h *Handler) recordForQualifier(ctx gateway.AwsRequestContext, fn corestore.Record, qualifier string, requestID string) (corestore.Record, string, protocols.ErrorResponse, bool) {
+	qualifier = strings.TrimSpace(qualifier)
 	if qualifier == "" || qualifier == "$LATEST" {
-		return h.functionConfiguration(fn, "$LATEST")
+		return fn, "$LATEST", protocols.ErrorResponse{}, true
 	}
 	functionName := stringField(fn, "function_name")
 	for _, version := range h.Versions.FindBy("function_name", functionName) {
 		if h.sameScope(ctx, version) && stringField(version, "version") == qualifier {
-			return h.functionConfiguration(version, qualifier)
+			return version, qualifier, protocols.ErrorResponse{}, true
 		}
 	}
 	if alias, ok := h.findAlias(ctx, functionName, qualifier); ok {
-		return h.configForQualifier(ctx, fn, stringField(alias, "function_version"))
+		targetVersion := firstNonEmpty(stringField(alias, "function_version"), "$LATEST")
+		return h.recordForQualifier(ctx, fn, targetVersion, requestID)
 	}
-	return h.functionConfiguration(fn, "$LATEST")
+	return nil, "", h.notFound("Function qualifier not found.", requestID), false
 }
 
 func (h *Handler) functionConfiguration(fn corestore.Record, version string) map[string]any {

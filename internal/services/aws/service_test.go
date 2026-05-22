@@ -4008,6 +4008,26 @@ func TestServiceRoutesSignedLambdaRESTJSON(t *testing.T) {
 	}
 }
 
+func TestServiceRoutesRootLambdaRESTJSONWithoutSigV4(t *testing.T) {
+	handler := newTestHandler()
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/2015-03-31/functions", nil)
+	req.Header.Set("Authorization", "Bearer test_token_admin")
+
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Functions []map[string]any `json:"Functions"`
+	}
+	decodeJSONBody(t, res, &body)
+	if body.Functions == nil {
+		t.Fatalf("unexpected body: %s", res.Body.String())
+	}
+}
+
 func TestServiceHandlesLambdaControlPlaneAndInvoke(t *testing.T) {
 	handler := newTestHandler()
 
@@ -4083,6 +4103,14 @@ func TestServiceHandlesLambdaControlPlaneAndInvoke(t *testing.T) {
 		t.Fatalf("missing code size: %#v", codeBody)
 	}
 
+	malformed := executeAWSLambdaRawRequest(t, handler, http.MethodPut, "/2015-03-31/functions/sdk-lambda-control/code", []byte(`{`))
+	if malformed.Code != http.StatusBadRequest {
+		t.Fatalf("malformed update code status = %d, body = %s", malformed.Code, malformed.Body.String())
+	}
+	if !strings.Contains(malformed.Body.String(), "InvalidRequestException") {
+		t.Fatalf("unexpected malformed update body: %s", malformed.Body.String())
+	}
+
 	invoke := executeAWSLambdaRawRequest(t, handler, http.MethodPost, "/2015-03-31/functions/sdk-lambda-control/invocations?LogType=Tail", []byte(`{"hello":"world"}`))
 	if invoke.Code != http.StatusOK {
 		t.Fatalf("invoke status = %d, body = %s", invoke.Code, invoke.Body.String())
@@ -4092,6 +4120,16 @@ func TestServiceHandlesLambdaControlPlaneAndInvoke(t *testing.T) {
 	}
 	if got := invoke.Header().Get("x-amz-log-result"); got == "" {
 		t.Fatal("missing tail log result")
+	}
+
+	missingQualifier := executeAWSLambdaRequest(t, handler, http.MethodGet, "/2015-03-31/functions/sdk-lambda-control/configuration?Qualifier=missing", nil)
+	if missingQualifier.Code != http.StatusNotFound || !strings.Contains(missingQualifier.Body.String(), "ResourceNotFoundException") {
+		t.Fatalf("missing qualifier status = %d, body = %s", missingQualifier.Code, missingQualifier.Body.String())
+	}
+
+	missingInvoke := executeAWSLambdaRawRequest(t, handler, http.MethodPost, "/2015-03-31/functions/sdk-lambda-control/invocations?Qualifier=missing", []byte(`"payload"`))
+	if missingInvoke.Code != http.StatusNotFound || !strings.Contains(missingInvoke.Body.String(), "ResourceNotFoundException") {
+		t.Fatalf("missing invoke qualifier status = %d, body = %s", missingInvoke.Code, missingInvoke.Body.String())
 	}
 
 	groups := executeAWSLogsRequest(t, handler, "DescribeLogGroups", map[string]any{"logGroupNamePrefix": "/aws/lambda/sdk-lambda-control"})
@@ -4154,6 +4192,14 @@ func TestServiceHandlesLambdaVersionsAliasesTagsAndPolicy(t *testing.T) {
 	decodeJSONBody(t, alias, &aliasBody)
 	if aliasBody.Name != "live" || aliasBody.FunctionVersion != "1" {
 		t.Fatalf("unexpected alias: %#v", aliasBody)
+	}
+
+	aliasInvoke := executeAWSLambdaRawRequest(t, handler, http.MethodPost, "/2015-03-31/functions/sdk-lambda-release/invocations?Qualifier=live", []byte(`"payload"`))
+	if aliasInvoke.Code != http.StatusOK {
+		t.Fatalf("alias invoke status = %d, body = %s", aliasInvoke.Code, aliasInvoke.Body.String())
+	}
+	if got := aliasInvoke.Header().Get("x-amz-executed-version"); got != "1" {
+		t.Fatalf("executed version = %q, want 1", got)
 	}
 
 	tagPath := "/2017-03-31/tags/" + url.PathEscape(created.FunctionArn)

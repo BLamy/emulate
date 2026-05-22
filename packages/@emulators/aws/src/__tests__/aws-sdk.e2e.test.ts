@@ -1431,7 +1431,6 @@ describeExternalSecretsManagerE2E("AWS native runtime - real @aws-sdk/client-sec
   });
 });
 
-
 describeExternalLambdaE2E("AWS native runtime - real @aws-sdk/client-lambda E2E", () => {
   let emulator: EmulatorHandle;
   let lambda: LambdaClient;
@@ -1503,7 +1502,11 @@ describeExternalLambdaE2E("AWS native runtime - real @aws-sdk/client-lambda E2E"
     expect(updatedCode.CodeSize).toBeGreaterThan(0);
 
     const invoked = await lambda.send(
-      new InvokeCommand({ FunctionName: functionName, Payload: Buffer.from(JSON.stringify({ hello: "world" })), LogType: "Tail" }),
+      new InvokeCommand({
+        FunctionName: functionName,
+        Payload: Buffer.from(JSON.stringify({ hello: "world" })),
+        LogType: "Tail",
+      }),
     );
     expect(invoked.StatusCode).toBe(200);
     expect(Buffer.from(invoked.Payload ?? []).toString()).toBe("{}");
@@ -1547,7 +1550,9 @@ describeExternalLambdaE2E("AWS native runtime - real @aws-sdk/client-lambda E2E"
     await lambda.send(new RemovePermissionCommand({ FunctionName: functionName, StatementId: "allow-events" }));
     await lambda.send(new DeleteLambdaAliasCommand({ FunctionName: functionName, Name: "live" }));
     await lambda.send(new DeleteFunctionCommand({ FunctionName: functionName }));
-    await expect(lambda.send(new GetFunctionConfigurationCommand({ FunctionName: functionName }))).rejects.toMatchObject({
+    await expect(
+      lambda.send(new GetFunctionConfigurationCommand({ FunctionName: functionName })),
+    ).rejects.toMatchObject({
       name: "ResourceNotFoundException",
     });
   });

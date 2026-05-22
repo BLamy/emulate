@@ -141,7 +141,7 @@ func BuildContext(req *http.Request, rawBody []byte, options Options) (AwsReques
 		return ctx, nil
 	}
 
-	if firstNonEmpty(pathService, host.Service, credentials.Scope.Service) == "lambda" {
+	if shouldParseLambdaREST(req.URL.Path, pathService, host.Service, credentials.Scope.Service) {
 		action, input, ok, err := parseLambdaRESTRequest(req, rawBody, queryReq.Parameters)
 		if err != nil {
 			return AwsRequestContext{}, err
@@ -402,6 +402,16 @@ func serviceFromJSONTargetPrefix(prefix string) string {
 	return ""
 }
 
+func shouldParseLambdaREST(pathValue string, pathService string, hostService string, credentialService string) bool {
+	if credentialService == "s3" {
+		return false
+	}
+	if firstNonEmpty(pathService, hostService, credentialService) == "lambda" {
+		return true
+	}
+	return credentialService == "" && hostService == "" && isLambdaRESTPath(pathValue)
+}
+
 func parseLambdaRESTRequest(req *http.Request, rawBody []byte, query map[string]string) (string, map[string]any, bool, error) {
 	segments := lambdaRESTSegments(req.URL.Path)
 	if len(segments) > 0 && strings.EqualFold(segments[0], "lambda") {
@@ -410,11 +420,15 @@ func parseLambdaRESTRequest(req *http.Request, rawBody []byte, query map[string]
 	if len(segments) < 2 {
 		return "", nil, false, nil
 	}
-	input, err := lambdaRESTInput(rawBody, query)
-	if err != nil {
-		return "", nil, false, err
-	}
 	if segments[0] == "2017-03-31" && len(segments) >= 3 && segments[1] == "tags" {
+		input := lambdaRESTQueryInput(query)
+		if req.Method == http.MethodPost {
+			var err error
+			input, err = lambdaRESTInput(rawBody, query)
+			if err != nil {
+				return "", nil, false, err
+			}
+		}
 		resource := decodeLambdaSegment(strings.Join(segments[2:], "/"))
 		input["Resource"] = resource
 		switch req.Method {
@@ -433,23 +447,30 @@ func parseLambdaRESTRequest(req *http.Request, rawBody []byte, query map[string]
 	if len(segments) == 2 {
 		switch req.Method {
 		case http.MethodGet:
-			return "ListFunctions", input, true, nil
+			return "ListFunctions", lambdaRESTQueryInput(query), true, nil
 		case http.MethodPost:
+			input, err := lambdaRESTInput(rawBody, query)
+			if err != nil {
+				return "", nil, false, err
+			}
 			return "CreateFunction", input, true, nil
 		}
 		return "", nil, false, nil
 	}
 	functionName := decodeLambdaSegment(segments[2])
-	input["FunctionName"] = functionName
-	if qualifier := req.URL.Query().Get("Qualifier"); qualifier != "" {
-		input["Qualifier"] = qualifier
+	addFunctionContext := func(input map[string]any) map[string]any {
+		input["FunctionName"] = functionName
+		if qualifier := req.URL.Query().Get("Qualifier"); qualifier != "" {
+			input["Qualifier"] = qualifier
+		}
+		return input
 	}
 	if len(segments) == 3 {
 		switch req.Method {
 		case http.MethodGet:
-			return "GetFunction", input, true, nil
+			return "GetFunction", addFunctionContext(lambdaRESTQueryInput(query)), true, nil
 		case http.MethodDelete:
-			return "DeleteFunction", input, true, nil
+			return "DeleteFunction", addFunctionContext(lambdaRESTQueryInput(query)), true, nil
 		}
 		return "", nil, false, nil
 	}
@@ -457,41 +478,67 @@ func parseLambdaRESTRequest(req *http.Request, rawBody []byte, query map[string]
 	case "configuration":
 		switch req.Method {
 		case http.MethodGet:
-			return "GetFunctionConfiguration", input, true, nil
+			return "GetFunctionConfiguration", addFunctionContext(lambdaRESTQueryInput(query)), true, nil
 		case http.MethodPut:
-			return "UpdateFunctionConfiguration", input, true, nil
+			input, err := lambdaRESTInput(rawBody, query)
+			if err != nil {
+				return "", nil, false, err
+			}
+			return "UpdateFunctionConfiguration", addFunctionContext(input), true, nil
 		}
 	case "code":
 		if req.Method == http.MethodPut {
-			return "UpdateFunctionCode", input, true, nil
+			input, err := lambdaRESTInput(rawBody, query)
+			if err != nil {
+				return "", nil, false, err
+			}
+			return "UpdateFunctionCode", addFunctionContext(input), true, nil
 		}
 	case "invocations":
 		if req.Method == http.MethodPost {
-			return "Invoke", input, true, nil
+			return "Invoke", addFunctionContext(lambdaRESTQueryInput(query)), true, nil
 		}
 	case "versions":
 		if len(segments) == 4 {
 			if req.Method == http.MethodGet {
-				return "ListVersionsByFunction", input, true, nil
+				return "ListVersionsByFunction", addFunctionContext(lambdaRESTQueryInput(query)), true, nil
 			}
 			if req.Method == http.MethodPost {
-				return "PublishVersion", input, true, nil
+				input, err := lambdaRESTInput(rawBody, query)
+				if err != nil {
+					return "", nil, false, err
+				}
+				return "PublishVersion", addFunctionContext(input), true, nil
 			}
 		}
 		if len(segments) == 5 && req.Method == http.MethodGet {
+			input := addFunctionContext(lambdaRESTQueryInput(query))
 			input["Qualifier"] = decodeLambdaSegment(segments[4])
 			return "GetFunction", input, true, nil
 		}
 	case "aliases":
 		if len(segments) == 4 {
 			if req.Method == http.MethodGet {
-				return "ListAliases", input, true, nil
+				return "ListAliases", addFunctionContext(lambdaRESTQueryInput(query)), true, nil
 			}
 			if req.Method == http.MethodPost {
-				return "CreateAlias", input, true, nil
+				input, err := lambdaRESTInput(rawBody, query)
+				if err != nil {
+					return "", nil, false, err
+				}
+				return "CreateAlias", addFunctionContext(input), true, nil
 			}
 		}
 		if len(segments) == 5 {
+			input := lambdaRESTQueryInput(query)
+			if req.Method == http.MethodPut {
+				var err error
+				input, err = lambdaRESTInput(rawBody, query)
+				if err != nil {
+					return "", nil, false, err
+				}
+			}
+			input = addFunctionContext(input)
 			input["Name"] = decodeLambdaSegment(segments[4])
 			switch req.Method {
 			case http.MethodGet:
@@ -505,13 +552,18 @@ func parseLambdaRESTRequest(req *http.Request, rawBody []byte, query map[string]
 	case "policy":
 		if len(segments) == 4 {
 			if req.Method == http.MethodGet {
-				return "GetPolicy", input, true, nil
+				return "GetPolicy", addFunctionContext(lambdaRESTQueryInput(query)), true, nil
 			}
 			if req.Method == http.MethodPost {
-				return "AddPermission", input, true, nil
+				input, err := lambdaRESTInput(rawBody, query)
+				if err != nil {
+					return "", nil, false, err
+				}
+				return "AddPermission", addFunctionContext(input), true, nil
 			}
 		}
 		if len(segments) == 5 && req.Method == http.MethodDelete {
+			input := addFunctionContext(lambdaRESTQueryInput(query))
 			input["StatementId"] = decodeLambdaSegment(segments[4])
 			return "RemovePermission", input, true, nil
 		}
@@ -519,11 +571,16 @@ func parseLambdaRESTRequest(req *http.Request, rawBody []byte, query map[string]
 	return "", nil, false, nil
 }
 
-func lambdaRESTInput(rawBody []byte, query map[string]string) (map[string]any, error) {
+func lambdaRESTQueryInput(query map[string]string) map[string]any {
 	input := make(map[string]any, len(query))
 	for key, value := range query {
 		input[key] = value
 	}
+	return input
+}
+
+func lambdaRESTInput(rawBody []byte, query map[string]string) (map[string]any, error) {
+	input := lambdaRESTQueryInput(query)
 	if len(bytes.TrimSpace(rawBody)) == 0 {
 		return input, nil
 	}
@@ -531,12 +588,26 @@ func lambdaRESTInput(rawBody []byte, query map[string]string) (map[string]any, e
 	decoder.UseNumber()
 	body := map[string]any{}
 	if err := decoder.Decode(&body); err != nil {
-		return input, nil
+		return nil, fmt.Errorf("request body must be a valid JSON object: %w", err)
 	}
 	for key, value := range body {
 		input[key] = value
 	}
 	return input, nil
+}
+
+func isLambdaRESTPath(pathValue string) bool {
+	segments := lambdaRESTSegments(pathValue)
+	if len(segments) > 0 && strings.EqualFold(segments[0], "lambda") {
+		segments = segments[1:]
+	}
+	if len(segments) < 2 {
+		return false
+	}
+	if segments[0] == "2015-03-31" && segments[1] == "functions" {
+		return true
+	}
+	return segments[0] == "2017-03-31" && segments[1] == "tags"
 }
 
 func lambdaRESTSegments(pathValue string) []string {
