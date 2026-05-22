@@ -218,6 +218,73 @@ func TestHandlerListsSecretVersionIds(t *testing.T) {
 	}
 }
 
+func TestHandlerCreateSecretIsIdempotentForClientRequestToken(t *testing.T) {
+	handler := newTestSecretsManagerHandler()
+	input := map[string]any{
+		"Name":               "idempotent",
+		"ClientRequestToken": "stable-token",
+		"SecretString":       "same-value",
+	}
+
+	response := handler.call("CreateSecret", input)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("first create status = %d, body = %s", response.StatusCode, response.Body)
+	}
+	response = handler.call("CreateSecret", input)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("second create status = %d, body = %s", response.StatusCode, response.Body)
+	}
+	var created struct {
+		VersionID string `json:"VersionId"`
+	}
+	decodeSecretsBody(t, response, &created)
+	if created.VersionID != "stable-token" {
+		t.Fatalf("version id = %q", created.VersionID)
+	}
+	if handler.handler.Secrets.Count() != 1 || handler.handler.Versions.Count() != 1 {
+		t.Fatalf("unexpected counts: secrets=%d versions=%d", handler.handler.Secrets.Count(), handler.handler.Versions.Count())
+	}
+
+	response = handler.call("CreateSecret", map[string]any{
+		"Name":               "idempotent",
+		"ClientRequestToken": "stable-token",
+		"SecretString":       "different-value",
+	})
+	if response.StatusCode != http.StatusBadRequest || response.Headers["x-amzn-errortype"] != "ResourceExistsException" {
+		t.Fatalf("conflicting create status = %d, headers = %#v, body = %s", response.StatusCode, response.Headers, response.Body)
+	}
+}
+
+func TestHandlerForceDeleteRemovesSecretAndVersions(t *testing.T) {
+	handler := newTestSecretsManagerHandler()
+	response := handler.call("CreateSecret", map[string]any{
+		"Name":               "force-delete",
+		"ClientRequestToken": "one",
+		"SecretString":       "value",
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", response.StatusCode, response.Body)
+	}
+
+	response = handler.call("DeleteSecret", map[string]any{"SecretId": "force-delete", "ForceDeleteWithoutRecovery": true})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("force delete status = %d, body = %s", response.StatusCode, response.Body)
+	}
+	if handler.handler.Secrets.Count() != 0 || handler.handler.Versions.Count() != 0 {
+		t.Fatalf("force deleted records remain: secrets=%d versions=%d", handler.handler.Secrets.Count(), handler.handler.Versions.Count())
+	}
+
+	response = handler.call("RestoreSecret", map[string]any{"SecretId": "force-delete"})
+	if response.StatusCode != http.StatusBadRequest || response.Headers["x-amzn-errortype"] != "ResourceNotFoundException" {
+		t.Fatalf("restore force deleted status = %d, headers = %#v, body = %s", response.StatusCode, response.Headers, response.Body)
+	}
+
+	response = handler.call("CreateSecret", map[string]any{"Name": "force-delete", "SecretString": "new-value"})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("recreate status = %d, body = %s", response.StatusCode, response.Body)
+	}
+}
+
 func TestHandlerUpdatesSecretMetadataAndValue(t *testing.T) {
 	handler := newTestSecretsManagerHandler()
 	handler.call("CreateSecret", map[string]any{

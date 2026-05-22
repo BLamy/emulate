@@ -1043,6 +1043,18 @@ describeExternalSecretsManagerE2E("AWS native runtime - real @aws-sdk/client-sec
     expect(created.ARN).toContain(`:secret:${secretName}-`);
     expect(created.VersionId).toBe(`${suffix}-one`);
 
+    const createdAgain = await secrets.send(
+      new CreateSecretCommand({
+        Name: secretName,
+        Description: "SDK secret",
+        KmsKeyId: "alias/local",
+        ClientRequestToken: `${suffix}-one`,
+        SecretString: "initial",
+        Tags: [{ Key: "env", Value: "test" }],
+      }),
+    );
+    expect(createdAgain.VersionId).toBe(`${suffix}-one`);
+
     const initial = await secrets.send(new GetSecretValueCommand({ SecretId: secretName }));
     expect(initial.SecretString).toBe("initial");
     expect(initial.VersionStages).toEqual(["AWSCURRENT"]);
@@ -1117,6 +1129,19 @@ describeExternalSecretsManagerE2E("AWS native runtime - real @aws-sdk/client-sec
     const restored = await secrets.send(new GetSecretValueCommand({ SecretId: secretName }));
     expect(restored.SecretString).toBe("updated");
 
+    await secrets.send(new DeleteSecretCommand({ SecretId: secretName, ForceDeleteWithoutRecovery: true }));
+    await expect(secrets.send(new RestoreSecretCommand({ SecretId: secretName }))).rejects.toMatchObject({
+      name: "ResourceNotFoundException",
+    });
+
+    const recreated = await secrets.send(
+      new CreateSecretCommand({
+        Name: secretName,
+        ClientRequestToken: `${suffix}-after-force`,
+        SecretString: "after-force",
+      }),
+    );
+    expect(recreated.VersionId).toBe(`${suffix}-after-force`);
     await secrets.send(new DeleteSecretCommand({ SecretId: secretName, ForceDeleteWithoutRecovery: true }));
   });
 

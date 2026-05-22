@@ -70,12 +70,26 @@ func (h *Handler) createSecret(ctx gateway.AwsRequestContext, requestID string) 
 	if name == "" {
 		return h.validation("Name is required.", requestID)
 	}
-	if _, ok := h.findSecretByName(ctx, name); ok {
-		return h.error("ResourceExistsException", "The operation failed because the secret already exists.", http.StatusBadRequest, requestID)
-	}
 	secretString, hasString, secretBinary, hasBinary, response, ok := h.secretPayload(ctx.Input, requestID, false)
 	if !ok {
 		return response
+	}
+	clientRequestToken := stringInput(ctx.Input, "ClientRequestToken")
+	if existing, ok := h.findSecretByName(ctx, name); ok {
+		if clientRequestToken != "" {
+			if version, ok := h.findVersionByID(existing, clientRequestToken); ok {
+				if !samePayload(version, secretString, hasString, secretBinary, hasBinary) {
+					return h.error("ResourceExistsException", "A secret version with this ClientRequestToken already exists and has a different value.", http.StatusBadRequest, requestID)
+				}
+				body := map[string]any{
+					"ARN":       stringField(existing, "arn"),
+					"Name":      stringField(existing, "name"),
+					"VersionId": clientRequestToken,
+				}
+				return jsonResponse(http.StatusOK, body)
+			}
+		}
+		return h.error("ResourceExistsException", "The operation failed because the secret already exists.", http.StatusBadRequest, requestID)
 	}
 	now := h.now().Unix()
 	accountID := h.accountID(ctx)
@@ -100,7 +114,7 @@ func (h *Handler) createSecret(ctx gateway.AwsRequestContext, requestID string) 
 	})
 	body := map[string]any{"ARN": arn, "Name": name}
 	if hasString || hasBinary {
-		versionID := firstNonEmpty(stringInput(ctx.Input, "ClientRequestToken"), h.generateVersionID())
+		versionID := firstNonEmpty(clientRequestToken, h.generateVersionID())
 		h.insertVersion(secret, versionID, secretString, hasString, secretBinary, hasBinary, []string{"AWSCURRENT"}, now)
 		body["VersionId"] = versionID
 	}
@@ -216,14 +230,34 @@ func (h *Handler) deleteSecret(ctx gateway.AwsRequestContext, requestID string) 
 	if !ok {
 		return response
 	}
+	force := boolInput(ctx.Input, "ForceDeleteWithoutRecovery")
+	hasRecoveryWindow := inputValue(ctx.Input, "RecoveryWindowInDays", "recoveryWindowInDays") != nil
+	if force && hasRecoveryWindow {
+		return h.validation("ForceDeleteWithoutRecovery and RecoveryWindowInDays can't both be set.", requestID)
+	}
 	if int64Field(secret, "deleted_date") > 0 {
-		return h.invalidRequest("You can't perform this operation on the secret because it was deleted.", requestID)
+		if !force {
+			return h.invalidRequest("You can't perform this operation on the secret because it was deleted.", requestID)
+		}
+		deletedAt := h.now().Unix()
+		body := map[string]any{
+			"ARN":          stringField(secret, "arn"),
+			"Name":         stringField(secret, "name"),
+			"DeletionDate": deletedAt,
+		}
+		h.deleteSecretAndVersions(secret)
+		return jsonResponse(http.StatusOK, body)
 	}
 	now := h.now()
-	force := boolInput(ctx.Input, "ForceDeleteWithoutRecovery")
 	recoveryWindow := intInput(ctx.Input, "RecoveryWindowInDays", 30)
 	if force {
-		recoveryWindow = 0
+		body := map[string]any{
+			"ARN":          stringField(secret, "arn"),
+			"Name":         stringField(secret, "name"),
+			"DeletionDate": now.Unix(),
+		}
+		h.deleteSecretAndVersions(secret)
+		return jsonResponse(http.StatusOK, body)
 	} else if recoveryWindow < 7 || recoveryWindow > 30 {
 		return h.validation("RecoveryWindowInDays must be between 7 and 30.", requestID)
 	}
@@ -262,6 +296,13 @@ func (h *Handler) restoreSecret(ctx gateway.AwsRequestContext, requestID string)
 		"ARN":  stringField(secret, "arn"),
 		"Name": stringField(secret, "name"),
 	})
+}
+
+func (h *Handler) deleteSecretAndVersions(secret corestore.Record) {
+	for _, version := range h.Versions.FindBy("secret_arn", stringField(secret, "arn")) {
+		h.Versions.Delete(intField(version, "id"))
+	}
+	h.Secrets.Delete(intField(secret, "id"))
 }
 
 func (h *Handler) listSecrets(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {

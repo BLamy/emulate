@@ -68,6 +68,12 @@ export interface LogStream extends CompatEntity {
 export interface LogEvent extends CompatEntity {
   [key: string]: unknown;
 }
+export interface Secret extends CompatEntity {
+  [key: string]: unknown;
+}
+export interface SecretVersion extends CompatEntity {
+  [key: string]: unknown;
+}
 export interface IamUser extends CompatEntity {
   [key: string]: unknown;
 }
@@ -87,6 +93,8 @@ export interface AwsStore {
   logGroups: CompatCollection<LogGroup>;
   logStreams: CompatCollection<LogStream>;
   logEvents: CompatCollection<LogEvent>;
+  secrets: CompatCollection<Secret>;
+  secretVersions: CompatCollection<SecretVersion>;
   iamUsers: CompatCollection<IamUser>;
   iamRoles: CompatCollection<IamRole>;
 }
@@ -119,6 +127,14 @@ export function getAwsStore(store: CompatStoreSource): AwsStore {
       "log_group_name",
       "log_stream_name",
       "event_id",
+    ]),
+    secrets: compatCollection<Secret>(store, "aws.secretsmanager_secrets", ["account_id", "region", "name", "arn"]),
+    secretVersions: compatCollection<SecretVersion>(store, "aws.secretsmanager_versions", [
+      "account_id",
+      "region",
+      "secret_arn",
+      "secret_name",
+      "version_id",
     ]),
     iamUsers: compatCollection<IamUser>(store, "aws.iam_users", ["user_name", "user_id"]),
     iamRoles: compatCollection<IamRole>(store, "aws.iam_roles", ["role_name", "role_id"]),
@@ -207,6 +223,38 @@ export interface LogEvent extends CompatEntity {
   ingestion_time: number;
 }
 
+export interface Secret extends CompatEntity {
+  account_id: string;
+  region: string;
+  name: string;
+  arn: string;
+  arn_suffix: string;
+  description: string;
+  kms_key_id: string;
+  created_date: number;
+  last_changed_date: number;
+  last_accessed_date: number;
+  deleted_date: number;
+  recovery_window_days: number;
+  force_deleted: boolean;
+  tags: Record<string, string>;
+}
+
+export interface SecretVersion extends CompatEntity {
+  account_id: string;
+  region: string;
+  secret_arn: string;
+  secret_name: string;
+  version_id: string;
+  secret_string: string;
+  has_secret_string: boolean;
+  secret_binary: string;
+  has_secret_binary: boolean;
+  version_stages: string[];
+  created_date: number;
+  last_accessed_date: number;
+}
+
 export interface IamUser extends CompatEntity {
   user_name: string;
   user_id: string;
@@ -240,6 +288,16 @@ export interface AwsSeedConfig {
       name: string;
       fifo?: boolean;
       visibility_timeout?: number;
+    }>;
+  };
+  secretsmanager?: {
+    secrets?: Array<{
+      name: string;
+      description?: string;
+      kms_key_id?: string;
+      secret_string?: string;
+      secret_binary?: string;
+      tags?: Record<string, string>;
     }>;
   };
   iam?: {
