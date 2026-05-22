@@ -147,7 +147,9 @@ func (h *Handler) createFunction(ctx gateway.AwsRequestContext, requestID string
 	if role == "" {
 		return h.validation("Role is required.", requestID)
 	}
-	codeSize, codeSHA := codeSummary(inputValue(input, "Code", "code"))
+	codeValue := inputValue(input, "Code", "code")
+	codeSize, codeSHA := codeSummary(codeValue)
+	codeZip := codeZipBase64(codeValue)
 	now := h.now().UTC()
 	record := h.Functions.Insert(corestore.Record{
 		"account_id":          h.accountID(ctx),
@@ -164,6 +166,7 @@ func (h *Handler) createFunction(ctx gateway.AwsRequestContext, requestID string
 		"architectures":       stringListDefault(inputValue(input, "Architectures", "architectures"), []string{"x86_64"}),
 		"code_size":           codeSize,
 		"code_sha256":         codeSHA,
+		"code_zip_base64":     codeZip,
 		"version":             "$LATEST",
 		"revision_id":         h.generateID("rev"),
 		"last_modified":       formatLambdaTime(now),
@@ -357,9 +360,11 @@ func (h *Handler) updateFunctionCode(ctx gateway.AwsRequestContext, route route,
 		return response
 	}
 	codeSize, codeSHA := codeSummary(input)
+	codeZip := codeZipBase64(input)
 	updated, _ := h.Functions.Update(intField(fn, "id"), corestore.Record{
 		"code_size":          codeSize,
 		"code_sha256":        codeSHA,
+		"code_zip_base64":    codeZip,
 		"revision_id":        h.generateID("rev"),
 		"last_modified":      formatLambdaTime(h.now().UTC()),
 		"last_update_status": "Successful",
@@ -378,20 +383,31 @@ func (h *Handler) invoke(req *http.Request, ctx gateway.AwsRequestContext, route
 	if !ok {
 		return response
 	}
-	h.recordInvocation(ctx, fn, requestID, invocationType)
 	if invocationType == "DryRun" {
 		return lambdaBodyResponse(http.StatusNoContent, nil, map[string]string{"x-amz-executed-version": executedVersion})
 	}
 	if invocationType == "Event" {
+		h.recordInvocation(ctx, invoked, requestID, invocationType, executedVersion, []string{"Lambda async invoke accepted RequestId: " + requestID})
 		return lambdaBodyResponse(http.StatusAccepted, nil, map[string]string{"x-amz-executed-version": executedVersion})
 	}
 	payload := []byte(strings.TrimSpace(stringField(invoked, "invoke_payload")))
 	if len(payload) == 0 {
 		payload = []byte("{}")
 	}
+	logLines := []string{"Lambda API-only invoke " + invocationType + " RequestId: " + requestID}
+	functionError := ""
+	if result, ran := h.invokeLocalNode(ctx, invoked, executedVersion, ctx.RawBody, requestID); ran {
+		payload = result.Payload
+		logLines = result.Logs
+		functionError = result.FunctionError
+	}
+	tail := h.recordInvocation(ctx, invoked, requestID, invocationType, executedVersion, logLines)
 	headers := map[string]string{"x-amz-executed-version": executedVersion}
+	if functionError != "" {
+		headers["x-amz-function-error"] = functionError
+	}
 	if logType == "Tail" {
-		headers["x-amz-log-result"] = base64.StdEncoding.EncodeToString([]byte("START RequestId: " + requestID + "\nEND RequestId: " + requestID + "\n"))
+		headers["x-amz-log-result"] = tail
 	}
 	return lambdaBodyResponse(http.StatusOK, payload, headers)
 }
@@ -897,14 +913,19 @@ func (h *Handler) ensureLogGroup(ctx gateway.AwsRequestContext, functionName str
 	})
 }
 
-func (h *Handler) recordInvocation(ctx gateway.AwsRequestContext, fn corestore.Record, requestID string, invocationType string) {
+func (h *Handler) recordInvocation(ctx gateway.AwsRequestContext, fn corestore.Record, requestID string, invocationType string, executedVersion string, lines []string) string {
 	functionName := stringField(fn, "function_name")
+	executedVersion = firstNonEmpty(executedVersion, "$LATEST")
+	messages := []string{"START RequestId: " + requestID + " Version: " + executedVersion}
+	messages = append(messages, lines...)
+	messages = append(messages, "END RequestId: "+requestID)
+	tail := lambdaLogTail(messages)
 	h.ensureLogGroup(ctx, functionName)
 	if h.LogStreams == nil || h.LogEvents == nil {
-		return
+		return tail
 	}
 	groupName := logGroupName(functionName)
-	streamName := h.now().UTC().Format("2006/01/02") + "/[$LATEST]" + h.generateID("stream")
+	streamName := h.now().UTC().Format("2006/01/02") + "/[" + executedVersion + "]" + h.generateID("stream")
 	stream := corestore.Record(nil)
 	for _, existing := range h.LogStreams.FindBy("log_stream_name", streamName) {
 		if stringField(existing, "log_group_name") == groupName && h.sameScope(ctx, existing) {
@@ -928,23 +949,28 @@ func (h *Handler) recordInvocation(ctx gateway.AwsRequestContext, fn corestore.R
 		})
 	}
 	now := h.now().UnixMilli()
-	message := "Lambda API-only invoke " + invocationType + " RequestId: " + requestID
-	h.LogEvents.Insert(corestore.Record{
-		"account_id":      h.accountID(ctx),
-		"region":          h.region(ctx),
-		"log_group_name":  groupName,
-		"log_stream_name": stringField(stream, "log_stream_name"),
-		"event_id":        h.generateID("event"),
-		"timestamp":       now,
-		"ingestion_time":  now,
-		"message":         message,
-	})
+	storedBytes := 0
+	for index, message := range messages {
+		timestamp := now + int64(index)
+		storedBytes += len(message)
+		h.LogEvents.Insert(corestore.Record{
+			"account_id":      h.accountID(ctx),
+			"region":          h.region(ctx),
+			"log_group_name":  groupName,
+			"log_stream_name": stringField(stream, "log_stream_name"),
+			"event_id":        h.generateID("event"),
+			"timestamp":       timestamp,
+			"ingestion_time":  timestamp,
+			"message":         message,
+		})
+	}
 	h.LogStreams.Update(intField(stream, "id"), corestore.Record{
 		"first_event_timestamp": now,
-		"last_event_timestamp":  now,
-		"last_ingestion_time":   now,
-		"stored_bytes":          len(message),
+		"last_event_timestamp":  now + int64(len(messages)-1),
+		"last_ingestion_time":   now + int64(len(messages)-1),
+		"stored_bytes":          storedBytes,
 	})
+	return tail
 }
 
 func (h *Handler) pageBounds(input map[string]any, total int, defaultLimit int, maxLimit int, markerKey string, limitKey string, requestID string) (int, int, string, protocols.ErrorResponse, bool) {
@@ -1194,14 +1220,14 @@ func withRequestID(response protocols.ErrorResponse, requestID string) protocols
 func codeSummary(value any) (int, string) {
 	var raw []byte
 	if record := mapRecord(value); len(record) > 0 {
-		if zip := stringField(record, "ZipFile"); zip != "" {
-			if decoded, err := base64.StdEncoding.DecodeString(zip); err == nil {
+		if zip := firstNonEmpty(stringField(record, "ZipFile"), stringField(record, "zipFile")); zip != "" {
+			if decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(zip)); err == nil {
 				raw = decoded
 			} else {
 				raw = []byte(zip)
 			}
 		} else {
-			raw = []byte(firstNonEmpty(stringField(record, "S3Bucket"), stringField(record, "ImageUri")) + stringField(record, "S3Key") + stringField(record, "S3ObjectVersion"))
+			raw = []byte(firstNonEmpty(stringField(record, "S3Bucket"), stringField(record, "s3Bucket"), stringField(record, "ImageUri"), stringField(record, "imageUri")) + firstNonEmpty(stringField(record, "S3Key"), stringField(record, "s3Key")) + firstNonEmpty(stringField(record, "S3ObjectVersion"), stringField(record, "s3ObjectVersion")))
 		}
 	} else if rawString, ok := value.(string); ok {
 		raw = []byte(rawString)
@@ -1211,6 +1237,30 @@ func codeSummary(value any) (int, string) {
 	}
 	sum := sha256.Sum256(raw)
 	return len(raw), base64.StdEncoding.EncodeToString(sum[:])
+}
+
+func codeZipBase64(value any) string {
+	record := mapRecord(value)
+	if len(record) == 0 {
+		return ""
+	}
+	zip := strings.TrimSpace(firstNonEmpty(stringField(record, "ZipFile"), stringField(record, "zipFile")))
+	if zip == "" {
+		return ""
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(zip); err == nil {
+		return base64.StdEncoding.EncodeToString(decoded)
+	}
+	return base64.StdEncoding.EncodeToString([]byte(zip))
+}
+
+func lambdaLogTail(messages []string) string {
+	text := strings.Join(messages, "\n") + "\n"
+	raw := []byte(text)
+	if len(raw) > 4096 {
+		raw = raw[len(raw)-4096:]
+	}
+	return base64.StdEncoding.EncodeToString(raw)
 }
 
 func environmentVariables(value any) corestore.Record {

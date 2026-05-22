@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -4152,6 +4154,102 @@ func TestServiceHandlesLambdaControlPlaneAndInvoke(t *testing.T) {
 	}
 }
 
+func TestServiceRunsLocalNodeLambdaHandler(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required for local Lambda Node.js runner coverage")
+	}
+	handler := newTestHandler()
+	zipFile := zipLambdaSource(t, map[string]string{"index.js": `exports.handler = async (event, context) => {
+  console.log("node runner", event.name, process.env.MODE, context.functionName);
+  return {
+    message: "hello " + event.name,
+    mode: process.env.MODE,
+    requestId: context.awsRequestId,
+    remaining: context.getRemainingTimeInMillis() > 0,
+  };
+};
+`})
+
+	create := executeAWSLambdaRequest(t, handler, http.MethodPost, "/2015-03-31/functions", map[string]any{
+		"FunctionName": "node-runner",
+		"Runtime":      "nodejs22.x",
+		"Role":         "arn:aws:iam::123456789012:role/lambda-execution-role",
+		"Handler":      "index.handler",
+		"Code":         map[string]any{"ZipFile": zipFile},
+		"Environment":  map[string]any{"Variables": map[string]any{"MODE": "test"}},
+	})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", create.Code, create.Body.String())
+	}
+
+	invoke := executeAWSLambdaRawRequest(t, handler, http.MethodPost, "/2015-03-31/functions/node-runner/invocations?LogType=Tail", []byte(`{"name":"Ada"}`))
+	if invoke.Code != http.StatusOK {
+		t.Fatalf("invoke status = %d, body = %s", invoke.Code, invoke.Body.String())
+	}
+	var body struct {
+		Message   string `json:"message"`
+		Mode      string `json:"mode"`
+		RequestID string `json:"requestId"`
+		Remaining bool   `json:"remaining"`
+	}
+	decodeJSONBody(t, invoke, &body)
+	if body.Message != "hello Ada" || body.Mode != "test" || body.RequestID == "" || !body.Remaining {
+		t.Fatalf("unexpected invoke body: %#v", body)
+	}
+	logTail, err := base64.StdEncoding.DecodeString(invoke.Header().Get("x-amz-log-result"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logTail), "node runner Ada test node-runner") {
+		t.Fatalf("tail log missing runner output: %s", string(logTail))
+	}
+
+	logs := executeAWSLogsRequest(t, handler, "FilterLogEvents", map[string]any{"logGroupName": "/aws/lambda/node-runner", "filterPattern": "node runner"})
+	if logs.Code != http.StatusOK {
+		t.Fatalf("filter logs status = %d, body = %s", logs.Code, logs.Body.String())
+	}
+	var logBody struct {
+		Events []struct {
+			Message string `json:"message"`
+		} `json:"events"`
+	}
+	decodeJSONBody(t, logs, &logBody)
+	if len(logBody.Events) != 1 || !strings.Contains(logBody.Events[0].Message, "node runner Ada test node-runner") {
+		t.Fatalf("unexpected log events: %#v", logBody.Events)
+	}
+
+	errorZip := zipLambdaSource(t, map[string]string{"index.js": `exports.handler = async () => {
+  console.error("before boom");
+  throw new Error("boom");
+};
+`})
+	updated := executeAWSLambdaRequest(t, handler, http.MethodPut, "/2015-03-31/functions/node-runner/code", map[string]any{"ZipFile": errorZip})
+	if updated.Code != http.StatusOK {
+		t.Fatalf("update code status = %d, body = %s", updated.Code, updated.Body.String())
+	}
+	failed := executeAWSLambdaRawRequest(t, handler, http.MethodPost, "/2015-03-31/functions/node-runner/invocations?LogType=Tail", []byte(`{}`))
+	if failed.Code != http.StatusOK {
+		t.Fatalf("failed invoke status = %d, body = %s", failed.Code, failed.Body.String())
+	}
+	if got := failed.Header().Get("x-amz-function-error"); got != "Unhandled" {
+		t.Fatalf("function error = %q, want Unhandled", got)
+	}
+	var failedBody struct {
+		ErrorMessage string `json:"errorMessage"`
+	}
+	decodeJSONBody(t, failed, &failedBody)
+	if failedBody.ErrorMessage != "boom" {
+		t.Fatalf("unexpected error body: %#v", failedBody)
+	}
+	failedTail, err := base64.StdEncoding.DecodeString(failed.Header().Get("x-amz-log-result"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(failedTail), "before boom") {
+		t.Fatalf("tail log missing error output: %s", string(failedTail))
+	}
+}
+
 func TestServiceHandlesLambdaVersionsAliasesTagsAndPolicy(t *testing.T) {
 	handler := newTestHandler()
 	create := executeAWSLambdaRequest(t, handler, http.MethodPost, "/2015-03-31/functions", map[string]any{
@@ -4831,6 +4929,25 @@ func executeAWSKMSRequestWithRegion(t *testing.T, handler http.Handler, action s
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 	return res
+}
+
+func zipLambdaSource(t *testing.T, files map[string]string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	archive := zip.NewWriter(&buf)
+	for name, source := range files {
+		file, err := archive.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write([]byte(source)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
 func executeAWSLambdaRequest(t *testing.T, handler http.Handler, method string, path string, payload map[string]any) *httptest.ResponseRecorder {

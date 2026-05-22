@@ -246,6 +246,8 @@ aws:
         role: arn:aws:iam::123456789012:role/lambda-execution-role
         handler: index.handler
         invoke_payload: '{"ok":true}'
+        # Optional base64 Lambda zip for local Node.js handler execution.
+        code_zip_base64: ""
         environment:
           NODE_ENV: local
   iam:
