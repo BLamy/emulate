@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -4167,6 +4169,8 @@ func TestServiceRunsLocalNodeLambdaHandler(t *testing.T) {
     mode: process.env.MODE,
     requestId: context.awsRequestId,
     remaining: context.getRemainingTimeInMillis() > 0,
+    logStreamName: context.logStreamName,
+    envLogStreamName: process.env.AWS_LAMBDA_LOG_STREAM_NAME,
   };
 };
 `})
@@ -4188,14 +4192,19 @@ func TestServiceRunsLocalNodeLambdaHandler(t *testing.T) {
 		t.Fatalf("invoke status = %d, body = %s", invoke.Code, invoke.Body.String())
 	}
 	var body struct {
-		Message   string `json:"message"`
-		Mode      string `json:"mode"`
-		RequestID string `json:"requestId"`
-		Remaining bool   `json:"remaining"`
+		Message          string `json:"message"`
+		Mode             string `json:"mode"`
+		RequestID        string `json:"requestId"`
+		Remaining        bool   `json:"remaining"`
+		LogStreamName    string `json:"logStreamName"`
+		EnvLogStreamName string `json:"envLogStreamName"`
 	}
 	decodeJSONBody(t, invoke, &body)
 	if body.Message != "hello Ada" || body.Mode != "test" || body.RequestID == "" || !body.Remaining {
 		t.Fatalf("unexpected invoke body: %#v", body)
+	}
+	if body.LogStreamName == "" || body.EnvLogStreamName != body.LogStreamName {
+		t.Fatalf("unexpected log stream names: %#v", body)
 	}
 	logTail, err := base64.StdEncoding.DecodeString(invoke.Header().Get("x-amz-log-result"))
 	if err != nil {
@@ -4203,6 +4212,19 @@ func TestServiceRunsLocalNodeLambdaHandler(t *testing.T) {
 	}
 	if !strings.Contains(string(logTail), "node runner Ada test node-runner") {
 		t.Fatalf("tail log missing runner output: %s", string(logTail))
+	}
+	streams := executeAWSLogsRequest(t, handler, "DescribeLogStreams", map[string]any{"logGroupName": "/aws/lambda/node-runner"})
+	if streams.Code != http.StatusOK {
+		t.Fatalf("describe log streams status = %d, body = %s", streams.Code, streams.Body.String())
+	}
+	var streamBody struct {
+		LogStreams []struct {
+			LogStreamName string `json:"logStreamName"`
+		} `json:"logStreams"`
+	}
+	decodeJSONBody(t, streams, &streamBody)
+	if len(streamBody.LogStreams) != 1 || streamBody.LogStreams[0].LogStreamName != body.LogStreamName {
+		t.Fatalf("unexpected log streams: %#v, invoke body: %#v", streamBody.LogStreams, body)
 	}
 
 	contextSucceedZip := zipLambdaSource(t, map[string]string{"index.js": `exports.handler = (event, context) => {
@@ -4352,11 +4374,18 @@ exports.handler = async () => ({ ok: true });
 		t.Fatalf("tail log missing error output: %s", string(failedTail))
 	}
 
-	timeoutConfig := executeAWSLambdaRequest(t, handler, http.MethodPut, "/2015-03-31/functions/node-runner/configuration", map[string]any{"Timeout": 1})
+	childMarkerPath := filepath.Join(t.TempDir(), "child-marker")
+	timeoutConfig := executeAWSLambdaRequest(t, handler, http.MethodPut, "/2015-03-31/functions/node-runner/configuration", map[string]any{
+		"Timeout":     1,
+		"Environment": map[string]any{"Variables": map[string]any{"CHILD_MARKER": childMarkerPath}},
+	})
 	if timeoutConfig.Code != http.StatusOK {
 		t.Fatalf("update timeout config status = %d, body = %s", timeoutConfig.Code, timeoutConfig.Body.String())
 	}
 	timeoutZip := zipLambdaSource(t, map[string]string{"index.js": `exports.handler = async () => {
+  const { spawn } = require("node:child_process");
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => require('node:fs').writeFileSync(process.env.CHILD_MARKER, 'alive'), 1800); setTimeout(() => {}, 3000);"], { stdio: "ignore" });
+  child.unref();
   console.log("before timeout");
   setInterval(() => {}, 1000);
   await new Promise(() => {});
@@ -4386,6 +4415,12 @@ exports.handler = async () => ({ ok: true });
 	}
 	if !strings.Contains(string(timedOutTail), "before timeout") {
 		t.Fatalf("tail log missing timeout output: %s", string(timedOutTail))
+	}
+	time.Sleep(2200 * time.Millisecond)
+	if _, err := os.Stat(childMarkerPath); err == nil {
+		t.Fatalf("timed out Lambda child process wrote marker file: %s", childMarkerPath)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("failed to check child marker file: %v", err)
 	}
 }
 

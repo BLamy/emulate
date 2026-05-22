@@ -36,7 +36,7 @@ type nodeEnvelope struct {
 	Logs         []string `json:"logs"`
 }
 
-func (h *Handler) invokeLocalNode(ctx gateway.AwsRequestContext, fn corestore.Record, executedVersion string, payload []byte, requestID string) (localInvokeResult, bool) {
+func (h *Handler) invokeLocalNode(ctx gateway.AwsRequestContext, fn corestore.Record, executedVersion string, payload []byte, requestID string, logStreamName string) (localInvokeResult, bool) {
 	if !strings.HasPrefix(strings.TrimSpace(stringField(fn, "runtime")), "nodejs") {
 		return localInvokeResult{}, false
 	}
@@ -67,18 +67,31 @@ func (h *Handler) invokeLocalNode(ctx gateway.AwsRequestContext, fn corestore.Re
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 3
 	}
-	contextValue, _ := json.Marshal(lambdaNodeContext(ctx, fn, executedVersion, requestID, timeoutSeconds))
+	contextValue, _ := json.Marshal(lambdaNodeContext(ctx, fn, executedVersion, requestID, timeoutSeconds, logStreamName))
 	runCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, "node", wrapperPath, stringField(fn, "handler"), base64.StdEncoding.EncodeToString(contextValue))
+	cmd := exec.Command("node", wrapperPath, stringField(fn, "handler"), base64.StdEncoding.EncodeToString(contextValue))
 	cmd.Dir = workingDir
-	cmd.Env = lambdaNodeEnvironment(ctx, fn, executedVersion)
+	cmd.Env = lambdaNodeEnvironment(ctx, fn, executedVersion, logStreamName)
 	cmd.Stdin = bytes.NewReader(payload)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	configureLambdaProcess(cmd)
+	err = cmd.Start()
+	if err == nil {
+		waitCh := make(chan error, 1)
+		go func() {
+			waitCh <- cmd.Wait()
+		}()
+		select {
+		case err = <-waitCh:
+		case <-runCtx.Done():
+			terminateLambdaProcess(cmd)
+			err = <-waitCh
+		}
+	}
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		message := fmt.Sprintf("Task timed out after %d seconds", timeoutSeconds)
 		return localInvokeFailure("TimeoutError", message, nodeProcessLogs(stdout.String(), stderr.String())), true
@@ -159,7 +172,7 @@ func extractLambdaZip(reader *zip.Reader, destination string) error {
 	return nil
 }
 
-func lambdaNodeContext(ctx gateway.AwsRequestContext, fn corestore.Record, executedVersion string, requestID string, timeoutSeconds int) map[string]any {
+func lambdaNodeContext(ctx gateway.AwsRequestContext, fn corestore.Record, executedVersion string, requestID string, timeoutSeconds int, logStreamName string) map[string]any {
 	executedVersion = firstNonEmpty(executedVersion, "$LATEST")
 	arn := stringField(fn, "arn")
 	if executedVersion != "$LATEST" && arn != "" && !strings.HasSuffix(arn, ":"+executedVersion) {
@@ -172,7 +185,7 @@ func lambdaNodeContext(ctx gateway.AwsRequestContext, fn corestore.Record, execu
 		"invokedFunctionArn": arn,
 		"memoryLimitInMB":    intFieldDefault(fn, "memory_size", 128),
 		"logGroupName":       logGroupName(stringField(fn, "function_name")),
-		"logStreamName":      time.Now().UTC().Format("2006/01/02") + "/[" + executedVersion + "]" + requestID,
+		"logStreamName":      logStreamName,
 		"deadlineMs":         time.Now().Add(time.Duration(timeoutSeconds) * time.Second).UnixMilli(),
 		"region":             hRegion(ctx),
 	}
@@ -185,7 +198,7 @@ func hRegion(ctx gateway.AwsRequestContext) string {
 	return gateway.DefaultRegion
 }
 
-func lambdaNodeEnvironment(ctx gateway.AwsRequestContext, fn corestore.Record, executedVersion string) []string {
+func lambdaNodeEnvironment(ctx gateway.AwsRequestContext, fn corestore.Record, executedVersion string, logStreamName string) []string {
 	executedVersion = firstNonEmpty(executedVersion, "$LATEST")
 	env := append([]string{}, os.Environ()...)
 	for key, value := range mapRecord(fn["environment"]) {
@@ -203,7 +216,7 @@ func lambdaNodeEnvironment(ctx gateway.AwsRequestContext, fn corestore.Record, e
 		"AWS_LAMBDA_FUNCTION_VERSION="+executedVersion,
 		"AWS_LAMBDA_FUNCTION_MEMORY_SIZE="+fmt.Sprint(intFieldDefault(fn, "memory_size", 128)),
 		"AWS_LAMBDA_LOG_GROUP_NAME="+logGroupName(stringField(fn, "function_name")),
-		"AWS_LAMBDA_LOG_STREAM_NAME="+time.Now().UTC().Format("2006/01/02")+"/["+executedVersion+"]local",
+		"AWS_LAMBDA_LOG_STREAM_NAME="+logStreamName,
 	)
 	return env
 }

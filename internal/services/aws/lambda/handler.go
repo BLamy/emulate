@@ -389,8 +389,9 @@ func (h *Handler) invoke(req *http.Request, ctx gateway.AwsRequestContext, route
 	if invocationType == "DryRun" {
 		return lambdaBodyResponse(http.StatusNoContent, nil, map[string]string{"x-amz-executed-version": executedVersion})
 	}
+	logStreamName := h.lambdaLogStreamName(executedVersion)
 	if invocationType == "Event" {
-		h.recordInvocation(ctx, invoked, requestID, invocationType, executedVersion, []string{"Lambda async invoke accepted RequestId: " + requestID})
+		h.recordInvocation(ctx, invoked, requestID, invocationType, executedVersion, logStreamName, []string{"Lambda async invoke accepted RequestId: " + requestID})
 		return lambdaBodyResponse(http.StatusAccepted, nil, map[string]string{"x-amz-executed-version": executedVersion})
 	}
 	payload := []byte(strings.TrimSpace(stringField(invoked, "invoke_payload")))
@@ -400,13 +401,13 @@ func (h *Handler) invoke(req *http.Request, ctx gateway.AwsRequestContext, route
 	logLines := []string{"Lambda API-only invoke " + invocationType + " RequestId: " + requestID}
 	functionError := ""
 	if h.localCodeExecutionAllowed(req, ctx) {
-		if result, ran := h.invokeLocalNode(ctx, invoked, executedVersion, ctx.RawBody, requestID); ran {
+		if result, ran := h.invokeLocalNode(ctx, invoked, executedVersion, ctx.RawBody, requestID, logStreamName); ran {
 			payload = result.Payload
 			logLines = result.Logs
 			functionError = result.FunctionError
 		}
 	}
-	tail := h.recordInvocation(ctx, invoked, requestID, invocationType, executedVersion, logLines)
+	tail := h.recordInvocation(ctx, invoked, requestID, invocationType, executedVersion, logStreamName, logLines)
 	headers := map[string]string{"x-amz-executed-version": executedVersion}
 	if functionError != "" {
 		headers["x-amz-function-error"] = functionError
@@ -973,9 +974,17 @@ func (h *Handler) ensureLogGroup(ctx gateway.AwsRequestContext, functionName str
 	})
 }
 
-func (h *Handler) recordInvocation(ctx gateway.AwsRequestContext, fn corestore.Record, requestID string, invocationType string, executedVersion string, lines []string) string {
+func (h *Handler) lambdaLogStreamName(executedVersion string) string {
+	executedVersion = firstNonEmpty(executedVersion, "$LATEST")
+	return h.now().UTC().Format("2006/01/02") + "/[" + executedVersion + "]" + h.generateID("stream")
+}
+
+func (h *Handler) recordInvocation(ctx gateway.AwsRequestContext, fn corestore.Record, requestID string, invocationType string, executedVersion string, logStreamName string, lines []string) string {
 	functionName := stringField(fn, "function_name")
 	executedVersion = firstNonEmpty(executedVersion, "$LATEST")
+	if strings.TrimSpace(logStreamName) == "" {
+		logStreamName = h.lambdaLogStreamName(executedVersion)
+	}
 	messages := []string{"START RequestId: " + requestID + " Version: " + executedVersion}
 	messages = append(messages, lines...)
 	messages = append(messages, "END RequestId: "+requestID)
@@ -985,9 +994,8 @@ func (h *Handler) recordInvocation(ctx gateway.AwsRequestContext, fn corestore.R
 		return tail
 	}
 	groupName := logGroupName(functionName)
-	streamName := h.now().UTC().Format("2006/01/02") + "/[" + executedVersion + "]" + h.generateID("stream")
 	stream := corestore.Record(nil)
-	for _, existing := range h.LogStreams.FindBy("log_stream_name", streamName) {
+	for _, existing := range h.LogStreams.FindBy("log_stream_name", logStreamName) {
 		if stringField(existing, "log_group_name") == groupName && h.sameScope(ctx, existing) {
 			stream = existing
 			break
@@ -998,8 +1006,8 @@ func (h *Handler) recordInvocation(ctx gateway.AwsRequestContext, fn corestore.R
 			"account_id":            h.accountID(ctx),
 			"region":                h.region(ctx),
 			"log_group_name":        groupName,
-			"log_stream_name":       streamName,
-			"arn":                   logGroupARN(h.region(ctx), h.accountID(ctx), groupName) + ":log-stream:" + streamName,
+			"log_stream_name":       logStreamName,
+			"arn":                   logGroupARN(h.region(ctx), h.accountID(ctx), groupName) + ":log-stream:" + logStreamName,
 			"creation_time":         h.now().UnixMilli(),
 			"first_event_timestamp": int64(0),
 			"last_event_timestamp":  int64(0),
