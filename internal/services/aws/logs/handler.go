@@ -250,15 +250,23 @@ func (h *Handler) putLogEvents(ctx gateway.AwsRequestContext, requestID string) 
 	if len(rawEvents) == 0 {
 		return h.validation("logEvents is required.", requestID)
 	}
+	timestamps := make([]int64, len(rawEvents))
+	for index, item := range rawEvents {
+		timestamp := int64Value(inputValue(item, "timestamp", "Timestamp"), -1)
+		if timestamp < 0 {
+			return h.validation("Each log event must include timestamp.", requestID)
+		}
+		if index > 0 && timestamp < timestamps[index-1] {
+			return h.validation("The log events in a batch must be in chronological order.", requestID)
+		}
+		timestamps[index] = timestamp
+	}
 	ingestionTime := h.now().UnixMilli()
 	firstTimestamp := int64Field(stream, "first_event_timestamp")
 	lastTimestamp := int64Field(stream, "last_event_timestamp")
-	for _, item := range rawEvents {
+	for index, item := range rawEvents {
 		message := stringValue(inputValue(item, "message", "Message"))
-		timestamp := int64Value(inputValue(item, "timestamp", "Timestamp"), 0)
-		if timestamp == 0 {
-			return h.validation("Each log event must include timestamp.", requestID)
-		}
+		timestamp := timestamps[index]
 		if firstTimestamp == 0 || timestamp < firstTimestamp {
 			firstTimestamp = timestamp
 		}
@@ -298,6 +306,9 @@ func (h *Handler) getLogEvents(ctx gateway.AwsRequestContext, requestID string) 
 	}
 	events := h.eventsForStream(ctx, stringField(group, "log_group_name"), stringField(stream, "log_stream_name"))
 	events = h.filterEventsByTime(events, int64Input(ctx.Input, "startTime", "StartTime", 0), int64Input(ctx.Input, "endTime", "EndTime", 0))
+	if !boolInput(ctx.Input, "startFromHead", "StartFromHead") {
+		reverseRecords(events)
+	}
 	start := tokenOffset(stringInput(ctx.Input, "nextToken", "NextToken"))
 	if start > len(events) {
 		start = len(events)
@@ -445,11 +456,16 @@ func (h *Handler) requireGroup(ctx gateway.AwsRequestContext, name string, reque
 }
 
 func (h *Handler) requireGroupByARN(ctx gateway.AwsRequestContext, arn string, requestID string) (corestore.Record, protocols.ErrorResponse, bool) {
-	name := logGroupNameFromARN(arn)
-	if name == "" {
+	parsed, ok := parseLogGroupARN(arn)
+	if !ok {
 		return nil, h.validation("resourceArn is required.", requestID), false
 	}
-	return h.requireGroup(ctx, name, requestID)
+	for _, group := range h.LogGroups.FindBy("log_group_name", parsed.Name) {
+		if stringField(group, "account_id") == parsed.AccountID && stringField(group, "region") == parsed.Region {
+			return group, protocols.ErrorResponse{}, true
+		}
+	}
+	return nil, h.notFound("The specified log group does not exist.", requestID), false
 }
 
 func (h *Handler) requireStream(ctx gateway.AwsRequestContext, groupName string, streamName string, requestID string) (corestore.Record, protocols.ErrorResponse, bool) {
@@ -517,11 +533,13 @@ func (h *Handler) filterEventsByTime(events []corestore.Record, startTime int64,
 }
 
 func (h *Handler) groupResponse(group corestore.Record) map[string]any {
+	logGroupArn := stringField(group, "arn")
 	response := map[string]any{
 		"logGroupName":      stringField(group, "log_group_name"),
 		"creationTime":      int64Field(group, "creation_time"),
 		"metricFilterCount": 0,
-		"arn":               stringField(group, "arn"),
+		"arn":               logGroupWildcardARN(logGroupArn),
+		"logGroupArn":       logGroupArn,
 		"storedBytes":       h.groupStoredBytes(group),
 	}
 	if retention := intField(group, "retention_in_days"); retention > 0 {
@@ -671,19 +689,41 @@ func logGroupARN(region string, accountID string, name string) string {
 	return "arn:aws:logs:" + region + ":" + accountID + ":log-group:" + name
 }
 
+func logGroupWildcardARN(arn string) string {
+	if strings.HasSuffix(arn, ":*") {
+		return arn
+	}
+	return arn + ":*"
+}
+
 func logStreamARN(region string, accountID string, groupName string, streamName string) string {
 	return logGroupARN(region, accountID, groupName) + ":log-stream:" + streamName
 }
 
-func logGroupNameFromARN(arn string) string {
-	_, value, ok := strings.Cut(arn, ":log-group:")
-	if !ok {
-		return ""
+type logGroupARNParts struct {
+	Region    string
+	AccountID string
+	Name      string
+}
+
+func parseLogGroupARN(arn string) (logGroupARNParts, bool) {
+	parts := strings.SplitN(strings.TrimSpace(arn), ":", 6)
+	if len(parts) != 6 || parts[0] != "arn" || parts[2] != "logs" || parts[3] == "" || parts[4] == "" {
+		return logGroupARNParts{}, false
 	}
-	if before, _, ok := strings.Cut(value, ":log-stream:"); ok {
-		value = before
+	value := parts[5]
+	if !strings.HasPrefix(value, "log-group:") {
+		return logGroupARNParts{}, false
 	}
-	return strings.TrimSuffix(value, ":*")
+	name := strings.TrimPrefix(value, "log-group:")
+	if before, _, ok := strings.Cut(name, ":log-stream:"); ok {
+		name = before
+	}
+	name = strings.TrimSuffix(name, ":*")
+	if name == "" {
+		return logGroupARNParts{}, false
+	}
+	return logGroupARNParts{Region: parts[3], AccountID: parts[4], Name: name}, true
 }
 
 func sortEvents(events []corestore.Record) {
@@ -695,6 +735,12 @@ func sortEvents(events []corestore.Record) {
 		}
 		return left < right
 	})
+}
+
+func reverseRecords(records []corestore.Record) {
+	for left, right := 0, len(records)-1; left < right; left, right = left+1, right-1 {
+		records[left], records[right] = records[right], records[left]
+	}
 }
 
 func logEventsBytes(events []map[string]any) int {

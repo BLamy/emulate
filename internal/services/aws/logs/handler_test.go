@@ -32,14 +32,18 @@ func TestHandlerCreatesAndDescribesLogGroups(t *testing.T) {
 		LogGroups []struct {
 			LogGroupName string `json:"logGroupName"`
 			ARN          string `json:"arn"`
+			LogGroupARN  string `json:"logGroupArn"`
 		} `json:"logGroups"`
 	}
 	decodeLogsBody(t, response, &body)
 	if len(body.LogGroups) != 1 || body.LogGroups[0].LogGroupName != "app" {
 		t.Fatalf("unexpected groups: %#v", body.LogGroups)
 	}
-	if body.LogGroups[0].ARN != "arn:aws:logs:us-east-1:123456789012:log-group:app" {
+	if body.LogGroups[0].ARN != "arn:aws:logs:us-east-1:123456789012:log-group:app:*" {
 		t.Fatalf("arn = %q", body.LogGroups[0].ARN)
+	}
+	if body.LogGroups[0].LogGroupARN != "arn:aws:logs:us-east-1:123456789012:log-group:app" {
+		t.Fatalf("logGroupArn = %q", body.LogGroups[0].LogGroupARN)
 	}
 }
 
@@ -52,8 +56,8 @@ func TestHandlerPutsGetsAndFiltersLogEvents(t *testing.T) {
 		"logGroupName":  "app",
 		"logStreamName": "web",
 		"logEvents": []map[string]any{
-			{"timestamp": 2000, "message": "second info"},
 			{"timestamp": 1000, "message": "first error"},
+			{"timestamp": 2000, "message": "second info"},
 		},
 	})
 	if response.StatusCode != http.StatusOK {
@@ -78,6 +82,15 @@ func TestHandlerPutsGetsAndFiltersLogEvents(t *testing.T) {
 		} `json:"events"`
 	}
 	decodeLogsBody(t, response, &got)
+	if len(got.Events) != 2 || got.Events[0].Message != "second info" || got.Events[1].Message != "first error" {
+		t.Fatalf("unexpected events: %#v", got.Events)
+	}
+
+	response = handler.call("GetLogEvents", map[string]any{"logGroupName": "app", "logStreamName": "web", "startFromHead": true})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("get from head status = %d, body = %s", response.StatusCode, response.Body)
+	}
+	decodeLogsBody(t, response, &got)
 	if len(got.Events) != 2 || got.Events[0].Message != "first error" || got.Events[1].Message != "second info" {
 		t.Fatalf("unexpected events: %#v", got.Events)
 	}
@@ -96,6 +109,27 @@ func TestHandlerPutsGetsAndFiltersLogEvents(t *testing.T) {
 	decodeLogsBody(t, response, &filtered)
 	if len(filtered.Events) != 1 || filtered.Events[0].Message != "first error" || filtered.Events[0].EventID == "" {
 		t.Fatalf("unexpected filtered events: %#v", filtered.Events)
+	}
+}
+
+func TestHandlerRejectsOutOfOrderLogEventBatches(t *testing.T) {
+	handler := newTestLogsHandler()
+	handler.call("CreateLogGroup", map[string]any{"logGroupName": "app"})
+	handler.call("CreateLogStream", map[string]any{"logGroupName": "app", "logStreamName": "web"})
+
+	response := handler.call("PutLogEvents", map[string]any{
+		"logGroupName":  "app",
+		"logStreamName": "web",
+		"logEvents": []map[string]any{
+			{"timestamp": 2000, "message": "second info"},
+			{"timestamp": 1000, "message": "first error"},
+		},
+	})
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", response.StatusCode, response.Body)
+	}
+	if handler.LogEvents.Count() != 0 {
+		t.Fatalf("out of order batch inserted events")
 	}
 }
 
@@ -131,6 +165,10 @@ func TestHandlerRetentionTagsAndDeletes(t *testing.T) {
 	decodeLogsBody(t, response, &tags)
 	if tags.Tags["team"] != "platform" {
 		t.Fatalf("tags = %#v", tags.Tags)
+	}
+	response = handler.call("TagResource", map[string]any{"resourceArn": "arn:aws:logs:us-west-2:123456789012:log-group:app", "tags": map[string]any{"region": "wrong"}})
+	if response.StatusCode != http.StatusBadRequest || response.Headers["x-amzn-errortype"] != "ResourceNotFoundException" {
+		t.Fatalf("cross-region tag status = %d, headers = %#v, body = %s", response.StatusCode, response.Headers, response.Body)
 	}
 
 	response = handler.call("UntagResource", map[string]any{"resourceArn": arn, "tagKeys": []string{"team"}})

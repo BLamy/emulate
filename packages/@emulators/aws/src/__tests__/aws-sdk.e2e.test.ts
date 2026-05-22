@@ -879,7 +879,8 @@ describeExternalCloudWatchLogsE2E("AWS native runtime - real @aws-sdk/client-clo
 
     const groups = await logs.send(new DescribeLogGroupsCommand({ logGroupNamePrefix: "sdk-e2e-logs-" }));
     const group = (groups.logGroups ?? []).find((item) => item.logGroupName === logGroupName);
-    expect(group?.arn).toBe(`arn:aws:logs:us-east-1:123456789012:log-group:${logGroupName}`);
+    expect(group?.arn).toBe(`arn:aws:logs:us-east-1:123456789012:log-group:${logGroupName}:*`);
+    expect(group?.logGroupArn).toBe(`arn:aws:logs:us-east-1:123456789012:log-group:${logGroupName}`);
 
     await logs.send(new PutRetentionPolicyCommand({ logGroupName, retentionInDays: 7 }));
     const retained = await logs.send(new DescribeLogGroupsCommand({ logGroupNamePrefix: logGroupName }));
@@ -902,19 +903,42 @@ describeExternalCloudWatchLogsE2E("AWS native runtime - real @aws-sdk/client-clo
     expect(put.nextSequenceToken).toBeTruthy();
 
     const got = await logs.send(new GetLogEventsCommand({ logGroupName, logStreamName }));
-    expect((got.events ?? []).map((event) => event.message)).toEqual(["first error", "second info"]);
+    expect((got.events ?? []).map((event) => event.message)).toEqual(["second info", "first error"]);
+    const fromHead = await logs.send(new GetLogEventsCommand({ logGroupName, logStreamName, startFromHead: true }));
+    expect((fromHead.events ?? []).map((event) => event.message)).toEqual(["first error", "second info"]);
+
+    await expect(
+      logs.send(
+        new PutLogEventsCommand({
+          logGroupName,
+          logStreamName,
+          logEvents: [
+            { timestamp: 1700000003000, message: "third" },
+            { timestamp: 1700000002000, message: "out of order" },
+          ],
+        }),
+      ),
+    ).rejects.toMatchObject({ name: "InvalidParameterException" });
 
     const filtered = await logs.send(new FilterLogEventsCommand({ logGroupName, filterPattern: "error" }));
     expect((filtered.events ?? []).map((event) => event.message)).toEqual(["first error"]);
     expect(filtered.events?.[0]?.eventId).toBeTruthy();
 
-    if (!group?.arn) {
+    if (!group?.logGroupArn) {
       throw new Error("missing log group arn");
     }
-    await logs.send(new TagLogsResourceCommand({ resourceArn: group.arn, tags: { team: "platform" } }));
-    const tags = await logs.send(new ListLogsTagsForResourceCommand({ resourceArn: group.arn }));
+    await logs.send(new TagLogsResourceCommand({ resourceArn: group.logGroupArn, tags: { team: "platform" } }));
+    const tags = await logs.send(new ListLogsTagsForResourceCommand({ resourceArn: group.logGroupArn }));
     expect(tags.tags?.team).toBe("platform");
-    await logs.send(new UntagLogsResourceCommand({ resourceArn: group.arn, tagKeys: ["team"] }));
+    await expect(
+      logs.send(
+        new TagLogsResourceCommand({
+          resourceArn: `arn:aws:logs:us-west-2:123456789012:log-group:${logGroupName}`,
+          tags: { region: "wrong" },
+        }),
+      ),
+    ).rejects.toMatchObject({ name: "ResourceNotFoundException" });
+    await logs.send(new UntagLogsResourceCommand({ resourceArn: group.logGroupArn, tagKeys: ["team"] }));
 
     await logs.send(new DeleteRetentionPolicyCommand({ logGroupName }));
     await logs.send(new DeleteLogStreamCommand({ logGroupName, logStreamName }));
