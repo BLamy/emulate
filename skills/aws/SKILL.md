@@ -290,6 +290,10 @@ curl -X DELETE http://localhost:4000/my-bucket \
 curl -I http://localhost:4000/my-bucket \
   -H "Authorization: Bearer $TOKEN"
 
+# Get bucket location
+curl "http://localhost:4000/my-bucket?location" \
+  -H "Authorization: Bearer $TOKEN"
+
 # List objects (with prefix, delimiter, pagination)
 curl "http://localhost:4000/my-bucket?prefix=uploads/&delimiter=/&max-keys=100" \
   -H "Authorization: Bearer $TOKEN"
@@ -304,6 +308,16 @@ curl -X PUT http://localhost:4000/my-bucket/path/to/file.txt \
 # Get object
 curl http://localhost:4000/my-bucket/path/to/file.txt \
   -H "Authorization: Bearer $TOKEN"
+
+# Get object byte range
+curl http://localhost:4000/my-bucket/path/to/file.txt \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Range: bytes=0-99"
+
+# Conditional object read
+curl http://localhost:4000/my-bucket/path/to/file.txt \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'If-None-Match: "<etag>"'
 
 # Head object (metadata only)
 curl -I http://localhost:4000/my-bucket/path/to/file.txt \

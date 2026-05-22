@@ -105,6 +105,31 @@ func TestServiceHandlesS3BucketLifecycle(t *testing.T) {
 	}
 }
 
+func TestServiceHandlesS3BucketLocation(t *testing.T) {
+	handler := newTestHandler()
+	body := []byte(`<CreateBucketConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><LocationConstraint>eu-west-1</LocationConstraint></CreateBucketConfiguration>`)
+
+	res := executeAWSRequest(handler, http.MethodPut, "http://127.0.0.1/regional-bucket", body, "s3", map[string]string{
+		"Content-Type": "application/xml",
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSRequest(handler, http.MethodGet, "http://127.0.0.1/regional-bucket?location", nil, "s3", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("location status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">eu-west-1</LocationConstraint>`) {
+		t.Fatalf("unexpected location body: %s", res.Body.String())
+	}
+
+	res = executeAWSRequest(handler, http.MethodGet, "http://127.0.0.1/missing-bucket?location", nil, "s3", nil)
+	if res.Code != http.StatusNotFound || !strings.Contains(res.Body.String(), "<Code>NoSuchBucket</Code>") {
+		t.Fatalf("missing location status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
 func TestServiceHandlesS3ObjectLifecycleWithBinaryBodyAndMetadata(t *testing.T) {
 	handler := newTestHandler()
 	body := []byte{0, 1, 2, 3, 255, 'o', 'k'}
@@ -167,6 +192,98 @@ func TestServiceHandlesS3ObjectLifecycleWithBinaryBodyAndMetadata(t *testing.T) 
 	}
 	if !strings.Contains(res.Body.String(), "<Code>NoSuchKey</Code>") {
 		t.Fatalf("unexpected missing body: %s", res.Body.String())
+	}
+}
+
+func TestServiceHandlesS3RangeAndConditionalReads(t *testing.T) {
+	handler := newTestHandler()
+
+	res := executeAWSRequest(handler, http.MethodPut, "http://127.0.0.1/emulate-default/docs/range.txt", []byte("0123456789"), "s3", map[string]string{
+		"Content-Type": "text/plain",
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("put status = %d, body = %s", res.Code, res.Body.String())
+	}
+	etag := res.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("missing etag")
+	}
+
+	res = executeAWSRequest(handler, http.MethodGet, "http://127.0.0.1/emulate-default/docs/range.txt", nil, "s3", map[string]string{
+		"Range": "bytes=2-5",
+	})
+	if res.Code != http.StatusPartialContent {
+		t.Fatalf("range status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if res.Body.String() != "2345" {
+		t.Fatalf("range body = %q", res.Body.String())
+	}
+	if got := res.Header().Get("Content-Range"); got != "bytes 2-5/10" {
+		t.Fatalf("content range = %q", got)
+	}
+	if got := res.Header().Get("Content-Length"); got != "4" {
+		t.Fatalf("content length = %q", got)
+	}
+
+	res = executeAWSRequest(handler, http.MethodGet, "http://127.0.0.1/emulate-default/docs/range.txt", nil, "s3", map[string]string{
+		"Range": "bytes=-3",
+	})
+	if res.Code != http.StatusPartialContent || res.Body.String() != "789" {
+		t.Fatalf("suffix range status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSRequest(handler, http.MethodHead, "http://127.0.0.1/emulate-default/docs/range.txt", nil, "s3", map[string]string{
+		"Range": "bytes=0-2",
+	})
+	if res.Code != http.StatusPartialContent {
+		t.Fatalf("head range status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if res.Body.Len() != 0 {
+		t.Fatalf("head range body length = %d", res.Body.Len())
+	}
+	if got := res.Header().Get("Content-Range"); got != "bytes 0-2/10" {
+		t.Fatalf("head content range = %q", got)
+	}
+
+	res = executeAWSRequest(handler, http.MethodGet, "http://127.0.0.1/emulate-default/docs/range.txt", nil, "s3", map[string]string{
+		"Range": "bytes=99-100",
+	})
+	if res.Code != http.StatusRequestedRangeNotSatisfiable || !strings.Contains(res.Body.String(), "<Code>InvalidRange</Code>") {
+		t.Fatalf("invalid range status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSRequest(handler, http.MethodHead, "http://127.0.0.1/emulate-default/docs/range.txt", nil, "s3", nil)
+	lastModified := res.Header().Get("Last-Modified")
+	if lastModified == "" {
+		t.Fatal("missing last modified")
+	}
+
+	res = executeAWSRequest(handler, http.MethodGet, "http://127.0.0.1/emulate-default/docs/range.txt", nil, "s3", map[string]string{
+		"If-None-Match": etag,
+	})
+	if res.Code != http.StatusNotModified {
+		t.Fatalf("if-none-match status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSRequest(handler, http.MethodGet, "http://127.0.0.1/emulate-default/docs/range.txt", nil, "s3", map[string]string{
+		"If-Match": `"does-not-match"`,
+	})
+	if res.Code != http.StatusPreconditionFailed || !strings.Contains(res.Body.String(), "<Code>PreconditionFailed</Code>") {
+		t.Fatalf("if-match status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSRequest(handler, http.MethodGet, "http://127.0.0.1/emulate-default/docs/range.txt", nil, "s3", map[string]string{
+		"If-Modified-Since": lastModified,
+	})
+	if res.Code != http.StatusNotModified {
+		t.Fatalf("if-modified-since status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSRequest(handler, http.MethodGet, "http://127.0.0.1/emulate-default/docs/range.txt", nil, "s3", map[string]string{
+		"If-Unmodified-Since": "Wed, 21 Oct 2015 07:28:00 GMT",
+	})
+	if res.Code != http.StatusPreconditionFailed {
+		t.Fatalf("if-unmodified-since status = %d, body = %s", res.Code, res.Body.String())
 	}
 }
 

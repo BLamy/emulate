@@ -737,11 +737,12 @@ S3 routes use root paths matching the real AWS S3 wire format, so the official A
 - `PUT /:bucket` - create bucket
 - `DELETE /:bucket` - delete bucket
 - `HEAD /:bucket` - check existence
+- `GET /:bucket?location` - get bucket region
 - `GET /:bucket` - list objects (prefix, delimiter, max-keys, continuation-token, start-after)
 - `POST /:bucket` - presigned POST upload (browser-style multipart form with policy validation)
 - `PUT /:bucket/:key` - put object (supports copy via `x-amz-copy-source`)
-- `GET /:bucket/:key` - get object
-- `HEAD /:bucket/:key` - head object
+- `GET /:bucket/:key` - get object (supports `Range`, `If-Match`, `If-None-Match`, `If-Modified-Since`, and `If-Unmodified-Since`)
+- `HEAD /:bucket/:key` - head object (supports range and conditional metadata headers)
 - `DELETE /:bucket/:key` - delete object
 
 ### SQS

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"mime"
@@ -46,11 +47,13 @@ func (h *Handler) Handle(req *http.Request, ctx gateway.AwsRequestContext) proto
 	case "ListBuckets":
 		response = h.listBuckets()
 	case "CreateBucket":
-		response = h.createBucket(ctx.S3.Bucket)
+		response = h.createBucket(ctx.S3.Bucket, ctx.RawBody)
 	case "DeleteBucket":
 		response = h.deleteBucket(ctx.S3.Bucket)
 	case "HeadBucket":
 		response = h.headBucket(ctx.S3.Bucket)
+	case "GetBucketLocation":
+		response = h.getBucketLocation(ctx.S3.Bucket)
 	case "ListObjects", "ListObjectsV2":
 		response = h.listObjects(ctx.S3.Bucket, ctx.S3.Query)
 	case "PostObject":
@@ -60,9 +63,9 @@ func (h *Handler) Handle(req *http.Request, ctx gateway.AwsRequestContext) proto
 	case "CopyObject":
 		response = h.copyObject(ctx)
 	case "GetObject":
-		response = h.getObject(ctx.S3.Bucket, ctx.S3.Key, false)
+		response = h.getObject(req, ctx.S3.Bucket, ctx.S3.Key, false)
 	case "HeadObject":
-		response = h.getObject(ctx.S3.Bucket, ctx.S3.Key, true)
+		response = h.getObject(req, ctx.S3.Bucket, ctx.S3.Key, true)
 	case "DeleteObject":
 		response = h.deleteObject(ctx.S3.Bucket, ctx.S3.Key)
 	default:
@@ -98,7 +101,7 @@ func (h *Handler) listBuckets() protocols.ErrorResponse {
 	return xmlResponse(http.StatusOK, body, nil)
 }
 
-func (h *Handler) createBucket(bucketName string) protocols.ErrorResponse {
+func (h *Handler) createBucket(bucketName string, body []byte) protocols.ErrorResponse {
 	if bucketName == "" {
 		return h.xmlError("InvalidBucketName", "The specified bucket is not valid.", http.StatusBadRequest, "")
 	}
@@ -106,6 +109,11 @@ func (h *Handler) createBucket(bucketName string) protocols.ErrorResponse {
 		return h.xmlError("BucketAlreadyOwnedByYou", "Your previous request to create the named bucket succeeded and you already own it.", http.StatusConflict, "/"+bucketName)
 	}
 	region := h.Region
+	if configured, err := createBucketRegion(body); err != nil {
+		return h.xmlError("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", http.StatusBadRequest, "/"+bucketName)
+	} else if configured != "" {
+		region = configured
+	}
 	if region == "" {
 		region = gateway.DefaultRegion
 	}
@@ -137,6 +145,20 @@ func (h *Handler) headBucket(bucketName string) protocols.ErrorResponse {
 		return response(http.StatusNotFound, "", nil, nil)
 	}
 	return response(http.StatusOK, "", nil, map[string]string{"x-amz-bucket-region": stringField(bucket, "region")})
+}
+
+func (h *Handler) getBucketLocation(bucketName string) protocols.ErrorResponse {
+	bucket, ok := h.findBucket(bucketName)
+	if !ok {
+		return h.xmlError("NoSuchBucket", "The specified bucket does not exist.", http.StatusNotFound, "/"+bucketName)
+	}
+	region := stringField(bucket, "region")
+	if region == "" || region == gateway.DefaultRegion {
+		region = ""
+	}
+	body := `<?xml version="1.0" encoding="UTF-8"?>
+<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">` + xmlEscape(region) + `</LocationConstraint>`
+	return xmlResponse(http.StatusOK, body, nil)
 }
 
 func (h *Handler) listObjects(bucketName string, query map[string]string) protocols.ErrorResponse {
@@ -308,7 +330,7 @@ func (h *Handler) copyObject(ctx gateway.AwsRequestContext) protocols.ErrorRespo
 	return xmlResponse(http.StatusOK, bodyXML, objectResponseHeaders(stored, map[string]string{"Last-Modified": httpTime(lastModified)}))
 }
 
-func (h *Handler) getObject(bucketName string, key string, head bool) protocols.ErrorResponse {
+func (h *Handler) getObject(req *http.Request, bucketName string, key string, head bool) protocols.ErrorResponse {
 	if _, ok := h.findBucket(bucketName); !ok {
 		if head {
 			return response(http.StatusNotFound, "", nil, nil)
@@ -329,6 +351,9 @@ func (h *Handler) getObject(bucketName string, key string, head bool) protocols.
 		}
 		return h.xmlError("NoSuchKey", "The specified key does not exist.", http.StatusNotFound, requestResource(bucketName, key))
 	}
+	if condition := h.evaluateObjectConditions(req, object, assetMetadata, bucketName, key); condition != nil {
+		return *condition
+	}
 	headers := map[string]string{
 		"Content-Length": strconv.FormatInt(assetMetadata.ContentLength, 10),
 		"ETag":           quotedETag(stringField(object, "etag")),
@@ -342,10 +367,21 @@ func (h *Handler) getObject(bucketName string, key string, head bool) protocols.
 		headers["x-amz-meta-"+key] = value
 	}
 	objectResponseHeaders(object, headers)
-	if head {
-		return response(http.StatusOK, "", nil, headers)
+	status := http.StatusOK
+	if rangeHeader := strings.TrimSpace(req.Header.Get("Range")); rangeHeader != "" {
+		rangeSpec, ok := parseByteRange(rangeHeader, int64(len(body)))
+		if !ok {
+			return h.xmlError("InvalidRange", "The requested range is not satisfiable.", http.StatusRequestedRangeNotSatisfiable, requestResource(bucketName, key))
+		}
+		body = body[rangeSpec.start : rangeSpec.end+1]
+		status = http.StatusPartialContent
+		headers["Content-Length"] = strconv.FormatInt(int64(len(body)), 10)
+		headers["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", rangeSpec.start, rangeSpec.end, rangeSpec.total)
 	}
-	return response(http.StatusOK, contentType, body, headers)
+	if head {
+		return response(status, "", nil, headers)
+	}
+	return response(status, contentType, body, headers)
 }
 
 func (h *Handler) deleteObject(bucketName string, key string) protocols.ErrorResponse {
@@ -565,6 +601,19 @@ func parseCopySource(value string) (string, string, bool) {
 	return bucket, key, ok && bucket != "" && key != ""
 }
 
+func createBucketRegion(body []byte) (string, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return "", nil
+	}
+	var config struct {
+		LocationConstraint string `xml:"LocationConstraint"`
+	}
+	if err := xml.Unmarshal(body, &config); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(config.LocationConstraint), nil
+}
+
 func userMetadata(req *http.Request) map[string]string {
 	metadata := map[string]string{}
 	for name, values := range req.Header {
@@ -614,6 +663,105 @@ func objectResponseHeaders(object corestore.Record, headers map[string]string) m
 		headers["x-amz-server-side-encryption-aws-kms-key-id"] = keyID
 	}
 	return headers
+}
+
+func (h *Handler) evaluateObjectConditions(req *http.Request, object corestore.Record, metadata coreassets.Metadata, bucketName string, key string) *protocols.ErrorResponse {
+	headers := conditionalHeaders(object, metadata)
+	etag := headers["ETag"]
+	lastModified := metadata.LastModified.UTC().Truncate(time.Second)
+	if raw := strings.TrimSpace(req.Header.Get("If-Match")); raw != "" && !etagListMatches(raw, etag) {
+		response := h.xmlError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold.", http.StatusPreconditionFailed, requestResource(bucketName, key))
+		return &response
+	}
+	if raw := strings.TrimSpace(req.Header.Get("If-Unmodified-Since")); raw != "" {
+		if limit, err := http.ParseTime(raw); err == nil && lastModified.After(limit) {
+			response := h.xmlError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold.", http.StatusPreconditionFailed, requestResource(bucketName, key))
+			return &response
+		}
+	}
+	if raw := strings.TrimSpace(req.Header.Get("If-None-Match")); raw != "" && etagListMatches(raw, etag) {
+		response := response(http.StatusNotModified, "", nil, headers)
+		return &response
+	}
+	if raw := strings.TrimSpace(req.Header.Get("If-Modified-Since")); raw != "" {
+		if limit, err := http.ParseTime(raw); err == nil && !lastModified.After(limit) {
+			response := response(http.StatusNotModified, "", nil, headers)
+			return &response
+		}
+	}
+	return nil
+}
+
+func conditionalHeaders(object corestore.Record, metadata coreassets.Metadata) map[string]string {
+	return map[string]string{
+		"ETag":          quotedETag(stringField(object, "etag")),
+		"Last-Modified": metadata.LastModified.UTC().Format(http.TimeFormat),
+	}
+}
+
+func etagListMatches(raw string, etag string) bool {
+	for _, part := range strings.Split(raw, ",") {
+		candidate := strings.TrimSpace(part)
+		if candidate == "*" {
+			return true
+		}
+		candidate = strings.TrimPrefix(candidate, "W/")
+		if candidate == etag || quotedETag(candidate) == etag {
+			return true
+		}
+	}
+	return false
+}
+
+type byteRange struct {
+	start int64
+	end   int64
+	total int64
+}
+
+func parseByteRange(raw string, total int64) (byteRange, bool) {
+	if total <= 0 || !strings.HasPrefix(raw, "bytes=") {
+		return byteRange{}, false
+	}
+	spec := strings.TrimSpace(strings.TrimPrefix(raw, "bytes="))
+	if strings.Contains(spec, ",") {
+		return byteRange{}, false
+	}
+	startRaw, endRaw, ok := strings.Cut(spec, "-")
+	if !ok {
+		return byteRange{}, false
+	}
+	startRaw = strings.TrimSpace(startRaw)
+	endRaw = strings.TrimSpace(endRaw)
+	if startRaw == "" && endRaw == "" {
+		return byteRange{}, false
+	}
+	if startRaw == "" {
+		suffix, err := strconv.ParseInt(endRaw, 10, 64)
+		if err != nil || suffix <= 0 {
+			return byteRange{}, false
+		}
+		start := total - suffix
+		if start < 0 {
+			start = 0
+		}
+		return byteRange{start: start, end: total - 1, total: total}, true
+	}
+	start, err := strconv.ParseInt(startRaw, 10, 64)
+	if err != nil || start < 0 || start >= total {
+		return byteRange{}, false
+	}
+	end := total - 1
+	if endRaw != "" {
+		parsedEnd, err := strconv.ParseInt(endRaw, 10, 64)
+		if err != nil || parsedEnd < start {
+			return byteRange{}, false
+		}
+		if parsedEnd < end {
+			end = parsedEnd
+		}
+	}
+	return byteRange{start: start, end: end, total: total}, true
 }
 
 func (h *Handler) assets() *coreassets.Store {

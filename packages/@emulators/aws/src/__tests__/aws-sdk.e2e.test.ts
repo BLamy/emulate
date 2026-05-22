@@ -101,6 +101,7 @@ import {
   S3Client,
   ListBucketsCommand,
   HeadBucketCommand,
+  GetBucketLocationCommand,
   CreateBucketCommand,
   DeleteBucketCommand,
   PutObjectCommand,
@@ -198,6 +199,19 @@ describeExternalS3E2E("AWS native runtime - real @aws-sdk/client-s3 E2E", () => 
     await expect(s3.send(new HeadBucketCommand({ Bucket: "emulate-default" }))).resolves.toBeDefined();
   });
 
+  it("GetBucketLocation returns configured bucket regions", async () => {
+    const bucket = "sdk-e2e-regional";
+    await s3.send(
+      new CreateBucketCommand({
+        Bucket: bucket,
+        CreateBucketConfiguration: { LocationConstraint: "eu-west-1" },
+      }),
+    );
+    const location = await s3.send(new GetBucketLocationCommand({ Bucket: bucket }));
+    expect(location.LocationConstraint).toBe("eu-west-1");
+    await s3.send(new DeleteBucketCommand({ Bucket: bucket }));
+  });
+
   it("CreateBucket and DeleteBucket roundtrip", async () => {
     await s3.send(new CreateBucketCommand({ Bucket: "sdk-e2e-create" }));
     const after = await s3.send(new ListBucketsCommand({}));
@@ -229,6 +243,18 @@ describeExternalS3E2E("AWS native runtime - real @aws-sdk/client-s3 E2E", () => 
     expect(head.LastModified).toBeInstanceOf(Date);
     expect(head.ServerSideEncryption).toBe("aws:kms");
     expect(head.SSEKMSKeyId).toBe("alias/local");
+
+    const range = await s3.send(new GetObjectCommand({ Bucket: "emulate-default", Key: "e2e/put-get.txt", Range: "bytes=0-4" }));
+    expect(range.ContentRange).toBe("bytes 0-4/13");
+    expect(range.ContentLength).toBe(5);
+    expect(await streamToString(range.Body)).toBe("hello");
+
+    await expect(
+      s3.send(new GetObjectCommand({ Bucket: "emulate-default", Key: "e2e/put-get.txt", IfNoneMatch: head.ETag })),
+    ).rejects.toMatchObject({ $metadata: { httpStatusCode: 304 } });
+    await expect(
+      s3.send(new GetObjectCommand({ Bucket: "emulate-default", Key: "e2e/put-get.txt", IfMatch: '"not-the-etag"' })),
+    ).rejects.toMatchObject({ name: "PreconditionFailed" });
   });
 
   it("CopyObject preserves body and returns a parseable response", async () => {
