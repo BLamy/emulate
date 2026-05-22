@@ -2632,6 +2632,10 @@ func TestServiceHandlesIAMPoliciesAndSTSSessionMetadata(t *testing.T) {
 	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), url.QueryEscape(policyDocument)) {
 		t.Fatalf("get policy version status = %d, body = %s", res.Code, res.Body.String())
 	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=GetPolicyVersion&PolicyArn="+url.QueryEscape(policyARN))
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "ValidationError") {
+		t.Fatalf("get policy version without version status = %d, body = %s", res.Code, res.Body.String())
+	}
 
 	res = executeAWSQueryRequest(handler, "iam", "Action=AttachUserPolicy&UserName=policy-user&PolicyArn="+url.QueryEscape(policyARN))
 	if res.Code != http.StatusOK {
@@ -2683,6 +2687,54 @@ func TestServiceHandlesIAMPoliciesAndSTSSessionMetadata(t *testing.T) {
 	res = executeAWSQueryRequest(handler, "iam", "Action=DeletePolicy&PolicyArn="+url.QueryEscape(policyARN))
 	if res.Code != http.StatusOK {
 		t.Fatalf("delete policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+}
+
+func TestServiceHandlesAWSManagedPolicyAttachments(t *testing.T) {
+	handler := newTestHandler()
+	assumePolicy := `{"Version":"2012-10-17","Statement":[]}`
+	managedPolicyARN := "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+
+	res := executeAWSQueryRequest(handler, "iam", "Action=CreateUser&UserName=aws-managed-policy-user")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create user status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=CreateRole&RoleName=aws-managed-policy-role&AssumeRolePolicyDocument="+url.QueryEscape(assumePolicy))
+	if res.Code != http.StatusOK {
+		t.Fatalf("create role status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=AttachUserPolicy&UserName=aws-managed-policy-user&PolicyArn="+url.QueryEscape(managedPolicyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("attach user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=AttachRolePolicy&RoleName=aws-managed-policy-role&PolicyArn="+url.QueryEscape(managedPolicyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("attach role policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListAttachedUserPolicies&UserName=aws-managed-policy-user&PathPrefix=%2Fservice-role%2F")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list attached user policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if body := res.Body.String(); !strings.Contains(body, "<PolicyName>AWSLambdaBasicExecutionRole</PolicyName>") || !strings.Contains(body, "<PolicyArn>"+managedPolicyARN+"</PolicyArn>") {
+		t.Fatalf("unexpected user attached policy body: %s", body)
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=ListAttachedRolePolicies&RoleName=aws-managed-policy-role&PathPrefix=%2Fservice-role%2F")
+	if res.Code != http.StatusOK {
+		t.Fatalf("list attached role policies status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if body := res.Body.String(); !strings.Contains(body, "<PolicyName>AWSLambdaBasicExecutionRole</PolicyName>") || !strings.Contains(body, "<PolicyArn>"+managedPolicyARN+"</PolicyArn>") {
+		t.Fatalf("unexpected role attached policy body: %s", body)
+	}
+
+	res = executeAWSQueryRequest(handler, "iam", "Action=DetachUserPolicy&UserName=aws-managed-policy-user&PolicyArn="+url.QueryEscape(managedPolicyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("detach user policy status = %d, body = %s", res.Code, res.Body.String())
+	}
+	res = executeAWSQueryRequest(handler, "iam", "Action=DetachRolePolicy&RoleName=aws-managed-policy-role&PolicyArn="+url.QueryEscape(managedPolicyARN))
+	if res.Code != http.StatusOK {
+		t.Fatalf("detach role policy status = %d, body = %s", res.Code, res.Body.String())
 	}
 }
 
@@ -3128,7 +3180,7 @@ func TestServiceRejectsInvalidAssumeRoleDuration(t *testing.T) {
 	}
 	roleARN := xmlElement(res.Body.String(), "Arn")
 
-	for _, duration := range []string{"abc", "899", "43201"} {
+	for _, duration := range []string{"abc", "899", "3601", "43201"} {
 		values := url.Values{}
 		values.Set("Action", "AssumeRole")
 		values.Set("RoleArn", roleARN)
@@ -3141,6 +3193,44 @@ func TestServiceRejectsInvalidAssumeRoleDuration(t *testing.T) {
 		if !strings.Contains(res.Body.String(), "ValidationError") {
 			t.Fatalf("duration %q body = %s", duration, res.Body.String())
 		}
+	}
+}
+
+func TestServiceEnforcesRoleMaxSessionDurationAndChaining(t *testing.T) {
+	handler := newTestHandler()
+	assumePolicy := `{"Version":"2012-10-17","Statement":[]}`
+
+	values := url.Values{}
+	values.Set("Action", "CreateRole")
+	values.Set("RoleName", "long-duration-role")
+	values.Set("AssumeRolePolicyDocument", assumePolicy)
+	values.Set("MaxSessionDuration", "7200")
+	res := executeAWSQueryRequest(handler, "iam", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("create role status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "<MaxSessionDuration>7200</MaxSessionDuration>") {
+		t.Fatalf("create role missing max session duration: %s", res.Body.String())
+	}
+	roleARN := xmlElement(res.Body.String(), "Arn")
+
+	values = url.Values{}
+	values.Set("Action", "AssumeRole")
+	values.Set("RoleArn", roleARN)
+	values.Set("RoleSessionName", "long-session")
+	values.Set("DurationSeconds", "7200")
+	res = executeAWSQueryRequest(handler, "sts", values.Encode())
+	if res.Code != http.StatusOK {
+		t.Fatalf("assume long role status = %d, body = %s", res.Code, res.Body.String())
+	}
+	assumedAccessKey := xmlElement(res.Body.String(), "AccessKeyId")
+	sessionToken := xmlElement(res.Body.String(), "SessionToken")
+
+	values.Set("RoleSessionName", "too-long-chain")
+	values.Set("DurationSeconds", "3601")
+	res = executeAWSQueryRequestWithAccessKeyAndToken(handler, "sts", values.Encode(), assumedAccessKey, sessionToken)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "ValidationError") {
+		t.Fatalf("chained assume role status = %d, body = %s", res.Code, res.Body.String())
 	}
 }
 

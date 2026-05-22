@@ -1661,6 +1661,20 @@ describeExternalIamStsE2E("AWS native runtime - real @aws-sdk/client-iam and @aw
     const attachedRolePolicies = await iam.send(new ListAttachedRolePoliciesCommand({ RoleName: "sdk-policy-role" }));
     expect((attachedRolePolicies.AttachedPolicies ?? []).map((item) => item.PolicyArn)).toContain(managed.Policy?.Arn);
 
+    const awsManagedPolicyArn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole";
+    await iam.send(new AttachUserPolicyCommand({ UserName: "sdk-policy-user", PolicyArn: awsManagedPolicyArn }));
+    await iam.send(new AttachRolePolicyCommand({ RoleName: "sdk-policy-role", PolicyArn: awsManagedPolicyArn }));
+    const awsManagedUserPolicies = await iam.send(
+      new ListAttachedUserPoliciesCommand({ UserName: "sdk-policy-user", PathPrefix: "/service-role/" }),
+    );
+    expect((awsManagedUserPolicies.AttachedPolicies ?? []).map((item) => item.PolicyArn)).toContain(awsManagedPolicyArn);
+    const awsManagedRolePolicies = await iam.send(
+      new ListAttachedRolePoliciesCommand({ RoleName: "sdk-policy-role", PathPrefix: "/service-role/" }),
+    );
+    expect((awsManagedRolePolicies.AttachedPolicies ?? []).map((item) => item.PolicyArn)).toContain(awsManagedPolicyArn);
+
+    await iam.send(new DetachUserPolicyCommand({ UserName: "sdk-policy-user", PolicyArn: awsManagedPolicyArn }));
+    await iam.send(new DetachRolePolicyCommand({ RoleName: "sdk-policy-role", PolicyArn: awsManagedPolicyArn }));
     await iam.send(new DetachUserPolicyCommand({ UserName: "sdk-policy-user", PolicyArn: managed.Policy?.Arn }));
     await iam.send(new DetachRolePolicyCommand({ RoleName: "sdk-policy-role", PolicyArn: managed.Policy?.Arn }));
     await iam.send(new DeleteUserPolicyCommand({ UserName: "sdk-policy-user", PolicyName: "inline-user" }));
@@ -1676,13 +1690,16 @@ describeExternalIamStsE2E("AWS native runtime - real @aws-sdk/client-iam and @aw
       new CreateRoleCommand({
         RoleName: "sdk-role",
         Description: "SDK role",
+        MaxSessionDuration: 7200,
         AssumeRolePolicyDocument: JSON.stringify({ Version: "2012-10-17", Statement: [] }),
       }),
     );
     expect(created.Role?.Arn).toBe("arn:aws:iam::123456789012:role/sdk-role");
+    expect(created.Role?.MaxSessionDuration).toBe(7200);
 
     const byName = await iam.send(new GetRoleCommand({ RoleName: "sdk-role" }));
     expect(byName.Role?.Description).toBe("SDK role");
+    expect(byName.Role?.MaxSessionDuration).toBe(7200);
 
     const listed = await iam.send(new ListRolesCommand({}));
     expect((listed.Roles ?? []).map((role) => role.RoleName)).toContain("sdk-role");
@@ -1691,7 +1708,7 @@ describeExternalIamStsE2E("AWS native runtime - real @aws-sdk/client-iam and @aw
       new AssumeRoleCommand({
         RoleArn: created.Role?.Arn,
         RoleSessionName: "sdk-session",
-        DurationSeconds: 1800,
+        DurationSeconds: 7200,
         Tags: [{ Key: "env", Value: "test" }],
         TransitiveTagKeys: ["env"],
       }),

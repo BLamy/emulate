@@ -319,6 +319,7 @@ aws:
     roles:
       - role_name: lambda-execution-role
         description: Role for Lambda function execution
+        max_session_duration: 7200
 ```
 
 ## OAuth & Integrations
@@ -824,14 +825,14 @@ Manual IAM requests can use `POST /iam/` with an `Action` form parameter. In the
 - `PutUserPolicy`, `GetUserPolicy`, `ListUserPolicies`, `DeleteUserPolicy`
 - `PutRolePolicy`, `GetRolePolicy`, `ListRolePolicies`, `DeleteRolePolicy`
 - `CreatePolicy`, `GetPolicy`, `GetPolicyVersion`, `ListPolicies`, `DeletePolicy`
-- `AttachUserPolicy`, `DetachUserPolicy`, `ListAttachedUserPolicies`
-- `AttachRolePolicy`, `DetachRolePolicy`, `ListAttachedRolePolicies`
+- `AttachUserPolicy`, `DetachUserPolicy`, `ListAttachedUserPolicies` for local managed policies and AWS managed policy ARNs
+- `AttachRolePolicy`, `DetachRolePolicy`, `ListAttachedRolePolicies` for local managed policies and AWS managed policy ARNs
 - Delete users and roles after deleting inline policies and detaching managed policies.
 
 ### STS
 Manual STS requests can use `POST /sts/` with an `Action` form parameter. In the native Go runtime, `@aws-sdk/client-sts` v3 can use the `/sts/` endpoint directly.
 
-- `GetCallerIdentity`, `AssumeRole` with duration and session tag metadata. `DurationSeconds` must be from 900 to 43200 seconds.
+- `GetCallerIdentity`, `AssumeRole` with duration and session tag metadata. `DurationSeconds` must be from 900 seconds up to the role `MaxSessionDuration`; roles default to 3600 seconds and role chaining is capped at 3600 seconds.
 
 ## Resend
 

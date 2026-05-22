@@ -45,7 +45,7 @@ func (h *Handler) Handle(_ *http.Request, ctx gateway.AwsRequestContext) protoco
 	case "GetCallerIdentity":
 		response = h.getCallerIdentity(ctx, requestID)
 	case "AssumeRole":
-		response = h.assumeRole(ctx.Query, requestID)
+		response = h.assumeRole(ctx, requestID)
 	default:
 		action := ctx.Action
 		response = h.queryError("InvalidAction", "The action "+action+" is not valid for this endpoint.", http.StatusBadRequest, requestID)
@@ -74,7 +74,8 @@ func (h *Handler) getCallerIdentity(ctx gateway.AwsRequestContext, requestID str
 	return xmlResponse(http.StatusOK, body)
 }
 
-func (h *Handler) assumeRole(params map[string]string, requestID string) protocols.ErrorResponse {
+func (h *Handler) assumeRole(ctx gateway.AwsRequestContext, requestID string) protocols.ErrorResponse {
+	params := ctx.Query
 	roleARN := params["RoleArn"]
 	sessionName := params["RoleSessionName"]
 	if sessionName == "" {
@@ -87,9 +88,13 @@ func (h *Handler) assumeRole(params map[string]string, requestID string) protoco
 	accessKeyID := "ASIA" + h.generateID("")[0:16]
 	secretAccessKey := h.generateSecret(30)
 	sessionToken := h.generateSecret(64)
-	durationSeconds, durationOK := assumeRoleDuration(params["DurationSeconds"])
+	maxDuration := roleMaxSessionDurationFromRecord(role)
+	if isRoleChaining(ctx) && maxDuration > defaultAssumeRoleDurationSeconds {
+		maxDuration = defaultAssumeRoleDurationSeconds
+	}
+	durationSeconds, durationOK := assumeRoleDuration(params["DurationSeconds"], maxDuration)
 	if !durationOK {
-		return h.queryError("ValidationError", "DurationSeconds must be between 900 and 43200 seconds.", http.StatusBadRequest, requestID)
+		return h.queryError("ValidationError", "DurationSeconds must be between 900 and "+strconv.Itoa(maxDuration)+" seconds.", http.StatusBadRequest, requestID)
 	}
 	expirationTime := h.now().Add(time.Duration(durationSeconds) * time.Second)
 	expiration := expirationTime.Format(time.RFC3339Nano)
@@ -227,7 +232,10 @@ func stringField(record corestore.Record, name string) string {
 	}
 }
 
-func assumeRoleDuration(raw string) (int, bool) {
+func assumeRoleDuration(raw string, maxDuration int) (int, bool) {
+	if maxDuration <= 0 || maxDuration > maxAssumeRoleDurationSeconds {
+		maxDuration = defaultAssumeRoleDurationSeconds
+	}
 	if raw == "" {
 		return defaultAssumeRoleDurationSeconds, true
 	}
@@ -235,10 +243,37 @@ func assumeRoleDuration(raw string) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
-	if value < minAssumeRoleDurationSeconds || value > maxAssumeRoleDurationSeconds {
+	if value < minAssumeRoleDurationSeconds || value > maxDuration {
 		return 0, false
 	}
 	return value, true
+}
+
+func roleMaxSessionDurationFromRecord(role corestore.Record) int {
+	switch value := role["max_session_duration"].(type) {
+	case int:
+		if value > 0 {
+			return value
+		}
+	case int64:
+		if value > 0 {
+			return int(value)
+		}
+	case float64:
+		if value > 0 {
+			return int(value)
+		}
+	case string:
+		parsed, err := strconv.Atoi(value)
+		if err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return defaultAssumeRoleDurationSeconds
+}
+
+func isRoleChaining(ctx gateway.AwsRequestContext) bool {
+	return strings.HasPrefix(ctx.Principal.ARN, "arn:aws:sts::") && strings.Contains(ctx.Principal.ARN, ":assumed-role/")
 }
 
 func indexedTags(params map[string]string) map[string]string {

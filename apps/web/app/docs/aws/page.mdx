@@ -127,8 +127,8 @@ Manual IAM requests can use `POST /iam/` with an `Action` form parameter. In the
 - `PutUserPolicy` / `GetUserPolicy` / `ListUserPolicies` / `DeleteUserPolicy` - inline user policy storage
 - `PutRolePolicy` / `GetRolePolicy` / `ListRolePolicies` / `DeleteRolePolicy` - inline role policy storage
 - `CreatePolicy` / `GetPolicy` / `GetPolicyVersion` / `ListPolicies` / `DeletePolicy` - managed policy storage
-- `AttachUserPolicy` / `DetachUserPolicy` / `ListAttachedUserPolicies` - user managed policy attachments
-- `AttachRolePolicy` / `DetachRolePolicy` / `ListAttachedRolePolicies` - role managed policy attachments
+- `AttachUserPolicy` / `DetachUserPolicy` / `ListAttachedUserPolicies` - user managed policy attachments for local policies and AWS managed policy ARNs
+- `AttachRolePolicy` / `DetachRolePolicy` / `ListAttachedRolePolicies` - role managed policy attachments for local policies and AWS managed policy ARNs
 - Delete users and roles after deleting inline policies and detaching managed policies.
 
 ## STS
@@ -136,7 +136,7 @@ Manual IAM requests can use `POST /iam/` with an `Action` form parameter. In the
 Manual STS requests can use `POST /sts/` with an `Action` form parameter. In the native Go runtime, `@aws-sdk/client-sts` v3 can use the `/sts/` endpoint directly.
 
 - `GetCallerIdentity` - get caller identity
-- `AssumeRole` - assume a role. Returns temporary credentials with session tag metadata. `DurationSeconds` must be from 900 to 43200 seconds.
+- `AssumeRole` - assume a role. Returns temporary credentials with session tag metadata. `DurationSeconds` must be from 900 seconds up to the role `MaxSessionDuration`; roles default to 3600 seconds and role chaining is capped at 3600 seconds.
 
 ## Inspector
 

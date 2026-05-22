@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,12 @@ type Handler struct {
 }
 
 var fallbackIDCounter atomic.Uint64
+
+const (
+	defaultRoleMaxSessionDurationSeconds = 3600
+	minRoleMaxSessionDurationSeconds     = 3600
+	maxRoleMaxSessionDurationSeconds     = 43200
+)
 
 func (h *Handler) Handle(_ *http.Request, ctx gateway.AwsRequestContext) protocols.ErrorResponse {
 	requestID := ctx.RequestID
@@ -287,6 +294,10 @@ func (h *Handler) createRole(params map[string]string, requestID string) protoco
 	if path == "" {
 		path = "/"
 	}
+	maxSessionDuration, durationOK := roleMaxSessionDuration(params["MaxSessionDuration"])
+	if !durationOK {
+		return h.queryError("ValidationError", "MaxSessionDuration must be between 3600 and 43200 seconds.", http.StatusBadRequest, requestID)
+	}
 	role := h.Roles.Insert(corestore.Record{
 		"role_name":                   roleName,
 		"role_id":                     h.generateID("AROA"),
@@ -294,6 +305,7 @@ func (h *Handler) createRole(params map[string]string, requestID string) protoco
 		"path":                        path,
 		"assume_role_policy_document": defaultString(params["AssumeRolePolicyDocument"], "{}"),
 		"description":                 params["Description"],
+		"max_session_duration":        maxSessionDuration,
 		"inline_policies":             []corestore.Record{},
 		"attached_policies":           []string{},
 	})
@@ -510,7 +522,7 @@ func (h *Handler) getPolicyVersion(params map[string]string, requestID string) p
 	}
 	versionID := params["VersionId"]
 	if versionID == "" {
-		versionID = stringField(policy, "default_version_id")
+		return h.queryError("ValidationError", "The request must contain the parameter VersionId.", http.StatusBadRequest, requestID)
 	}
 	if versionID != stringField(policy, "default_version_id") {
 		return h.noSuchPolicy(versionID, requestID)
@@ -608,11 +620,11 @@ func (h *Handler) attachUserPolicy(params map[string]string, requestID string) p
 	if !ok {
 		return h.noSuchUser(params["UserName"], requestID)
 	}
-	policy, ok := h.findPolicyByARN(params["PolicyArn"])
-	if !ok {
+	policyARN := params["PolicyArn"]
+	if !h.attachablePolicyExists(policyARN) {
 		return h.noSuchPolicy(params["PolicyArn"], requestID)
 	}
-	h.Users.Update(intField(user, "id"), corestore.Record{"attached_policies": addString(attachedPolicies(user), stringField(policy, "arn"))})
+	h.Users.Update(intField(user, "id"), corestore.Record{"attached_policies": addString(attachedPolicies(user), policyARN)})
 	return emptyResponse("AttachUserPolicy", requestID)
 }
 
@@ -621,7 +633,7 @@ func (h *Handler) detachUserPolicy(params map[string]string, requestID string) p
 	if !ok {
 		return h.noSuchUser(params["UserName"], requestID)
 	}
-	if _, ok := h.findPolicyByARN(params["PolicyArn"]); !ok {
+	if !h.attachablePolicyExists(params["PolicyArn"]) {
 		return h.noSuchPolicy(params["PolicyArn"], requestID)
 	}
 	h.Users.Update(intField(user, "id"), corestore.Record{"attached_policies": removeString(attachedPolicies(user), params["PolicyArn"])})
@@ -641,11 +653,11 @@ func (h *Handler) attachRolePolicy(params map[string]string, requestID string) p
 	if !ok {
 		return h.noSuchRole(params["RoleName"], requestID)
 	}
-	policy, ok := h.findPolicyByARN(params["PolicyArn"])
-	if !ok {
+	policyARN := params["PolicyArn"]
+	if !h.attachablePolicyExists(policyARN) {
 		return h.noSuchPolicy(params["PolicyArn"], requestID)
 	}
-	h.Roles.Update(intField(role, "id"), corestore.Record{"attached_policies": addString(attachedPolicies(role), stringField(policy, "arn"))})
+	h.Roles.Update(intField(role, "id"), corestore.Record{"attached_policies": addString(attachedPolicies(role), policyARN)})
 	return emptyResponse("AttachRolePolicy", requestID)
 }
 
@@ -654,7 +666,7 @@ func (h *Handler) detachRolePolicy(params map[string]string, requestID string) p
 	if !ok {
 		return h.noSuchRole(params["RoleName"], requestID)
 	}
-	if _, ok := h.findPolicyByARN(params["PolicyArn"]); !ok {
+	if !h.attachablePolicyExists(params["PolicyArn"]) {
 		return h.noSuchPolicy(params["PolicyArn"], requestID)
 	}
 	h.Roles.Update(intField(role, "id"), corestore.Record{"attached_policies": removeString(attachedPolicies(role), params["PolicyArn"])})
@@ -758,6 +770,9 @@ func writeRoleXML(rows *strings.Builder, role corestore.Record) {
       <Description>`)
 	rows.WriteString(xmlEscape(stringField(role, "description")))
 	rows.WriteString(`</Description>
+      <MaxSessionDuration>`)
+	rows.WriteString(fmt.Sprint(roleMaxSessionDurationFromRecord(role)))
+	rows.WriteString(`</MaxSessionDuration>
 `)
 }
 
@@ -848,16 +863,16 @@ func (h *Handler) listAttachedPoliciesResponse(action string, policyARNs []strin
 	}
 	var rows strings.Builder
 	for _, policyARN := range sortedStrings(policyARNs) {
-		policy, ok := h.findPolicyByARN(policyARN)
+		name, path, ok := h.attachedPolicySummary(policyARN)
 		if !ok {
 			continue
 		}
-		if !strings.HasPrefix(stringField(policy, "path"), pathPrefix) {
+		if !strings.HasPrefix(path, pathPrefix) {
 			continue
 		}
 		rows.WriteString(`      <member>
         <PolicyName>`)
-		rows.WriteString(xmlEscape(stringField(policy, "policy_name")))
+		rows.WriteString(xmlEscape(name))
 		rows.WriteString(`</PolicyName>
         <PolicyArn>`)
 		rows.WriteString(xmlEscape(policyARN))
@@ -949,6 +964,21 @@ func (h *Handler) findPolicyByName(policyName string) (corestore.Record, bool) {
 		}
 	}
 	return nil, false
+}
+
+func (h *Handler) attachablePolicyExists(policyARN string) bool {
+	if _, ok := h.findPolicyByARN(policyARN); ok {
+		return true
+	}
+	return isAWSManagedPolicyARN(policyARN)
+}
+
+func (h *Handler) attachedPolicySummary(policyARN string) (string, string, bool) {
+	if policy, ok := h.findPolicyByARN(policyARN); ok {
+		return stringField(policy, "policy_name"), stringField(policy, "path"), true
+	}
+	name, path, ok := awsManagedPolicyNamePath(policyARN)
+	return name, path, ok
 }
 
 func (h *Handler) sortedPolicies() []corestore.Record {
@@ -1193,6 +1223,65 @@ func normalizePath(path string) string {
 		path += "/"
 	}
 	return path
+}
+
+func roleMaxSessionDuration(raw string) (int, bool) {
+	if raw == "" {
+		return defaultRoleMaxSessionDurationSeconds, true
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false
+	}
+	if value < minRoleMaxSessionDurationSeconds || value > maxRoleMaxSessionDurationSeconds {
+		return 0, false
+	}
+	return value, true
+}
+
+func roleMaxSessionDurationFromRecord(role corestore.Record) int {
+	switch value := role["max_session_duration"].(type) {
+	case int:
+		if value > 0 {
+			return value
+		}
+	case int64:
+		if value > 0 {
+			return int(value)
+		}
+	case float64:
+		if value > 0 {
+			return int(value)
+		}
+	case string:
+		parsed, err := strconv.Atoi(value)
+		if err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return defaultRoleMaxSessionDurationSeconds
+}
+
+func isAWSManagedPolicyARN(policyARN string) bool {
+	_, _, ok := awsManagedPolicyNamePath(policyARN)
+	return ok
+}
+
+func awsManagedPolicyNamePath(policyARN string) (string, string, bool) {
+	const prefix = "arn:aws:iam::aws:policy/"
+	remainder, ok := strings.CutPrefix(policyARN, prefix)
+	if !ok || remainder == "" || strings.Contains(remainder, "//") {
+		return "", "", false
+	}
+	index := strings.LastIndex(remainder, "/")
+	if index < 0 {
+		return remainder, "/", true
+	}
+	name := remainder[index+1:]
+	if name == "" {
+		return "", "", false
+	}
+	return name, "/" + remainder[:index+1], true
 }
 
 func recordValue(value any) corestore.Record {
