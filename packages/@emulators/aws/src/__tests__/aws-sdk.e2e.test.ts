@@ -558,7 +558,9 @@ describeExternalSqsE2E("AWS native runtime - real @aws-sdk/client-sqs E2E", () =
     );
 
     const secondReceive = await sqs.send(new ReceiveMessageCommand({ QueueUrl, MaxNumberOfMessages: 2 }));
-    expect(secondReceive.Messages?.map((message) => message.Body)).toEqual(expect.arrayContaining(["batch one", "batch two"]));
+    expect(secondReceive.Messages?.map((message) => message.Body)).toEqual(
+      expect.arrayContaining(["batch one", "batch two"]),
+    );
     const deleteEntries =
       secondReceive.Messages?.map((message, index) => ({
         Id: `delete-${index + 1}`,
