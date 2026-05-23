@@ -155,8 +155,7 @@ export function oauthRoutes({ app, store, tokenMap }: RouteContext): void {
     const code = typeof body.code === "string" ? body.code : "";
     const basicAuth = parseBasicAuth(c.req.header("Authorization"));
     const client_id = typeof body.client_id === "string" ? body.client_id : (basicAuth?.clientId ?? "");
-    const client_secret =
-      typeof body.client_secret === "string" ? body.client_secret : (basicAuth?.clientSecret ?? "");
+    const client_secret = typeof body.client_secret === "string" ? body.client_secret : (basicAuth?.clientSecret ?? "");
     const redirect_uri = typeof body.redirect_uri === "string" ? body.redirect_uri : "";
 
     const appsConfigured = ss().oauthApps.all().length > 0;
@@ -372,9 +371,7 @@ function upsertInstallation(
     userScopes: string[];
   },
 ): SlackInstallation {
-  const existing = ss
-    .installations.all()
-    .find((item) => item.app_id === input.appId && item.team_id === input.teamId);
+  const existing = ss.installations.all().find((item) => item.app_id === input.appId && item.team_id === input.teamId);
   const data = {
     app_id: input.appId,
     client_id: input.clientId,

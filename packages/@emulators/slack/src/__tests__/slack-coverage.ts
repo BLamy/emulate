@@ -312,7 +312,8 @@ export const slackCoverageMatrix: SlackCoverageEntry[] = [
     route: "POST /api/oauth.v2.access",
     status: "partial",
     testedBy: ["slack.test.ts", "slack-sdk.test.ts"],
-    notes: "Exchanges emulator auth codes for bot tokens and records installs, bot users, token scopes, and optional user tokens. Refresh and revocation are future work.",
+    notes:
+      "Exchanges emulator auth codes for bot tokens and records installs, bot users, token scopes, and optional user tokens. Refresh and revocation are future work.",
   },
   {
     family: "oauth",

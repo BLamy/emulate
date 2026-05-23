@@ -29,7 +29,11 @@ export function authRoutes(ctx: RouteContext): void {
     const tokenRecord = token ? ss().tokens.findOneBy("token", token) : undefined;
     const bot =
       (tokenRecord?.bot_id ? ss().bots.findOneBy("bot_id", tokenRecord.bot_id) : undefined) ??
-      (user.is_bot ? ss().bots.all().find((item) => item.user_id === user.user_id) : undefined);
+      (user.is_bot
+        ? ss()
+            .bots.all()
+            .find((item) => item.user_id === user.user_id)
+        : undefined);
     const installation = tokenRecord?.installation_id
       ? ss().installations.findOneBy("installation_id", tokenRecord.installation_id)
       : undefined;
