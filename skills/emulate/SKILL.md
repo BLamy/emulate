@@ -63,6 +63,8 @@ The port can also be set via `EMULATE_PORT` or `PORT` environment variables.
 
 The advertised base URL can be overridden via `--base-url`, the `EMULATE_BASE_URL` env var, or per-service `baseUrl` in the seed config. `{service}` templates require exactly one selected service in native single-server mode; use `--portless` for per-service aliases.
 
+The npm CLI uses a small JavaScript launcher. On first run, it downloads the checksum-verified native Go binary for the installed package version into a local cache unless `EMULATE_NATIVE_BINARY` points at a local binary. Use `EMULATE_NATIVE_CACHE_DIR` to override the cache location.
+
 ## Programmatic API
 
 ```bash

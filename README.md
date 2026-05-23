@@ -55,7 +55,7 @@ npx emulate list
 
 The port can also be set via `EMULATE_PORT` or `PORT` environment variables.
 
-The `emulate` npm package installs a small JavaScript launcher plus an optional native binary package for your OS and CPU. Supported native packages cover macOS, Linux, and Windows on x64 and arm64.
+The `emulate` npm package installs a small JavaScript launcher. On first run, it uses a versioned local cache or downloads the matching native Go binary from the GitHub Release for that package version, then verifies its checksum before running it. Set `EMULATE_NATIVE_BINARY` to use a locally built binary, or `EMULATE_NATIVE_CACHE_DIR` to override the cache location.
 
 ## HTTPS with portless
 
@@ -1022,7 +1022,7 @@ apps/
   web/              # Documentation site (Next.js)
 ```
 
-The native Go runtime is the service engine and is distributed through npm as platform-specific optional binary packages. The TypeScript packages remain available for npm package names, the native process programmatic API, framework proxy adapters, and SDK conformance tests.
+The native Go runtime is the service engine and is distributed as versioned GitHub Release assets. The `emulate` npm package provides the launcher, checksum manifest, cache resolver, and native process programmatic API. The TypeScript packages remain available for npm package names, framework proxy adapters, compatibility exports, and SDK conformance tests.
 
 ## Auth
 

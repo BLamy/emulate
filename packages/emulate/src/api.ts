@@ -57,7 +57,7 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
     throw new Error(`Unknown service: ${service}`);
   }
 
-  const resolved = resolveNativeBinary();
+  const resolved = await resolveNativeBinary();
   if (!resolved.ok) {
     throw new Error(resolved.message);
   }

@@ -42,14 +42,6 @@
   "bin": {
     "emulate": "./dist/index.js"
   },
-  "optionalDependencies": {
-    "@emulators/emulate-darwin-arm64": "workspace:*",
-    "@emulators/emulate-darwin-x64": "workspace:*",
-    "@emulators/emulate-linux-arm64": "workspace:*",
-    "@emulators/emulate-linux-x64": "workspace:*",
-    "@emulators/emulate-win32-arm64": "workspace:*",
-    "@emulators/emulate-win32-x64": "workspace:*"
-  },
   "scripts": {
     "prepack": "cp ../../README.md .",
     "build": "tsup",

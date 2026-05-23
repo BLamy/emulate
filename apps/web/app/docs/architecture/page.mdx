@@ -32,7 +32,7 @@ The native Go runtime is the service engine for the CLI, the programmatic API, S
 
 ## npm Packages
 
-The `emulate` npm package provides the CLI shim, native binary resolution, and `createEmulator()` helper. Platform-specific optional packages carry the native binaries for macOS, Linux, and Windows.
+The `emulate` npm package provides the CLI shim, checksum manifest, lazy native binary resolver, and `createEmulator()` helper. Native binaries are GitHub Release assets for macOS, Linux, and Windows on x64 and arm64, cached locally on first use.
 
 The `@emulators/*` packages remain published for package discovery and compatibility, but they no longer contain Node.js service implementations. Service routing, state, UI, and protocol behavior live in Go.
 

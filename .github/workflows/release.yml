@@ -15,7 +15,6 @@ permissions:
 
 env:
   EMULATOR_PACKAGES: adapter-next apple aws clerk core github google microsoft mongoatlas okta resend slack stripe vercel
-  NATIVE_BINARY_PACKAGES: emulate-darwin-arm64 emulate-darwin-x64 emulate-linux-arm64 emulate-linux-x64 emulate-win32-arm64 emulate-win32-x64
 
 jobs:
   check-release:
@@ -23,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
+      needs_github_release: ${{ steps.check.outputs.needs_github_release }}
       version: ${{ steps.check.outputs.version }}
     steps:
       - name: Checkout repository
@@ -35,9 +35,12 @@ jobs:
 
       - name: Compare versions to registry
         id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           LOCAL_VERSION=$(node -p "require('./packages/emulate/package.json').version")
           SHOULD_RELEASE=false
+          NEEDS_GITHUB_RELEASE=false
 
           REGISTRY_VERSION=$(npm view emulate version 2>/dev/null || echo "0.0.0")
           echo "emulate — local: $LOCAL_VERSION, registry: $REGISTRY_VERSION"
@@ -53,13 +56,30 @@ jobs:
             fi
           done
 
+          TAG="v$LOCAL_VERSION"
+          EXPECTED_ASSETS="emulate-darwin-arm64 emulate-darwin-x64 emulate-linux-arm64 emulate-linux-x64 emulate-win32-arm64.exe emulate-win32-x64.exe native-manifest.json"
+          if [ "$SHOULD_RELEASE" = "true" ]; then
+            NEEDS_GITHUB_RELEASE=true
+          elif gh release view "$TAG" --json assets --jq '.assets[].name' > /tmp/emulate-release-assets.txt 2>/dev/null; then
+            for asset in $EXPECTED_ASSETS; do
+              if ! grep -qx "$asset" /tmp/emulate-release-assets.txt; then
+                echo "GitHub release $TAG is missing $asset"
+                NEEDS_GITHUB_RELEASE=true
+              fi
+            done
+          else
+            echo "GitHub release $TAG is missing"
+            NEEDS_GITHUB_RELEASE=true
+          fi
+
           echo "should_release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "needs_github_release=$NEEDS_GITHUB_RELEASE" >> "$GITHUB_OUTPUT"
           echo "version=$LOCAL_VERSION" >> "$GITHUB_OUTPUT"
 
   publish:
     name: Publish
     needs: check-release
-    if: needs.check-release.outputs.should_release == 'true'
+    if: needs.check-release.outputs.should_release == 'true' || needs.check-release.outputs.needs_github_release == 'true'
     runs-on: ubuntu-latest
     environment: Release
     permissions:
@@ -98,10 +118,18 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Build native binary packages
-        run: node scripts/build-native-packages.mjs
+      - name: Build native release assets
+        run: node scripts/build-native-assets.mjs
+
+      - name: Upload native release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-release-assets
+          path: /tmp/emulate-native-assets/*
+          retention-days: 7
 
       - name: Publish packages
+        if: needs.check-release.outputs.should_release == 'true'
         run: |
           LOCAL_VERSION="${{ needs.check-release.outputs.version }}"
           FAILED=""
@@ -122,15 +150,6 @@ jobs:
             fi
           }
 
-          for pkg in $NATIVE_BINARY_PACKAGES; do
-            publish_pkg "packages/@emulators/$pkg" "@emulators/$pkg"
-          done
-
-          if [ -n "$FAILED" ]; then
-            echo "Failed to publish native packages:$FAILED"
-            exit 1
-          fi
-
           publish_pkg packages/emulate emulate
 
           for pkg in $EMULATOR_PACKAGES; do
@@ -145,13 +164,19 @@ jobs:
   github-release:
     name: Create GitHub Release
     needs: [check-release, publish]
-    if: needs.check-release.outputs.should_release == 'true'
+    if: needs.check-release.outputs.needs_github_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Download native release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: native-release-assets
+          path: /tmp/emulate-native-assets
 
       - name: Extract changelog entry
         run: |
@@ -172,13 +197,15 @@ jobs:
           TAG="v$VERSION"
 
           if gh release view "$TAG" &>/dev/null; then
-            echo "Release $TAG already exists, skipping"
+            echo "Release $TAG already exists, uploading native assets"
+            gh release upload "$TAG" /tmp/emulate-native-assets/* --clobber
           else
             echo "Creating release $TAG..."
             gh release create "$TAG" \
               --title "$TAG" \
               --target ${{ github.sha }} \
-              --notes-file /tmp/release-notes.md
+              --notes-file /tmp/release-notes.md \
+              /tmp/emulate-native-assets/*
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

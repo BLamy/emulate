@@ -460,18 +460,6 @@ importers:
         specifier: ^5.7
         version: 5.9.3
 
-  packages/@emulators/emulate-darwin-arm64: {}
-
-  packages/@emulators/emulate-darwin-x64: {}
-
-  packages/@emulators/emulate-linux-arm64: {}
-
-  packages/@emulators/emulate-linux-x64: {}
-
-  packages/@emulators/emulate-win32-arm64: {}
-
-  packages/@emulators/emulate-win32-x64: {}
-
   packages/@emulators/github:
     devDependencies:
       tsup:
@@ -570,25 +558,6 @@ importers:
       vitest:
         specifier: ^4.1.0
         version: 4.1.6(@opentelemetry/api@1.9.0)(@types/node@22.19.17)(vite@8.0.1(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)(@types/node@22.19.17)(esbuild@0.27.4)(jiti@2.6.1)(yaml@2.8.3))
-    optionalDependencies:
-      '@emulators/emulate-darwin-arm64':
-        specifier: workspace:*
-        version: link:../@emulators/emulate-darwin-arm64
-      '@emulators/emulate-darwin-x64':
-        specifier: workspace:*
-        version: link:../@emulators/emulate-darwin-x64
-      '@emulators/emulate-linux-arm64':
-        specifier: workspace:*
-        version: link:../@emulators/emulate-linux-arm64
-      '@emulators/emulate-linux-x64':
-        specifier: workspace:*
-        version: link:../@emulators/emulate-linux-x64
-      '@emulators/emulate-win32-arm64':
-        specifier: workspace:*
-        version: link:../@emulators/emulate-win32-arm64
-      '@emulators/emulate-win32-x64':
-        specifier: workspace:*
-        version: link:../@emulators/emulate-win32-x64
 
   tests/sdk-js:
     devDependencies:
