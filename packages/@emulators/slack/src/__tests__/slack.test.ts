@@ -1285,6 +1285,68 @@ describe("Slack plugin - conversations", () => {
     expect(adminInfo.channel.is_open).toBe(false);
   });
 
+  it("hides direct conversations from non-members and formats IM users per viewer", async () => {
+    insertSlackTestUser(store, "U000000002", "privateimone");
+    insertSlackTestUser(store, "U000000003", "privateimtwo");
+    tokenMap.set("xoxb-private-im-one-token", { login: "U000000002", id: 2, scopes: ["chat:write"] });
+    tokenMap.set("xoxb-private-im-two-token", { login: "U000000003", id: 3, scopes: ["chat:write"] });
+    const oneHeaders = { Authorization: "Bearer xoxb-private-im-one-token", "Content-Type": "application/json" };
+    const twoHeaders = { Authorization: "Bearer xoxb-private-im-two-token", "Content-Type": "application/json" };
+
+    const openRes = await app.request(`${base}/api/conversations.open`, {
+      method: "POST",
+      headers: oneHeaders,
+      body: JSON.stringify({ users: "U000000003", return_im: true }),
+    });
+    const opened = (await openRes.json()) as any;
+    const channel = opened.channel.id;
+    expect(opened.channel.user).toBe("U000000003");
+
+    const participantInfoRes = await app.request(`${base}/api/conversations.info`, {
+      method: "POST",
+      headers: twoHeaders,
+      body: JSON.stringify({ channel }),
+    });
+    const participantInfo = (await participantInfoRes.json()) as any;
+    expect(participantInfo.ok).toBe(true);
+    expect(participantInfo.channel.user).toBe("U000000002");
+
+    const participantListRes = await app.request(`${base}/api/conversations.list`, {
+      method: "POST",
+      headers: twoHeaders,
+      body: JSON.stringify({ types: "im" }),
+    });
+    const participantList = (await participantListRes.json()) as any;
+    const participantListed = participantList.channels.find((listed: any) => listed.id === channel);
+    expect(participantListed.user).toBe("U000000002");
+
+    const outsiderListRes = await app.request(`${base}/api/conversations.list`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ types: "im" }),
+    });
+    const outsiderList = (await outsiderListRes.json()) as any;
+    expect(outsiderList.channels.map((listed: any) => listed.id)).not.toContain(channel);
+
+    const blockedReads = [
+      { path: "conversations.info", body: { channel } },
+      { path: "conversations.history", body: { channel } },
+      { path: "conversations.replies", body: { channel, ts: "1234567890.000001" } },
+      { path: "conversations.members", body: { channel } },
+    ];
+
+    for (const request of blockedReads) {
+      const res = await app.request(`${base}/api/${request.path}`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify(request.body),
+      });
+      const body = (await res.json()) as any;
+      expect(body.ok, request.path).toBe(false);
+      expect(body.error, request.path).toBe("not_in_channel");
+    }
+  });
+
   it("rejects lifecycle writes for direct conversations", async () => {
     insertSlackTestUser(store, "U000000002", "directlifeone");
     insertSlackTestUser(store, "U000000003", "directlifetwo");

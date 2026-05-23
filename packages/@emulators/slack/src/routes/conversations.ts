@@ -20,6 +20,8 @@ export function conversationsRoutes(ctx: RouteContext): void {
   const getAuthUserId = (authUser: { login: string }) => getAuthSlackUser(authUser)?.user_id ?? authUser.login;
   const isChannelMember = (channel: SlackChannel, user: SlackUser | undefined, userId: string) =>
     channel.members.includes(userId) || (user ? channel.members.includes(user.name) : false);
+  const canReadConversation = (channel: SlackChannel, user: SlackUser | undefined, userId: string) =>
+    !isDirectConversation(channel) || isChannelMember(channel, user, userId);
   const dispatchConversationEvent = async (type: string, event: Record<string, unknown>) => {
     await webhooks.dispatch(
       type,
@@ -91,11 +93,13 @@ export function conversationsRoutes(ctx: RouteContext): void {
     const cursor = typeof body.cursor === "string" ? body.cursor : "";
     const excludeArchived = isTruthySlackBoolean(body.exclude_archived);
     const types = parseConversationTypes(body.types);
+    const authSlackUser = getAuthSlackUser(authUser);
     const authUserId = getAuthUserId(authUser);
 
     const allChannels = ss()
       .channels.all()
       .filter((ch) => matchesConversationTypes(ch, types))
+      .filter((ch) => canReadConversation(ch, authSlackUser, authUserId))
       .filter((ch) => !excludeArchived || !ch.is_archived);
 
     // Simple cursor pagination using channel id
@@ -124,8 +128,11 @@ export function conversationsRoutes(ctx: RouteContext): void {
 
     const ch = ss().channels.findOneBy("channel_id", channel);
     if (!ch) return slackError(c, "channel_not_found");
+    const authSlackUser = getAuthSlackUser(authUser);
+    const authUserId = getAuthUserId(authUser);
+    if (!canReadConversation(ch, authSlackUser, authUserId)) return slackError(c, "not_in_channel");
 
-    return slackOk(c, { channel: formatChannel(ch, getAuthUserId(authUser)) });
+    return slackOk(c, { channel: formatChannel(ch, authUserId) });
   });
 
   // conversations.create
@@ -365,6 +372,9 @@ export function conversationsRoutes(ctx: RouteContext): void {
 
     const ch = ss().channels.findOneBy("channel_id", channel);
     if (!ch) return slackError(c, "channel_not_found");
+    const authSlackUser = getAuthSlackUser(authUser);
+    const authUserId = getAuthUserId(authUser);
+    if (!canReadConversation(ch, authSlackUser, authUserId)) return slackError(c, "not_in_channel");
 
     // Get top-level messages (no thread_ts or thread_ts === ts)
     const allMessages = ss()
@@ -399,6 +409,11 @@ export function conversationsRoutes(ctx: RouteContext): void {
     const ts = typeof body.ts === "string" ? body.ts : "";
 
     if (!channel || !ts) return slackError(c, "channel_not_found");
+    const ch = ss().channels.findOneBy("channel_id", channel);
+    if (!ch) return slackError(c, "channel_not_found");
+    const authSlackUser = getAuthSlackUser(authUser);
+    const authUserId = getAuthUserId(authUser);
+    if (!canReadConversation(ch, authSlackUser, authUserId)) return slackError(c, "not_in_channel");
 
     const allMessages = ss()
       .messages.findBy("channel_id", channel)
@@ -694,6 +709,9 @@ export function conversationsRoutes(ctx: RouteContext): void {
 
     const ch = ss().channels.findOneBy("channel_id", channel);
     if (!ch) return slackError(c, "channel_not_found");
+    const authSlackUser = getAuthSlackUser(authUser);
+    const authUserId = getAuthUserId(authUser);
+    if (!canReadConversation(ch, authSlackUser, authUserId)) return slackError(c, "not_in_channel");
 
     return slackOk(c, {
       members: ch.members,
@@ -703,6 +721,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
 }
 
 function formatChannel(ch: SlackChannel, viewer?: string) {
+  const imUser = ch.is_im && viewer ? ch.members.find((member) => member !== viewer) : ch.user;
   return {
     id: ch.channel_id,
     name: ch.name,
@@ -714,7 +733,7 @@ function formatChannel(ch: SlackChannel, viewer?: string) {
     is_private: ch.is_private,
     is_archived: ch.is_archived,
     is_open: getSlackConversationOpenState(ch, viewer),
-    ...(ch.user ? { user: ch.user } : {}),
+    ...(imUser ? { user: imUser } : {}),
     is_member: viewer ? ch.members.includes(viewer) : undefined,
     last_read: viewer ? (ch.last_read?.[viewer] ?? "0000000000.000000") : undefined,
     topic: ch.topic,
