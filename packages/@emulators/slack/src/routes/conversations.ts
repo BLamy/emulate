@@ -9,6 +9,8 @@ import {
   parseSlackBody,
   requireSlackScopes,
   setSlackConversationOpenState,
+  slackConversationHistoryScope,
+  slackConversationJoinScope,
   slackConversationReadScope,
   slackConversationWriteScope,
   slackError,
@@ -401,7 +403,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
 
     const ch = ss().channels.findOneBy("channel_id", channel);
     if (!ch) return slackError(c, "channel_not_found");
-    const scopeError = requireSlackScopes(c, store, [slackConversationReadScope(ch)]);
+    const scopeError = requireSlackScopes(c, store, [slackConversationHistoryScope(ch)]);
     if (scopeError) return scopeError;
     const authSlackUser = getAuthSlackUser(authUser);
     const authUserId = getAuthUserId(authUser);
@@ -442,7 +444,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
     if (!channel || !ts) return slackError(c, "channel_not_found");
     const ch = ss().channels.findOneBy("channel_id", channel);
     if (!ch) return slackError(c, "channel_not_found");
-    const scopeError = requireSlackScopes(c, store, [slackConversationReadScope(ch)]);
+    const scopeError = requireSlackScopes(c, store, [slackConversationHistoryScope(ch)]);
     if (scopeError) return scopeError;
     const authSlackUser = getAuthSlackUser(authUser);
     const authUserId = getAuthUserId(authUser);
@@ -469,7 +471,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
 
     const ch = ss().channels.findOneBy("channel_id", channel);
     if (!ch) return slackError(c, "channel_not_found");
-    const scopeError = requireSlackScopes(c, store, [slackConversationWriteScope(ch)]);
+    const scopeError = requireSlackScopes(c, store, [slackConversationJoinScope(ch)]);
     if (scopeError) return scopeError;
     if (ch.is_archived) return slackError(c, "is_archived");
     if (ch.is_im || ch.is_mpim) return slackError(c, "method_not_supported_for_channel_type");

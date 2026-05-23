@@ -89,11 +89,23 @@ export function slackConversationReadScope(ch: SlackChannel): string {
   return "channels:read";
 }
 
+export function slackConversationHistoryScope(ch: SlackChannel): string {
+  if (ch.is_im) return "im:history";
+  if (ch.is_mpim) return "mpim:history";
+  if (ch.is_private) return "groups:history";
+  return "channels:history";
+}
+
 export function slackConversationWriteScope(ch: SlackChannel): string {
   if (ch.is_im) return "im:write";
   if (ch.is_mpim) return "mpim:write";
   if (ch.is_private) return "groups:write";
   return "channels:manage";
+}
+
+export function slackConversationJoinScope(ch: SlackChannel): SlackScopeRequirement {
+  if (ch.is_private) return "groups:write";
+  return ["channels:join", "channels:write"];
 }
 
 export async function parseSlackBody(c: Context): Promise<Record<string, unknown>> {

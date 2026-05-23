@@ -2294,6 +2294,108 @@ describe("Slack plugin - scope modes", () => {
     expect(body.provided).toBe("channels:read");
   });
 
+  it("requires history scopes for history and replies in strict mode", async () => {
+    const ss = getSlackStore(store);
+    const ch = ss.channels.findOneBy("name", "general")!;
+
+    const parentRes = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, text: "strict history parent" }),
+    });
+    const parent = (await parentRes.json()) as any;
+    await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, text: "strict history reply", thread_ts: parent.ts }),
+    });
+
+    store.setData("slack.strict_scopes", true);
+    tokenMap.set("xoxb-read-only-history-token", { login: "U000000001", id: 1, scopes: ["channels:read"] });
+    const readHeaders = {
+      Authorization: "Bearer xoxb-read-only-history-token",
+      "Content-Type": "application/json",
+    };
+
+    const historyMissingRes = await app.request(`${base}/api/conversations.history`, {
+      method: "POST",
+      headers: readHeaders,
+      body: JSON.stringify({ channel: ch.channel_id }),
+    });
+    const historyMissing = (await historyMissingRes.json()) as any;
+    expect(historyMissing.ok).toBe(false);
+    expect(historyMissing.error).toBe("missing_scope");
+    expect(historyMissing.needed).toBe("channels:history");
+
+    const repliesMissingRes = await app.request(`${base}/api/conversations.replies`, {
+      method: "POST",
+      headers: readHeaders,
+      body: JSON.stringify({ channel: ch.channel_id, ts: parent.ts }),
+    });
+    const repliesMissing = (await repliesMissingRes.json()) as any;
+    expect(repliesMissing.ok).toBe(false);
+    expect(repliesMissing.error).toBe("missing_scope");
+    expect(repliesMissing.needed).toBe("channels:history");
+
+    tokenMap.set("xoxb-history-token", { login: "U000000001", id: 1, scopes: ["channels:history"] });
+    const historyRes = await app.request(`${base}/api/conversations.history`, {
+      method: "POST",
+      headers: { Authorization: "Bearer xoxb-history-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ channel: ch.channel_id }),
+    });
+    const history = (await historyRes.json()) as any;
+    expect(history.ok).toBe(true);
+    expect(history.messages.length).toBeGreaterThan(0);
+  });
+
+  it("accepts channels:join for public channel joins in strict mode", async () => {
+    insertSlackTestUser(store, "U000000002", "strict-join-peer");
+
+    const createRes = await app.request(`${base}/api/conversations.create`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ name: "strict-join-scope" }),
+    });
+    const created = (await createRes.json()) as any;
+    const channelId = created.channel.id;
+
+    await app.request(`${base}/api/conversations.invite`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: channelId, users: "U000000002" }),
+    });
+
+    await app.request(`${base}/api/conversations.leave`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: channelId }),
+    });
+
+    store.setData("slack.strict_scopes", true);
+    tokenMap.set("xoxb-manage-only-join-token", { login: "U000000001", id: 1, scopes: ["channels:manage"] });
+
+    const missingRes = await app.request(`${base}/api/conversations.join`, {
+      method: "POST",
+      headers: { Authorization: "Bearer xoxb-manage-only-join-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ channel: channelId }),
+    });
+    const missing = (await missingRes.json()) as any;
+    expect(missing.ok).toBe(false);
+    expect(missing.error).toBe("missing_scope");
+    expect(missing.needed).toBe("channels:join|channels:write");
+    expect(missing.provided).toBe("channels:manage");
+
+    tokenMap.set("xoxb-join-token", { login: "U000000001", id: 1, scopes: ["channels:join"] });
+    const joinRes = await app.request(`${base}/api/conversations.join`, {
+      method: "POST",
+      headers: { Authorization: "Bearer xoxb-join-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ channel: channelId }),
+    });
+    const joined = (await joinRes.json()) as any;
+    expect(joined.ok).toBe(true);
+    expect(joined.channel.is_member).toBe(true);
+  });
+
   it("authenticates seeded Slack token records in strict mode", async () => {
     store.setData("slack.strict_scopes", true);
     getSlackStore(store).tokens.insert({

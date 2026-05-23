@@ -607,7 +607,7 @@ OAuth 2.0, OpenID Connect, and mutable Google Workspace-style surfaces for local
 
 ## Slack API
 
-Fully stateful Slack Web API emulation with channels, messages, threads, reactions, OAuth v2, and incoming webhooks. Chat writes preserve common rich message fields such as `blocks`, `attachments`, `metadata`, formatting flags, unfurl flags, and client message ids. Conversation writes update archive state, names, topics, purposes, membership, DMs, MPIMs, and read cursors. Seeded OAuth apps and OAuth installs create bot users, installation records, and scoped token records.
+Fully stateful Slack Web API emulation with channels, messages, threads, reactions, OAuth v2, and incoming webhooks. Chat writes preserve common rich message fields such as `blocks`, `attachments`, `metadata`, formatting flags, unfurl flags, and client message ids. Conversation writes update archive state, names, topics, purposes, membership, DMs, MPIMs, and read cursors. Seeded OAuth apps and OAuth installs create bot users and installation records. OAuth exchanges and explicit token seeds create scoped token records.
 
 ### Auth & Chat
 - `POST /api/auth.test` - test authentication
@@ -855,7 +855,7 @@ Tokens are configured in the seed config and map to users. Pass them as `Authori
 
 **Google**: Standard OAuth 2.0 authorization code flow. Configure clients in the seed config.
 
-**Slack**: All Web API endpoints require `Authorization: Bearer <token>`. Seeded OAuth apps and OAuth v2 flow with user picker UI create bot users, installation records, and scoped bot tokens. Optional strict scope mode returns `missing_scope` when a token lacks a required method scope.
+**Slack**: All Web API endpoints require `Authorization: Bearer <token>`. Seeded OAuth apps create local installation records, and OAuth v2 flow with user picker UI creates scoped bot tokens. Optional strict scope mode returns `missing_scope` when a token lacks a required method scope.
 
 **Apple**: OIDC authorization code flow with RS256 ID tokens. On first auth per user/client pair, a `user` JSON blob is included.
 
