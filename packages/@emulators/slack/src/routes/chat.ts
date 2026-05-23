@@ -356,10 +356,7 @@ export function chatRoutes(ctx: RouteContext): void {
     if (!Number.isFinite(requestedLimit) || requestedLimit < 1) {
       return slackError(c, "invalid_arguments");
     }
-    if (
-      (oldest !== undefined && !Number.isFinite(oldest)) ||
-      (latest !== undefined && !Number.isFinite(latest))
-    ) {
+    if ((oldest !== undefined && !Number.isFinite(oldest)) || (latest !== undefined && !Number.isFinite(latest))) {
       return slackError(c, "invalid_arguments");
     }
     if (oldest !== undefined && latest !== undefined && oldest > latest) {
