@@ -11,6 +11,8 @@ import type {
   SlackInstallation,
   SlackToken,
   SlackIncomingWebhook,
+  SlackFile,
+  SlackFileUploadSession,
 } from "./entities.js";
 
 export interface SlackStore {
@@ -25,6 +27,8 @@ export interface SlackStore {
   installations: Collection<SlackInstallation>;
   tokens: Collection<SlackToken>;
   incomingWebhooks: Collection<SlackIncomingWebhook>;
+  files: Collection<SlackFile>;
+  fileUploadSessions: Collection<SlackFileUploadSession>;
 }
 
 export function getSlackStore(store: Store): SlackStore {
@@ -52,5 +56,7 @@ export function getSlackStore(store: Store): SlackStore {
     ]),
     tokens: store.collection<SlackToken>("slack.tokens", ["token", "user_id", "app_id", "team_id"]),
     incomingWebhooks: store.collection<SlackIncomingWebhook>("slack.incoming_webhooks", ["token"]),
+    files: store.collection<SlackFile>("slack.files", ["file_id", "user"]),
+    fileUploadSessions: store.collection<SlackFileUploadSession>("slack.file_upload_sessions", ["file_id"]),
   };
 }

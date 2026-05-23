@@ -11,6 +11,7 @@ import { reactionsRoutes } from "./routes/reactions.js";
 import { teamRoutes } from "./routes/team.js";
 import { oauthRoutes } from "./routes/oauth.js";
 import { webhookRoutes } from "./routes/webhooks.js";
+import { filesRoutes } from "./routes/files.js";
 import { inspectorRoutes } from "./routes/inspector.js";
 
 export { getSlackStore, type SlackStore } from "./store.js";
@@ -93,6 +94,8 @@ const DEFAULT_SLACK_SCOPES = [
   "users.profile:read",
   "users.profile:write",
   "users:write",
+  "files:read",
+  "files:write",
   "reactions:read",
   "reactions:write",
   "team:read",
@@ -364,6 +367,7 @@ export const slackPlugin: ServicePlugin = {
     teamRoutes(ctx);
     oauthRoutes(ctx);
     webhookRoutes(ctx);
+    filesRoutes(ctx);
     inspectorRoutes(ctx);
   },
   seed(store: Store, baseUrl: string): void {

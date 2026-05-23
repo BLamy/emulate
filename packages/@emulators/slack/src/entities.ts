@@ -83,6 +83,8 @@ export interface SlackMessage extends Entity {
   text: string;
   type: "message";
   subtype?: string;
+  files?: SlackFile[];
+  upload?: boolean;
   blocks?: SlackJsonObject[];
   attachments?: SlackJsonObject[];
   metadata?: SlackJsonObject;
@@ -198,4 +200,71 @@ export interface SlackIncomingWebhook extends Entity {
   default_channel: string;
   label: string;
   url: string;
+}
+
+export interface SlackFileShare {
+  ts: string;
+  channel_name?: string;
+  team_id: string;
+  share_user_id: string;
+  source: "UNKNOWN" | "UPLOAD";
+  thread_ts?: string;
+  latest_reply?: string;
+  reply_count: number;
+  reply_users: string[];
+  reply_users_count: number;
+  is_silent_share: boolean;
+}
+
+export interface SlackFile extends Entity {
+  file_id: string;
+  team_id: string;
+  user: string;
+  name: string;
+  title: string;
+  mimetype: string;
+  filetype: string;
+  pretty_type: string;
+  mode: "hosted" | "snippet";
+  size: number;
+  created: number;
+  timestamp: number;
+  url_private: string;
+  url_private_download: string;
+  permalink: string;
+  is_external: boolean;
+  external_type: string;
+  is_public: boolean;
+  public_url_shared: boolean;
+  display_as_bot: boolean;
+  editable: boolean;
+  deleted: boolean;
+  channels: string[];
+  groups: string[];
+  ims: string[];
+  shares: {
+    public?: Record<string, SlackFileShare[]>;
+    private?: Record<string, SlackFileShare[]>;
+  };
+  initial_comment?: string;
+  thread_ts?: string;
+  alt_txt?: string;
+  snippet_type?: string;
+  content_base64?: string;
+}
+
+export interface SlackFileUploadSession extends Entity {
+  file_id: string;
+  team_id: string;
+  user: string;
+  filename: string;
+  title: string;
+  length: number;
+  upload_url: string;
+  alt_txt?: string;
+  snippet_type?: string;
+  uploaded: boolean;
+  uploaded_size?: number;
+  content_base64?: string;
+  completed: boolean;
 }

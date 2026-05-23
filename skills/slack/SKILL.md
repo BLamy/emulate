@@ -6,7 +6,7 @@ allowed-tools: Bash(npx emulate:*), Bash(curl:*)
 
 # Slack API Emulator
 
-Fully stateful Slack Web API emulation with channels, messages, threads, reactions, user profiles, presence, OAuth v2, and incoming webhooks. Chat writes preserve common rich message fields such as `blocks`, `attachments`, `metadata`, formatting flags, unfurl flags, and client message ids. Conversation writes update archive state, names, topics, purposes, membership, DMs, MPIMs, and read cursors. User writes update profile fields, status, custom fields, and deterministic active or away presence. Seeded OAuth apps and OAuth installs create bot users and installation records. OAuth exchanges and explicit token seeds create scoped token records. State changes dispatch `event_callback` payloads to configured webhook URLs.
+Fully stateful Slack Web API emulation with channels, messages, threads, reactions, user profiles, presence, modern file uploads, OAuth v2, and incoming webhooks. Chat writes preserve common rich message fields such as `blocks`, `attachments`, `metadata`, formatting flags, unfurl flags, and client message ids. Conversation writes update archive state, names, topics, purposes, membership, DMs, MPIMs, and read cursors. User writes update profile fields, status, custom fields, and deterministic active or away presence. File writes support the current external upload flow with local upload URLs, file share messages, reads, lists, downloads, and deletes. Seeded OAuth apps and OAuth installs create bot users and installation records. OAuth exchanges and explicit token seeds create scoped token records. State changes dispatch `event_callback` payloads to configured webhook URLs.
 
 ## Start
 
@@ -38,7 +38,7 @@ curl -X POST http://localhost:4003/api/auth.test \
 
 When no token is provided, requests fall back to the first seeded user.
 
-Scope checks are relaxed by default for local development. Set `slack.strict_scopes: true` in seed config when you need supported Web API methods to return Slack-style `missing_scope` errors with `needed` and `provided` fields. Supported user and presence checks include `users:read`, `users:read.email`, `users.profile:read`, `users.profile:write`, and `users:write`.
+Scope checks are relaxed by default for local development. Set `slack.strict_scopes: true` in seed config when you need supported Web API methods to return Slack-style `missing_scope` errors with `needed` and `provided` fields. Supported user, presence, and file checks include `users:read`, `users:read.email`, `users.profile:read`, `users.profile:write`, `users:write`, `files:read`, and `files:write`.
 
 ## Pointing Your App at the Emulator
 
@@ -128,6 +128,8 @@ slack:
         - users.profile:read
         - users.profile:write
         - users:write
+        - files:read
+        - files:write
       user_scopes:
         - users:read
         - users.profile:read
@@ -141,6 +143,8 @@ slack:
         - users.profile:read
         - users.profile:write
         - users:write
+        - files:read
+        - files:write
   incoming_webhooks:
     - channel: general
       label: CI Notifications
@@ -398,6 +402,43 @@ curl -X POST http://localhost:4003/api/users.setPresence \
   -d '{"presence": "auto"}'
 ```
 
+### Files
+
+```bash
+# Request a local upload URL
+curl -X POST http://localhost:4003/api/files.getUploadURLExternal \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"filename": "deploy.txt", "length": 18}'
+
+# Upload bytes to the returned upload_url
+curl -X POST http://localhost:4003/upload/v1/F000000001 \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @deploy.txt
+
+# Complete and share the file in a channel
+curl -X POST http://localhost:4003/api/files.completeUploadExternal \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"files": [{"id": "F000000001", "title": "Deploy Log"}], "channel_id": "C000000001", "initial_comment": "Deploy log attached"}'
+
+# Get file info
+curl -X GET 'http://localhost:4003/api/files.info?file=F000000001' \
+  -H "Authorization: Bearer $TOKEN"
+
+# List files
+curl -X POST http://localhost:4003/api/files.list \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel": "C000000001"}'
+
+# Delete a file
+curl -X POST http://localhost:4003/api/files.delete \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"file": "F000000001"}'
+```
+
 ### Reactions
 
 ```bash
@@ -502,6 +543,8 @@ When messages are posted, updated, deleted, or reactions are added/removed, the 
 - `im_created`, `im_open`, `im_close`, `im_marked`, and group open/close/marked events for DM and MPIM writes
 - `user_change` on profile writes
 - `presence_change` on presence writes
+- `file_created`, `file_shared`, and `file_deleted` on file writes
+- `message` with `subtype: file_share` on shared file uploads
 
 ## Common Patterns
 

@@ -2819,6 +2819,153 @@ describe("Slack plugin - Incoming Webhooks", () => {
   });
 });
 
+describe("Slack plugin - files", () => {
+  let app: SlackTestApp["app"];
+  let store: Store;
+  let tokenMap: SlackTestApp["tokenMap"];
+
+  beforeEach(() => {
+    ({ app, store, tokenMap } = createTestApp());
+  });
+
+  it("uploads, completes, reads, lists, downloads, and deletes files", async () => {
+    const channel = getSlackStore(store).channels.findOneBy("name", "general")!.channel_id;
+    const content = "deploy log\ncomplete\n";
+
+    const urlRes = await app.request(`${base}/api/files.getUploadURLExternal`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ filename: "deploy.txt", length: Buffer.byteLength(content), alt_text: "Deploy log" }),
+    });
+    const upload = (await urlRes.json()) as any;
+    expect(upload.ok).toBe(true);
+    expect(upload.file_id).toMatch(/^F/);
+    expect(upload.upload_url).toBe(`${base}/upload/v1/${upload.file_id}`);
+
+    const bytesRes = await app.request(upload.upload_url, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: content,
+    });
+    expect(bytesRes.status).toBe(200);
+
+    const completeRes = await app.request(`${base}/api/files.completeUploadExternal`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        files: [{ id: upload.file_id, title: "Deploy Log" }],
+        channel_id: channel,
+        initial_comment: "Uploaded deploy log",
+      }),
+    });
+    const completed = (await completeRes.json()) as any;
+    expect(completed.ok).toBe(true);
+    expect(completed.files[0]).toMatchObject({
+      id: upload.file_id,
+      name: "deploy.txt",
+      title: "Deploy Log",
+      mimetype: "text/plain",
+      filetype: "txt",
+      channels: [channel],
+      is_public: true,
+      alt_txt: "Deploy log",
+    });
+
+    const stored = getSlackStore(store).files.findOneBy("file_id", upload.file_id)!;
+    expect(Buffer.from(stored.content_base64!, "base64").toString("utf8")).toBe(content);
+
+    const message = getSlackStore(store).messages.findBy("channel_id", channel)[0];
+    expect(message.subtype).toBe("file_share");
+    expect(message.text).toBe("Uploaded deploy log");
+    expect(message.files?.[0].file_id).toBe(upload.file_id);
+
+    const infoRes = await app.request(`${base}/api/files.info?file=${upload.file_id}`, {
+      method: "GET",
+      headers: authHeaders(),
+    });
+    const info = (await infoRes.json()) as any;
+    expect(info.ok).toBe(true);
+    expect(info.file.title).toBe("Deploy Log");
+
+    const listRes = await app.request(`${base}/api/files.list`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel }),
+    });
+    const list = (await listRes.json()) as any;
+    expect(list.ok).toBe(true);
+    expect(list.files.map((file: any) => file.id)).toContain(upload.file_id);
+    expect(list.paging.total).toBe(1);
+
+    const downloadRes = await app.request(`${base}/files-pri/${upload.file_id}/deploy.txt`);
+    expect(downloadRes.status).toBe(200);
+    expect(Buffer.from(await downloadRes.arrayBuffer()).toString("utf8")).toBe(content);
+
+    const inspectorRes = await app.request(`${base}/?channel=${channel}`);
+    const inspector = await inspectorRes.text();
+    expect(inspector).toContain("Uploaded deploy log");
+    expect(inspector).toContain("1 file");
+
+    const deleteRes = await app.request(`${base}/api/files.delete`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ file: upload.file_id }),
+    });
+    expect(((await deleteRes.json()) as any).ok).toBe(true);
+
+    const missingInfoRes = await app.request(`${base}/api/files.info`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ file: upload.file_id }),
+    });
+    expect(((await missingInfoRes.json()) as any).error).toBe("file_not_found");
+  });
+
+  it("supports private completion without sharing to a channel", async () => {
+    const content = "private note";
+    const urlRes = await app.request(`${base}/api/files.getUploadURLExternal`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ filename: "private.md", length: Buffer.byteLength(content), snippet_type: "markdown" }),
+    });
+    const upload = (await urlRes.json()) as any;
+    await app.request(upload.upload_url, { method: "POST", body: content });
+
+    const completeRes = await app.request(`${base}/api/files.completeUploadExternal`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ files: [{ id: upload.file_id, title: "Private Note" }] }),
+    });
+    const completed = (await completeRes.json()) as any;
+    expect(completed.ok).toBe(true);
+    expect(completed.files[0]).toMatchObject({
+      id: upload.file_id,
+      channels: [],
+      groups: [],
+      ims: [],
+      is_public: false,
+      mode: "snippet",
+      filetype: "markdown",
+    });
+    expect(getSlackStore(store).messages.all()).toHaveLength(0);
+  });
+
+  it("enforces file scopes in strict mode", async () => {
+    store.setData("slack.strict_scopes", true);
+    tokenMap.set("xoxb-files-read-token", { login: "U000000001", id: 1, scopes: ["files:read"] });
+
+    const uploadRes = await app.request(`${base}/api/files.getUploadURLExternal`, {
+      method: "POST",
+      headers: { Authorization: "Bearer xoxb-files-read-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "blocked.txt", length: 3 }),
+    });
+    const upload = (await uploadRes.json()) as any;
+    expect(upload.ok).toBe(false);
+    expect(upload.error).toBe("missing_scope");
+    expect(upload.needed).toBe("files:write");
+  });
+});
+
 describe("Slack plugin - Message Inspector", () => {
   let app: SlackTestApp["app"];
   let store: Store;

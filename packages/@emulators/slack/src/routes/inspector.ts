@@ -40,7 +40,7 @@ function collectTextValues(value: unknown, output: string[]): void {
   collectTextValues(record.accessory, output);
 }
 
-function richMessagePreview(msg: Pick<SlackMessage, "text" | "blocks" | "attachments">): string {
+function richMessagePreview(msg: Pick<SlackMessage, "text" | "blocks" | "attachments" | "files">): string {
   if (msg.text.trim().length > 0) return msg.text;
 
   const blockText: string[] = [];
@@ -53,10 +53,17 @@ function richMessagePreview(msg: Pick<SlackMessage, "text" | "blocks" | "attachm
       .filter((value): value is string => typeof value === "string" && value.trim().length > 0) ?? [];
   if (attachmentText.length > 0) return attachmentText.join(" ");
 
+  const fileText =
+    msg.files
+      ?.map((file) => file.title || file.name)
+      .filter((value) => value.trim().length > 0) ?? [];
+  if (fileText.length > 0) return fileText.join(" ");
+
   if (msg.blocks?.length) return `${msg.blocks.length} ${msg.blocks.length === 1 ? "block" : "blocks"}`;
   if (msg.attachments?.length) {
     return `${msg.attachments.length} ${msg.attachments.length === 1 ? "attachment" : "attachments"}`;
   }
+  if (msg.files?.length) return `${msg.files.length} ${msg.files.length === 1 ? "file" : "files"}`;
   return msg.text;
 }
 
@@ -73,6 +80,9 @@ function renderMessage(msg: SlackMessage, users: Map<string, string>): string {
     msg.reply_count > 0
       ? ` <span class="badge badge-requested">${msg.reply_count} ${msg.reply_count === 1 ? "reply" : "replies"}</span>`
       : "";
+  const fileBadge = msg.files?.length
+    ? ` <span class="badge badge-granted">${msg.files.length} ${msg.files.length === 1 ? "file" : "files"}</span>`
+    : "";
   const threadIndicator =
     msg.thread_ts && msg.thread_ts !== msg.ts ? `<span class="badge badge-denied">thread</span> ` : "";
 
@@ -81,7 +91,7 @@ function renderMessage(msg: SlackMessage, users: Map<string, string>): string {
   <span class="org-name">${escapeHtml(displayName)}${isBot ? ' <span class="badge badge-granted">bot</span>' : ""}</span>
   <span class="user-meta" style="margin-left:auto">${timeAgo(msg.created_at)}</span>
 </div>
-<div class="info-text">${threadIndicator}${escapeHtml(messageText)}${richBadge}${threadBadge}</div>
+<div class="info-text">${threadIndicator}${escapeHtml(messageText)}${richBadge}${fileBadge}${threadBadge}</div>
 ${renderReactions(msg.reactions)}`;
 }
 

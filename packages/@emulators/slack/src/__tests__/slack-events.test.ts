@@ -251,6 +251,58 @@ describe("Slack plugin - event dispatch baseline", () => {
     });
   });
 
+  it("dispatches file upload and file share events", async () => {
+    const { app, store, webhooks } = createSlackTestApp();
+    const capture = captureFetchRequests();
+    registerSlackEventSubscription(webhooks, ["file_created", "file_shared", "message"]);
+
+    const channel = getSlackStore(store).channels.findOneBy("name", "general")!.channel_id;
+    const urlRes = await app.request(`${base}/api/files.getUploadURLExternal`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ filename: "events.txt", length: 12 }),
+    });
+    const upload = (await urlRes.json()) as any;
+    await app.request(upload.upload_url, { method: "POST", body: "event file" });
+
+    await app.request(`${base}/api/files.completeUploadExternal`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        files: [{ id: upload.file_id, title: "Event File" }],
+        channel_id: channel,
+        initial_comment: "File event",
+      }),
+    });
+
+    expect(capture.requests).toHaveLength(3);
+    expect(capture.jsonBodies()).toEqual([
+      expect.objectContaining({
+        event: expect.objectContaining({
+          type: "file_created",
+          file_id: upload.file_id,
+          file: expect.objectContaining({ id: upload.file_id, title: "Event File" }),
+        }),
+      }),
+      expect.objectContaining({
+        event: expect.objectContaining({
+          type: "file_shared",
+          file_id: upload.file_id,
+          channel_id: channel,
+        }),
+      }),
+      expect.objectContaining({
+        event: expect.objectContaining({
+          type: "message",
+          subtype: "file_share",
+          channel,
+          text: "File event",
+          files: [expect.objectContaining({ id: upload.file_id })],
+        }),
+      }),
+    ]);
+  });
+
   it("dispatches message_changed events for chat.update", async () => {
     const { app, store, webhooks } = createSlackTestApp();
     const capture = captureFetchRequests();

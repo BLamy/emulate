@@ -386,4 +386,33 @@ describe("Slack plugin - real @slack/web-api WebClient baseline", () => {
     expect(bot.ok).toBe(true);
     expect(bot.bot?.name).toBe("test-bot");
   });
+
+  it("uploads files through the Slack SDK uploadV2 helper", async () => {
+    expect(emulator).toBeDefined();
+    const channel = getSlackStore(emulator!.store).channels.findOneBy("name", "general")!.channel_id;
+
+    const uploaded = (await client.files.uploadV2({
+      channel_id: channel,
+      content: "SDK upload body",
+      filename: "sdk-upload.txt",
+      title: "SDK Upload",
+      initial_comment: "SDK file upload",
+    })) as any;
+    expect(uploaded.ok).toBe(true);
+    const completed = (uploaded.files as any[])[0];
+    const file = completed.files[0];
+    expect(file.title).toBe("SDK Upload");
+    expect(file.channels).toContain(channel);
+
+    const info = await client.files.info({ file: file.id });
+    expect(info.ok).toBe(true);
+    expect(info.file?.title).toBe("SDK Upload");
+
+    const list = await client.files.list({ channel });
+    expect(list.ok).toBe(true);
+    expect(list.files?.map((item) => item.id)).toContain(file.id);
+
+    const deleted = await client.files.delete({ file: file.id! });
+    expect(deleted.ok).toBe(true);
+  });
 });

@@ -2,7 +2,7 @@ import { randomBytes } from "crypto";
 import type { Context } from "@emulators/core";
 import type { ContentfulStatusCode } from "@emulators/core";
 import type { Store } from "@emulators/core";
-import type { SlackChannel, SlackJsonObject, SlackMessage, SlackScheduledMessage } from "./entities.js";
+import type { SlackChannel, SlackFile, SlackJsonObject, SlackMessage, SlackScheduledMessage } from "./entities.js";
 
 export type SlackScopeRequirement = string | string[];
 
@@ -158,6 +158,8 @@ export function formatSlackMessage(msg: SlackMessage) {
     ...(msg.purpose !== undefined ? { purpose: msg.purpose } : {}),
     ...(msg.old_name !== undefined ? { old_name: msg.old_name } : {}),
     ...(msg.name !== undefined ? { name: msg.name } : {}),
+    ...(msg.files !== undefined ? { files: msg.files.map(formatSlackFile) } : {}),
+    ...(msg.upload !== undefined ? { upload: msg.upload } : {}),
     ...(msg.blocks !== undefined ? { blocks: msg.blocks } : {}),
     ...(msg.attachments !== undefined ? { attachments: msg.attachments } : {}),
     ...(msg.metadata !== undefined ? { metadata: msg.metadata } : {}),
@@ -171,6 +173,42 @@ export function formatSlackMessage(msg: SlackMessage) {
     ...(msg.thread_ts ? { thread_ts: msg.thread_ts } : {}),
     ...(msg.reply_count > 0 ? { reply_count: msg.reply_count, reply_users: msg.reply_users } : {}),
     ...(msg.reactions.length > 0 ? { reactions: msg.reactions } : {}),
+  };
+}
+
+export function formatSlackFile(file: SlackFile) {
+  return {
+    id: file.file_id,
+    created: file.created,
+    timestamp: file.timestamp,
+    name: file.name,
+    title: file.title,
+    mimetype: file.mimetype,
+    filetype: file.filetype,
+    pretty_type: file.pretty_type,
+    user: file.user,
+    user_team: file.team_id,
+    editable: file.editable,
+    size: file.size,
+    mode: file.mode,
+    is_external: file.is_external,
+    external_type: file.external_type,
+    is_public: file.is_public,
+    public_url_shared: file.public_url_shared,
+    display_as_bot: file.display_as_bot,
+    url_private: file.url_private,
+    url_private_download: file.url_private_download,
+    permalink: file.permalink,
+    channels: file.channels,
+    groups: file.groups,
+    ims: file.ims,
+    shares: file.shares,
+    comments_count: 0,
+    is_starred: false,
+    has_rich_preview: false,
+    ...(file.alt_txt ? { alt_txt: file.alt_txt } : {}),
+    ...(file.initial_comment ? { initial_comment: file.initial_comment } : {}),
+    ...(file.thread_ts ? { thread_ts: file.thread_ts } : {}),
   };
 }
 
