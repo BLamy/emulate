@@ -347,13 +347,17 @@ export function chatRoutes(ctx: RouteContext): void {
     const body = await parseSlackBody(c);
     const channel = typeof body.channel === "string" ? body.channel : "";
     const cursor = typeof body.cursor === "string" ? body.cursor : "";
-    const limit = Math.min(Number(body.limit) || 100, 1000);
+    const requestedLimit = body.limit === undefined ? 100 : Number(body.limit);
     const oldest = body.oldest === undefined ? undefined : Number(body.oldest);
     const latest = body.latest === undefined ? undefined : Number(body.latest);
 
+    if (!Number.isFinite(requestedLimit) || requestedLimit < 1) {
+      return slackError(c, "invalid_arguments");
+    }
     if (oldest !== undefined && latest !== undefined && oldest > latest) {
       return slackError(c, "invalid_arguments");
     }
+    const limit = Math.min(Math.floor(requestedLimit), 1000);
 
     const ch = channel ? findChannel(channel) : undefined;
     if (channel && !ch) return slackError(c, "channel_not_found");

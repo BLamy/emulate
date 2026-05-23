@@ -588,6 +588,17 @@ describe("Slack plugin - scheduled messages", () => {
     expect(body.error).toBe("time_in_past");
   });
 
+  it("returns invalid_arguments for nonpositive scheduled list limits", async () => {
+    const res = await app.request(`${base}/api/chat.scheduledMessages.list`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ limit: -1 }),
+    });
+    const body = (await res.json()) as any;
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("invalid_arguments");
+  });
+
   it("returns invalid_scheduled_message_id for unknown scheduled messages", async () => {
     const ss = getSlackStore(store);
     const ch = ss.channels.all()[0];

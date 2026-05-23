@@ -180,7 +180,7 @@ curl -X POST http://localhost:4003/api/chat.postEphemeral \
 curl -X POST http://localhost:4003/api/chat.scheduleMessage \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"channel": "C000000001", "text": "Reminder", "post_at": 1893456000}'
+  -d "{\"channel\": \"C000000001\", \"text\": \"Reminder\", \"post_at\": $(($(date +%s) + 3600))}"
 
 # List scheduled messages
 curl -X POST http://localhost:4003/api/chat.scheduledMessages.list \
