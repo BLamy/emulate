@@ -100,10 +100,19 @@ export function formatSlackMessage(msg: SlackMessage) {
     ...(msg.unfurl_links !== undefined ? { unfurl_links: msg.unfurl_links } : {}),
     ...(msg.unfurl_media !== undefined ? { unfurl_media: msg.unfurl_media } : {}),
     ...(msg.reply_broadcast !== undefined ? { reply_broadcast: msg.reply_broadcast } : {}),
+    ...(msg.edited ? { edited: msg.edited } : {}),
     ...(msg.thread_ts ? { thread_ts: msg.thread_ts } : {}),
     ...(msg.reply_count > 0 ? { reply_count: msg.reply_count, reply_users: msg.reply_users } : {}),
     ...(msg.reactions.length > 0 ? { reactions: msg.reactions } : {}),
   };
+}
+
+export function formatSlackPermalink(baseUrl: string, channel: string, msg: SlackMessage): string {
+  const permalink = `${baseUrl.replace(/\/$/, "")}/archives/${channel}/p${msg.ts.replace(".", "")}`;
+  if (!msg.thread_ts || msg.thread_ts === msg.ts) return permalink;
+
+  const params = new URLSearchParams({ thread_ts: msg.thread_ts, cid: channel });
+  return `${permalink}?${params.toString()}`;
 }
 
 export function parseSlackRichMessageFields(body: Record<string, unknown>): SlackRichMessageParseResult {

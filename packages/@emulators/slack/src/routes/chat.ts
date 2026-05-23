@@ -1,8 +1,9 @@
-import type { RouteContext } from "@emulators/core";
+import type { Context, RouteContext } from "@emulators/core";
 import type { SlackMessage } from "../entities.js";
 import { getSlackStore } from "../store.js";
 import {
   formatSlackMessage,
+  formatSlackPermalink,
   generateTs,
   hasSlackMessageContent,
   parseSlackBody,
@@ -12,7 +13,7 @@ import {
 } from "../helpers.js";
 
 export function chatRoutes(ctx: RouteContext): void {
-  const { app, store, webhooks } = ctx;
+  const { app, store, webhooks, baseUrl } = ctx;
   const ss = () => getSlackStore(store);
 
   // chat.postMessage
@@ -116,7 +117,30 @@ export function chatRoutes(ctx: RouteContext): void {
       return slackError(c, "no_text");
     }
 
-    const updated = ss().messages.update(msg.id, updates)!;
+    const eventTs = generateTs();
+    const updated = ss()
+      .messages.update(msg.id, {
+        ...updates,
+        edited: { user: authUser.login, ts: eventTs },
+      })!;
+
+    await webhooks.dispatch(
+      "message",
+      undefined,
+      {
+        type: "event_callback",
+        event: {
+          type: "message",
+          subtype: "message_changed",
+          hidden: true,
+          channel,
+          ts: eventTs,
+          message: formatSlackMessage(updated),
+          previous_message: formatSlackMessage(msg),
+        },
+      },
+      "slack",
+    );
 
     return slackOk(c, {
       channel,
@@ -144,8 +168,56 @@ export function chatRoutes(ctx: RouteContext): void {
 
     ss().messages.delete(msg.id);
 
+    const eventTs = generateTs();
+    await webhooks.dispatch(
+      "message",
+      undefined,
+      {
+        type: "event_callback",
+        event: {
+          type: "message",
+          subtype: "message_deleted",
+          hidden: true,
+          channel,
+          ts: eventTs,
+          deleted_ts: ts,
+          previous_message: formatSlackMessage(msg),
+        },
+      },
+      "slack",
+    );
+
     return slackOk(c, { channel, ts });
   });
+
+  async function getPermalink(c: Context) {
+    const authUser = c.get("authUser");
+    if (!authUser) return slackError(c, "not_authed");
+
+    const body = c.req.method === "GET" ? {} : await parseSlackBody(c);
+    const channel = typeof body.channel === "string" ? body.channel : (c.req.query("channel") ?? "");
+    const messageTs = typeof body.message_ts === "string" ? body.message_ts : (c.req.query("message_ts") ?? "");
+
+    if (!channel) return slackError(c, "channel_not_found");
+    if (!messageTs) return slackError(c, "message_not_found");
+
+    const ch = ss().channels.findOneBy("channel_id", channel);
+    if (!ch) return slackError(c, "channel_not_found");
+
+    const msg = ss()
+      .messages.all()
+      .find((m) => m.ts === messageTs && m.channel_id === channel);
+    if (!msg) return slackError(c, "message_not_found");
+
+    return slackOk(c, {
+      channel,
+      permalink: formatSlackPermalink(baseUrl, ch.channel_id, msg),
+    });
+  }
+
+  // chat.getPermalink
+  app.get("/api/chat.getPermalink", getPermalink);
+  app.post("/api/chat.getPermalink", getPermalink);
 
   // chat.meMessage
   app.post("/api/chat.meMessage", async (c) => {

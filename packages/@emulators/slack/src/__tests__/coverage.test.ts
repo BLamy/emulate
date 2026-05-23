@@ -15,6 +15,10 @@ function registeredSlackRoutes(): string[] {
   return routes.map((route) => `${route.method} ${route.compiled.pattern}`).sort();
 }
 
+function entryRoutes(entry: { route: string | string[] }): string[] {
+  return Array.isArray(entry.route) ? entry.route : [entry.route];
+}
+
 describe("Slack coverage matrix", () => {
   it("has unique method entries", () => {
     const methods = slackCoverageMatrix.map((entry) => entry.method);
@@ -24,10 +28,12 @@ describe("Slack coverage matrix", () => {
   it("maps every registered endpoint to at least one test file", () => {
     const currentEntries = slackCoverageMatrix.filter((entry) => entry.status !== "not_started");
     expect(currentEntries.length).toBeGreaterThan(0);
-    expect(currentEntries.map((entry) => entry.route).sort()).toEqual(registeredSlackRoutes());
+    expect(currentEntries.flatMap(entryRoutes).sort()).toEqual(registeredSlackRoutes());
 
     for (const entry of currentEntries) {
-      expect(entry.route).toMatch(/^(GET|POST) /);
+      for (const route of entryRoutes(entry)) {
+        expect(route).toMatch(/^(GET|POST) /);
+      }
       expect(entry.testedBy.length, entry.method).toBeGreaterThan(0);
     }
   });

@@ -86,6 +86,93 @@ describe("Slack plugin - event dispatch baseline", () => {
     ]);
   });
 
+  it("dispatches message_changed events for chat.update", async () => {
+    const { app, store, webhooks } = createSlackTestApp();
+    const capture = captureFetchRequests();
+    registerSlackEventSubscription(webhooks, ["message"]);
+
+    const ch = getSlackStore(store).channels.findOneBy("name", "general")!;
+    const postRes = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, text: "before update" }),
+    });
+    const posted = (await postRes.json()) as { ts: string };
+
+    await app.request(`${base}/api/chat.update`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, ts: posted.ts, text: "after update" }),
+    });
+
+    expect(capture.requests).toHaveLength(2);
+    const event = capture.jsonBodies()[1] as any;
+    expect(event).toMatchObject({
+      type: "event_callback",
+      event: {
+        type: "message",
+        subtype: "message_changed",
+        hidden: true,
+        channel: ch.channel_id,
+        message: {
+          type: "message",
+          user: "U000000001",
+          text: "after update",
+          ts: posted.ts,
+          edited: { user: "U000000001" },
+        },
+        previous_message: {
+          type: "message",
+          user: "U000000001",
+          text: "before update",
+          ts: posted.ts,
+        },
+      },
+    });
+    expect(event.event.ts).not.toBe(posted.ts);
+    expect(event.event.message.edited.ts).toBe(event.event.ts);
+  });
+
+  it("dispatches message_deleted events for chat.delete", async () => {
+    const { app, store, webhooks } = createSlackTestApp();
+    const capture = captureFetchRequests();
+    registerSlackEventSubscription(webhooks, ["message"]);
+
+    const ch = getSlackStore(store).channels.findOneBy("name", "general")!;
+    const postRes = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, text: "delete event baseline" }),
+    });
+    const posted = (await postRes.json()) as { ts: string };
+
+    await app.request(`${base}/api/chat.delete`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, ts: posted.ts }),
+    });
+
+    expect(capture.requests).toHaveLength(2);
+    const event = capture.jsonBodies()[1] as any;
+    expect(event).toMatchObject({
+      type: "event_callback",
+      event: {
+        type: "message",
+        subtype: "message_deleted",
+        hidden: true,
+        channel: ch.channel_id,
+        deleted_ts: posted.ts,
+        previous_message: {
+          type: "message",
+          user: "U000000001",
+          text: "delete event baseline",
+          ts: posted.ts,
+        },
+      },
+    });
+    expect(event.event.ts).not.toBe(posted.ts);
+  });
+
   it("dispatches bot message events for incoming webhooks", async () => {
     const { app, store, webhooks } = createSlackTestApp();
     const capture = captureFetchRequests();

@@ -68,6 +68,12 @@ describe("Slack plugin - real @slack/web-api WebClient baseline", () => {
       "reply from WebClient",
     ]);
 
+    const permalink = await client.chat.getPermalink({ channel: channel!, message_ts: reply.ts! });
+    expect(permalink.ok).toBe(true);
+    expect(permalink.channel).toBe(channel);
+    expect(permalink.permalink).toContain(`/archives/${channel}/p${reply.ts!.replace(".", "")}`);
+    expect(permalink.permalink).toContain(`thread_ts=${posted.ts}`);
+
     const deleted = await client.chat.delete({ channel: channel!, ts: posted.ts! });
     expect(deleted.ok).toBe(true);
   });

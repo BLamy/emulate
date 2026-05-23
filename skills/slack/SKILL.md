@@ -164,6 +164,10 @@ curl -X POST http://localhost:4003/api/chat.delete \
   -H "Content-Type: application/json" \
   -d '{"channel": "C000000001", "ts": "1234567890.123456"}'
 
+# Get message permalink
+curl -X GET 'http://localhost:4003/api/chat.getPermalink?channel=C000000001&message_ts=1234567890.123456' \
+  -H "Authorization: Bearer $TOKEN"
+
 # /me message
 curl -X POST http://localhost:4003/api/chat.meMessage \
   -H "Authorization: Bearer $TOKEN" \
@@ -321,9 +325,11 @@ Returns a Slack-style response:
 
 ## Event Dispatching
 
-When messages are posted or reactions are added/removed, the emulator dispatches `event_callback` payloads to configured webhook URLs. These payloads match Slack's Events API format:
+When messages are posted, updated, deleted, or reactions are added/removed, the emulator dispatches `event_callback` payloads to configured webhook URLs. These payloads match Slack's Events API format:
 
 - `message` events on `chat.postMessage`
+- `message` with `subtype: message_changed` on `chat.update`
+- `message` with `subtype: message_deleted` on `chat.delete`
 - rich message fields are included on posted `message` events when present
 - `reaction_added` / `reaction_removed` events on `reactions.add` / `reactions.remove`
 - `message` with `subtype: bot_message` on incoming webhook posts

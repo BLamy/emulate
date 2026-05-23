@@ -365,6 +365,83 @@ describe("Slack plugin - chat.delete", () => {
   });
 });
 
+describe("Slack plugin - chat.getPermalink", () => {
+  let app: SlackTestApp["app"];
+  let store: Store;
+
+  beforeEach(() => {
+    ({ app, store } = createTestApp());
+  });
+
+  it("returns a deterministic permalink for a top-level message", async () => {
+    const ss = getSlackStore(store);
+    const ch = ss.channels.all()[0];
+
+    const postRes = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, text: "link me" }),
+    });
+    const posted = (await postRes.json()) as any;
+
+    const permalinkRes = await app.request(
+      `${base}/api/chat.getPermalink?channel=${ch.channel_id}&message_ts=${posted.ts}`,
+      {
+        method: "GET",
+        headers: authHeaders(),
+      },
+    );
+    const permalink = (await permalinkRes.json()) as any;
+    expect(permalink.ok).toBe(true);
+    expect(permalink.channel).toBe(ch.channel_id);
+    expect(permalink.permalink).toBe(`${base}/archives/${ch.channel_id}/p${posted.ts.replace(".", "")}`);
+  });
+
+  it("returns threaded reply permalinks from JSON bodies", async () => {
+    const ss = getSlackStore(store);
+    const ch = ss.channels.all()[0];
+
+    const parentRes = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, text: "parent" }),
+    });
+    const parent = (await parentRes.json()) as any;
+
+    const replyRes = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, text: "reply", thread_ts: parent.ts }),
+    });
+    const reply = (await replyRes.json()) as any;
+
+    const permalinkRes = await app.request(`${base}/api/chat.getPermalink`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, message_ts: reply.ts }),
+    });
+    const permalink = (await permalinkRes.json()) as any;
+    expect(permalink.ok).toBe(true);
+    expect(permalink.permalink).toBe(
+      `${base}/archives/${ch.channel_id}/p${reply.ts.replace(".", "")}?thread_ts=${parent.ts}&cid=${ch.channel_id}`,
+    );
+  });
+
+  it("returns message_not_found for an unknown timestamp", async () => {
+    const ss = getSlackStore(store);
+    const ch = ss.channels.all()[0];
+
+    const res = await app.request(`${base}/api/chat.getPermalink`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, message_ts: "1234567890.000001" }),
+    });
+    const body = (await res.json()) as any;
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("message_not_found");
+  });
+});
+
 describe("Slack plugin - conversations", () => {
   let app: SlackTestApp["app"];
   let store: Store;

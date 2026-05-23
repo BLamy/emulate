@@ -17,6 +17,7 @@ npm install @emulators/slack
 - `POST /api/chat.postMessage` — post message with text or rich payload fields (supports threads via `thread_ts`)
 - `POST /api/chat.update` — update message text and rich payload fields
 - `POST /api/chat.delete` — delete message
+- `GET /api/chat.getPermalink` / `POST /api/chat.getPermalink` — get message permalink
 - `POST /api/chat.meMessage` — /me message
 
 ### Conversations
