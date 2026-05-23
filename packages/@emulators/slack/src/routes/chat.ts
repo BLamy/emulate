@@ -312,7 +312,7 @@ export function chatRoutes(ctx: RouteContext): void {
     return slackOk(c, {
       channel: ch.channel_id,
       scheduled_message_id: scheduled.scheduled_message_id,
-      post_at: String(scheduled.post_at),
+      post_at: scheduled.post_at,
       message: formatSlackScheduledMessage(scheduled),
     });
   });
@@ -354,6 +354,12 @@ export function chatRoutes(ctx: RouteContext): void {
     const latest = body.latest === undefined ? undefined : Number(body.latest);
 
     if (!Number.isFinite(requestedLimit) || requestedLimit < 1) {
+      return slackError(c, "invalid_arguments");
+    }
+    if (
+      (oldest !== undefined && !Number.isFinite(oldest)) ||
+      (latest !== undefined && !Number.isFinite(latest))
+    ) {
       return slackError(c, "invalid_arguments");
     }
     if (oldest !== undefined && latest !== undefined && oldest > latest) {

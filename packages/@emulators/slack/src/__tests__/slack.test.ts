@@ -552,7 +552,7 @@ describe("Slack plugin - scheduled messages", () => {
     expect(scheduled.ok).toBe(true);
     expect(scheduled.channel).toBe(ch.channel_id);
     expect(scheduled.scheduled_message_id).toMatch(/^Q/);
-    expect(scheduled.post_at).toBe(String(postAt));
+    expect(scheduled.post_at).toBe(postAt);
     expect(scheduled.message).toMatchObject({
       type: "delayed_message",
       subtype: "bot_message",
@@ -608,6 +608,17 @@ describe("Slack plugin - scheduled messages", () => {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({ limit: -1 }),
+    });
+    const body = (await res.json()) as any;
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("invalid_arguments");
+  });
+
+  it("returns invalid_arguments for invalid scheduled list time filters", async () => {
+    const res = await app.request(`${base}/api/chat.scheduledMessages.list`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ oldest: "not-a-time" }),
     });
     const body = (await res.json()) as any;
     expect(body.ok).toBe(false);
