@@ -69,7 +69,7 @@ export async function startSlackTestEmulator(
   const setup = createSlackTestApp();
   await customize?.(setup);
 
-  const server = serve({ fetch: setup.app.fetch, port: 0 }) as unknown as Server;
+  const server = serve({ fetch: setup.app.fetch, port: 0, hostname: "127.0.0.1" }) as unknown as Server;
   await new Promise<void>((resolve, reject) => {
     server.once("listening", () => resolve());
     server.once("error", reject);

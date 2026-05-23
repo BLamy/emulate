@@ -4,7 +4,7 @@ import { getSlackStore } from "../index.js";
 import { slackTestToken, startSlackTestEmulator, type SlackTestEmulator } from "./helpers.js";
 
 describe("Slack plugin - real @slack/web-api WebClient baseline", () => {
-  let emulator: SlackTestEmulator;
+  let emulator: SlackTestEmulator | undefined;
   let client: WebClient;
 
   beforeAll(async () => {
@@ -23,7 +23,7 @@ describe("Slack plugin - real @slack/web-api WebClient baseline", () => {
   });
 
   afterAll(async () => {
-    await emulator.close();
+    await emulator?.close();
   });
 
   it("calls auth.test and team.info through the Slack SDK", async () => {
@@ -93,7 +93,8 @@ describe("Slack plugin - real @slack/web-api WebClient baseline", () => {
   });
 
   it("exercises users, reactions, and bots through the Slack SDK", async () => {
-    const channel = getSlackStore(emulator.store).channels.findOneBy("name", "general")!.channel_id;
+    expect(emulator).toBeDefined();
+    const channel = getSlackStore(emulator!.store).channels.findOneBy("name", "general")!.channel_id;
     const posted = await client.chat.postMessage({ channel, text: "react via WebClient" });
 
     await expect(client.reactions.add({ channel, timestamp: posted.ts!, name: "thumbsup" })).resolves.toMatchObject({
