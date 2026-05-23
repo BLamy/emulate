@@ -29,7 +29,11 @@ export function getSlackStore(store: Store): SlackStore {
     users: store.collection<SlackUser>("slack.users", ["user_id", "email"]),
     channels: store.collection<SlackChannel>("slack.channels", ["channel_id", "name"]),
     messages: store.collection<SlackMessage>("slack.messages", ["ts", "channel_id"]),
-    ephemeralMessages: store.collection<SlackEphemeralMessage>("slack.ephemeral_messages", ["ts", "channel_id", "target_user"]),
+    ephemeralMessages: store.collection<SlackEphemeralMessage>("slack.ephemeral_messages", [
+      "ts",
+      "channel_id",
+      "target_user",
+    ]),
     scheduledMessages: store.collection<SlackScheduledMessage>("slack.scheduled_messages", [
       "scheduled_message_id",
       "channel_id",

@@ -374,6 +374,7 @@ export function chatRoutes(ctx: RouteContext): void {
     let startIndex = 0;
     if (cursor) {
       const idx = allScheduled.findIndex((msg) => msg.scheduled_message_id === cursor);
+      if (idx < 0) return slackError(c, "invalid_cursor");
       if (idx >= 0) startIndex = idx;
     }
 
