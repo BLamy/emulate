@@ -1,6 +1,6 @@
 import type { RouteContext } from "@emulators/core";
 import { getSlackStore } from "../store.js";
-import { slackOk, slackError, parseSlackBody } from "../helpers.js";
+import { formatSlackMessage, slackOk, slackError, parseSlackBody } from "../helpers.js";
 
 export function reactionsRoutes(ctx: RouteContext): void {
   const { app, store, webhooks } = ctx;
@@ -118,12 +118,7 @@ export function reactionsRoutes(ctx: RouteContext): void {
 
     return slackOk(c, {
       type: "message",
-      message: {
-        type: msg.type,
-        text: msg.text,
-        ts: msg.ts,
-        reactions: msg.reactions,
-      },
+      message: { ...formatSlackMessage(msg), reactions: msg.reactions },
     });
   });
 }

@@ -25,7 +25,7 @@ export const slackCoverageMatrix: SlackCoverageEntry[] = [
     status: "partial",
     testedBy: ["slack.test.ts", "slack-sdk.test.ts", "slack-events.test.ts"],
     notes:
-      "Text messages and thread replies work. Rich message payloads, DMs, permalinks, and membership checks are future work.",
+      "Text, thread replies, blocks, attachments, metadata, formatting flags, unfurl flags, and client message ids round trip. DMs, permalinks, and membership checks are future work.",
   },
   {
     family: "chat",
@@ -33,7 +33,7 @@ export const slackCoverageMatrix: SlackCoverageEntry[] = [
     route: "POST /api/chat.update",
     status: "partial",
     testedBy: ["slack.test.ts", "slack-sdk.test.ts"],
-    notes: "Stored text is updated. Slack shaped message_changed events are future work.",
+    notes: "Stored text and rich message fields are updated. Slack shaped message_changed events are future work.",
   },
   {
     family: "chat",
@@ -81,7 +81,7 @@ export const slackCoverageMatrix: SlackCoverageEntry[] = [
     route: "POST /api/conversations.history",
     status: "partial",
     testedBy: ["slack.test.ts", "slack-sdk.test.ts"],
-    notes: "Returns top level messages for a channel. Time filtering and richer message fields are future work.",
+    notes: "Returns top level messages for a channel, including rich message fields. Time filtering is future work.",
   },
   {
     family: "conversations",
@@ -89,7 +89,7 @@ export const slackCoverageMatrix: SlackCoverageEntry[] = [
     route: "POST /api/conversations.replies",
     status: "partial",
     testedBy: ["slack.test.ts", "slack-sdk.test.ts"],
-    notes: "Returns parent and replies for a thread.",
+    notes: "Returns parent and replies for a thread, including rich message fields.",
   },
   {
     family: "conversations",
@@ -209,7 +209,7 @@ export const slackCoverageMatrix: SlackCoverageEntry[] = [
     route: "POST /services/:teamId/:botId/:token",
     status: "partial",
     testedBy: ["slack.test.ts", "slack-events.test.ts"],
-    notes: "Posts text webhook messages. Rich payload preservation is future work.",
+    notes: "Posts text and rich webhook messages with blocks, attachments, and common formatting fields preserved.",
   },
   {
     family: "inspector",

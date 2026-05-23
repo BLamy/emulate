@@ -1,6 +1,15 @@
 import type { RouteContext } from "@emulators/core";
+import type { SlackMessage } from "../entities.js";
 import { getSlackStore } from "../store.js";
-import { generateTs, slackOk, slackError, parseSlackBody } from "../helpers.js";
+import {
+  formatSlackMessage,
+  generateTs,
+  hasSlackMessageContent,
+  parseSlackBody,
+  parseSlackRichMessageFields,
+  slackError,
+  slackOk,
+} from "../helpers.js";
 
 export function chatRoutes(ctx: RouteContext): void {
   const { app, store, webhooks } = ctx;
@@ -15,11 +24,15 @@ export function chatRoutes(ctx: RouteContext): void {
     const channel = typeof body.channel === "string" ? body.channel : "";
     const text = typeof body.text === "string" ? body.text : "";
     const thread_ts = typeof body.thread_ts === "string" ? body.thread_ts : undefined;
+    const richMessage = parseSlackRichMessageFields(body);
+    if (richMessage.error) return slackError(c, richMessage.error);
 
     if (!channel) return slackError(c, "channel_not_found");
+    if (!hasSlackMessageContent(text, richMessage.fields)) return slackError(c, "no_text");
 
     const ch = ss().channels.findOneBy("channel_id", channel) ?? ss().channels.findOneBy("name", channel);
     if (!ch) return slackError(c, "channel_not_found");
+    if (ch.is_archived) return slackError(c, "is_archived");
 
     const ts = generateTs();
     const msg = ss().messages.insert({
@@ -29,6 +42,7 @@ export function chatRoutes(ctx: RouteContext): void {
       text,
       type: "message" as const,
       thread_ts,
+      ...richMessage.fields,
       reply_count: 0,
       reply_users: [],
       reactions: [],
@@ -56,12 +70,9 @@ export function chatRoutes(ctx: RouteContext): void {
       {
         type: "event_callback",
         event: {
+          ...formatSlackMessage(msg),
           type: "message",
           channel: ch.channel_id,
-          user: authUser.login,
-          text,
-          ts,
-          thread_ts,
         },
       },
       "slack",
@@ -70,13 +81,7 @@ export function chatRoutes(ctx: RouteContext): void {
     return slackOk(c, {
       channel: ch.channel_id,
       ts,
-      message: {
-        text: msg.text,
-        user: msg.user,
-        type: msg.type,
-        ts: msg.ts,
-        thread_ts: msg.thread_ts,
-      },
+      message: formatSlackMessage(msg),
     });
   });
 
@@ -88,7 +93,10 @@ export function chatRoutes(ctx: RouteContext): void {
     const body = await parseSlackBody(c);
     const channel = typeof body.channel === "string" ? body.channel : "";
     const ts = typeof body.ts === "string" ? body.ts : "";
-    const text = typeof body.text === "string" ? body.text : "";
+    const hasText = typeof body.text === "string";
+    const text = hasText ? (body.text as string) : "";
+    const richMessage = parseSlackRichMessageFields(body);
+    if (richMessage.error) return slackError(c, richMessage.error);
 
     if (!channel || !ts) return slackError(c, "message_not_found");
 
@@ -97,12 +105,24 @@ export function chatRoutes(ctx: RouteContext): void {
       .find((m) => m.ts === ts && m.channel_id === channel);
     if (!msg) return slackError(c, "message_not_found");
 
-    ss().messages.update(msg.id, { text });
+    const updates: Partial<SlackMessage> = { ...richMessage.fields };
+    if (hasText) {
+      updates.text = text;
+      if (!richMessage.providedFields.includes("blocks")) updates.blocks = undefined;
+      if (!richMessage.providedFields.includes("attachments")) updates.attachments = undefined;
+    }
+
+    if (!hasText && Object.keys(updates).length === 0) {
+      return slackError(c, "no_text");
+    }
+
+    const updated = ss().messages.update(msg.id, updates)!;
 
     return slackOk(c, {
       channel,
       ts,
-      text,
+      text: updated.text,
+      message: formatSlackMessage(updated),
     });
   });
 

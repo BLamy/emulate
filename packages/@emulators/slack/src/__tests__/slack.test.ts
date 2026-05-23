@@ -122,6 +122,115 @@ describe("Slack plugin - chat.postMessage", () => {
     expect(body.ok).toBe(true);
     expect(body.message.text).toBe("urlencoded message");
   });
+
+  it("round trips rich JSON message payloads through history", async () => {
+    const ss = getSlackStore(store);
+    const ch = ss.channels.all()[0];
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "*Deploy* completed" } },
+      { type: "context", elements: [{ type: "plain_text", text: "production" }] },
+    ];
+    const attachments = [{ color: "#2eb67d", text: "Release 2026.05.23" }];
+    const metadata = { event_type: "deploy_completed", event_payload: { deploy_id: "dep_123" } };
+
+    const res = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        channel: ch.channel_id,
+        text: "deploy completed",
+        blocks,
+        attachments,
+        metadata,
+        mrkdwn: false,
+        parse: "none",
+        link_names: true,
+        unfurl_links: false,
+        unfurl_media: false,
+        username: "Deploy Bot",
+        icon_emoji: ":bell:",
+        client_msg_id: "client-message-1",
+      }),
+    });
+    const body = (await res.json()) as any;
+    expect(body.ok).toBe(true);
+    expect(body.message).toMatchObject({
+      text: "deploy completed",
+      blocks,
+      attachments,
+      metadata,
+      mrkdwn: false,
+      parse: "none",
+      link_names: true,
+      unfurl_links: false,
+      unfurl_media: false,
+      username: "Deploy Bot",
+      icon_emoji: ":bell:",
+      client_msg_id: "client-message-1",
+    });
+
+    const stored = ss.messages.findOneBy("ts", body.ts);
+    expect(stored?.blocks).toEqual(blocks);
+    expect(stored?.metadata).toEqual(metadata);
+
+    const historyRes = await app.request(`${base}/api/conversations.history`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id }),
+    });
+    const history = (await historyRes.json()) as any;
+    expect(history.messages[0]).toMatchObject({
+      text: "deploy completed",
+      blocks,
+      attachments,
+      metadata,
+      unfurl_links: false,
+      unfurl_media: false,
+    });
+  });
+
+  it("parses form-encoded rich message fields", async () => {
+    const ss = getSlackStore(store);
+    const ch = ss.channels.all()[0];
+    const blocks = [{ type: "section", text: { type: "plain_text", text: "blocks only" } }];
+    const metadata = { event_type: "blocks_only", event_payload: { source: "form" } };
+    const form = new URLSearchParams();
+    form.set("channel", ch.channel_id);
+    form.set("blocks", JSON.stringify(blocks));
+    form.set("metadata", JSON.stringify(metadata));
+    form.set("unfurl_links", "false");
+    form.set("unfurl_media", "0");
+
+    const res = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders("application/x-www-form-urlencoded"),
+      body: form.toString(),
+    });
+    const body = (await res.json()) as any;
+    expect(body.ok).toBe(true);
+    expect(body.message.text).toBe("");
+    expect(body.message.blocks).toEqual(blocks);
+    expect(body.message.metadata).toEqual(metadata);
+    expect(body.message.unfurl_links).toBe(false);
+    expect(body.message.unfurl_media).toBe(false);
+  });
+
+  it("rejects invalid rich payload JSON", async () => {
+    const ss = getSlackStore(store);
+    const ch = ss.channels.all()[0];
+    const form = new URLSearchParams();
+    form.set("channel", ch.channel_id);
+    form.set("blocks", "[");
+
+    const res = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders("application/x-www-form-urlencoded"),
+      body: form.toString(),
+    });
+    const body = (await res.json()) as any;
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("invalid_blocks");
+  });
 });
 
 describe("Slack plugin - chat.update", () => {
@@ -151,6 +260,79 @@ describe("Slack plugin - chat.update", () => {
     const updated = (await updateRes.json()) as any;
     expect(updated.ok).toBe(true);
     expect(updated.text).toBe("updated");
+  });
+
+  it("updates rich message fields and returns the full message", async () => {
+    const ss = getSlackStore(store);
+    const ch = ss.channels.all()[0];
+    const originalBlocks = [{ type: "section", text: { type: "plain_text", text: "original" } }];
+    const updatedBlocks = [{ type: "section", text: { type: "plain_text", text: "updated" } }];
+    const updatedAttachments = [{ color: "#36c5f0", text: "updated attachment" }];
+    const metadata = { event_type: "message_updated", event_payload: { id: "msg_1" } };
+
+    const postRes = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, text: "original", blocks: originalBlocks }),
+    });
+    const posted = (await postRes.json()) as any;
+
+    const updateRes = await app.request(`${base}/api/chat.update`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        channel: ch.channel_id,
+        ts: posted.ts,
+        text: "updated rich",
+        blocks: updatedBlocks,
+        attachments: updatedAttachments,
+        metadata,
+        unfurl_links: false,
+      }),
+    });
+    const updated = (await updateRes.json()) as any;
+    expect(updated.ok).toBe(true);
+    expect(updated.message).toMatchObject({
+      text: "updated rich",
+      blocks: updatedBlocks,
+      attachments: updatedAttachments,
+      metadata,
+      unfurl_links: false,
+    });
+
+    const historyRes = await app.request(`${base}/api/conversations.history`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id }),
+    });
+    const history = (await historyRes.json()) as any;
+    expect(history.messages[0].blocks).toEqual(updatedBlocks);
+    expect(history.messages[0].attachments).toEqual(updatedAttachments);
+  });
+
+  it("clears blocks when text is updated without new blocks", async () => {
+    const ss = getSlackStore(store);
+    const ch = ss.channels.all()[0];
+
+    const postRes = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        channel: ch.channel_id,
+        text: "original",
+        blocks: [{ type: "section", text: { type: "plain_text", text: "original" } }],
+      }),
+    });
+    const posted = (await postRes.json()) as any;
+
+    const updateRes = await app.request(`${base}/api/chat.update`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, ts: posted.ts, text: "text only" }),
+    });
+    const updated = (await updateRes.json()) as any;
+    expect(updated.ok).toBe(true);
+    expect(updated.message.blocks).toBeUndefined();
   });
 });
 
@@ -652,6 +834,28 @@ describe("Slack plugin - Incoming Webhooks", () => {
     expect(messages.length).toBe(1);
     expect(messages[0].text).toBe("Deploy succeeded!");
     expect(messages[0].subtype).toBe("bot_message");
+  });
+
+  it("preserves rich payloads from incoming webhooks", async () => {
+    const ss = getSlackStore(store);
+    const webhook = ss.incomingWebhooks.all()[0];
+    const blocks = [{ type: "section", text: { type: "plain_text", text: "Webhook block" } }];
+    const attachments = [{ color: "#e01e5a", text: "Webhook attachment" }];
+
+    const res = await app.request(`${base}${webhook.url}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blocks, attachments, unfurl_links: false }),
+    });
+    expect(res.status).toBe(200);
+
+    const messages = ss.messages.findBy("channel_id", "C000000001");
+    expect(messages.length).toBe(1);
+    expect(messages[0].text).toBe("");
+    expect(messages[0].blocks).toEqual(blocks);
+    expect(messages[0].attachments).toEqual(attachments);
+    expect(messages[0].unfurl_links).toBe(false);
+    expect(messages[0].bot_id).toBe(webhook.bot_id);
   });
 
   it("posts to a specific channel via webhook", async () => {

@@ -6,7 +6,7 @@ allowed-tools: Bash(npx emulate:*), Bash(emulate:*), Bash(curl:*)
 
 # Slack API Emulator
 
-Fully stateful Slack Web API emulation with channels, messages, threads, reactions, OAuth v2, and incoming webhooks. State changes dispatch `event_callback` payloads to configured webhook URLs.
+Fully stateful Slack Web API emulation with channels, messages, threads, reactions, OAuth v2, and incoming webhooks. Chat writes preserve common rich message fields such as `blocks`, `attachments`, `metadata`, formatting flags, unfurl flags, and client message ids. State changes dispatch `event_callback` payloads to configured webhook URLs.
 
 ## Start
 
@@ -131,6 +131,8 @@ curl -X POST http://localhost:4003/api/auth.test \
 
 ### Chat
 
+`chat.postMessage`, `chat.update`, `conversations.history`, and `conversations.replies` round trip text plus common rich message fields: `blocks`, `attachments`, `metadata`, `mrkdwn`, `parse`, `link_names`, `unfurl_links`, `unfurl_media`, `username`, `icon_url`, `icon_emoji`, `bot_id`, `app_id`, `client_msg_id`, and `reply_broadcast`.
+
 ```bash
 # Post message
 curl -X POST http://localhost:4003/api/chat.postMessage \
@@ -143,6 +145,12 @@ curl -X POST http://localhost:4003/api/chat.postMessage \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"channel": "C000000001", "text": "Thread reply", "thread_ts": "1234567890.123456"}'
+
+# Post rich message
+curl -X POST http://localhost:4003/api/chat.postMessage \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel": "C000000001", "text": "Deploy complete", "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "*Deploy* complete"}}], "metadata": {"event_type": "deploy_complete", "event_payload": {"deploy_id": "dep_123"}}, "unfurl_links": false}'
 
 # Update message
 curl -X POST http://localhost:4003/api/chat.update \
@@ -315,7 +323,8 @@ Returns a Slack-style response:
 
 When messages are posted or reactions are added/removed, the emulator dispatches `event_callback` payloads to configured webhook URLs. These payloads match Slack's Events API format:
 
-- `message` events on `chat.postMessage`, `chat.update`, `chat.delete`
+- `message` events on `chat.postMessage`
+- rich message fields are included on posted `message` events when present
 - `reaction_added` / `reaction_removed` events on `reactions.add` / `reactions.remove`
 - `message` with `subtype: bot_message` on incoming webhook posts
 

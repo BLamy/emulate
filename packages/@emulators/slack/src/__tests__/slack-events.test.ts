@@ -19,10 +19,12 @@ describe("Slack plugin - event dispatch baseline", () => {
     registerSlackEventSubscription(webhooks, ["message"]);
 
     const ch = getSlackStore(store).channels.findOneBy("name", "general")!;
+    const blocks = [{ type: "section", text: { type: "plain_text", text: "event baseline" } }];
+    const metadata = { event_type: "message_posted", event_payload: { id: "event_1" } };
     const res = await app.request(`${base}/api/chat.postMessage`, {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify({ channel: ch.channel_id, text: "event baseline" }),
+      body: JSON.stringify({ channel: ch.channel_id, text: "event baseline", blocks, metadata }),
     });
     expect(res.status).toBe(200);
 
@@ -34,6 +36,8 @@ describe("Slack plugin - event dispatch baseline", () => {
         channel: ch.channel_id,
         user: "U000000001",
         text: "event baseline",
+        blocks,
+        metadata,
       },
     });
   });

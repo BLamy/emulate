@@ -72,6 +72,38 @@ describe("Slack plugin - real @slack/web-api WebClient baseline", () => {
     expect(deleted.ok).toBe(true);
   });
 
+  it("round trips rich chat messages through the Slack SDK", async () => {
+    expect(emulator).toBeDefined();
+    const channel = getSlackStore(emulator!.store).channels.findOneBy("name", "general")!.channel_id;
+    const blocks = [{ type: "section", text: { type: "plain_text", text: "rich from WebClient" } }];
+    const attachments = [{ color: "#ecb22e", text: "legacy attachment" }];
+    const metadata = { event_type: "sdk_rich_message", event_payload: { id: "sdk_1" } };
+
+    const posted = await client.chat.postMessage({
+      channel,
+      text: "rich from WebClient",
+      blocks,
+      attachments,
+      metadata,
+      unfurl_links: false,
+      unfurl_media: false,
+      client_msg_id: "sdk-client-message-1",
+    } as any);
+    expect(posted.ok).toBe(true);
+    expect((posted.message as any).blocks).toEqual(blocks);
+    expect((posted.message as any).attachments).toEqual(attachments);
+    expect((posted.message as any).metadata).toEqual(metadata);
+    expect((posted.message as any).unfurl_links).toBe(false);
+    expect((posted.message as any).unfurl_media).toBe(false);
+    expect((posted.message as any).client_msg_id).toBe("sdk-client-message-1");
+
+    const history = await client.conversations.history({ channel });
+    const message = history.messages?.find((item) => item.ts === posted.ts) as any;
+    expect(message.blocks).toEqual(blocks);
+    expect(message.attachments).toEqual(attachments);
+    expect(message.metadata).toEqual(metadata);
+  });
+
   it("exercises conversation membership through the Slack SDK", async () => {
     const created = await client.conversations.create({ name: "sdk-membership" });
     const channel = created.channel!.id!;

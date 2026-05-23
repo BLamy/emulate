@@ -598,12 +598,12 @@ OAuth 2.0, OpenID Connect, and mutable Google Workspace-style surfaces for local
 
 ## Slack API
 
-Fully stateful Slack Web API emulation with channels, messages, threads, reactions, OAuth v2, and incoming webhooks.
+Fully stateful Slack Web API emulation with channels, messages, threads, reactions, OAuth v2, and incoming webhooks. Chat writes preserve common rich message fields such as `blocks`, `attachments`, `metadata`, formatting flags, unfurl flags, and client message ids.
 
 ### Auth & Chat
 - `POST /api/auth.test` - test authentication
-- `POST /api/chat.postMessage` - post message (supports threads via `thread_ts`)
-- `POST /api/chat.update` - update message
+- `POST /api/chat.postMessage` - post message with text or rich payload fields (supports threads via `thread_ts`)
+- `POST /api/chat.update` - update message text and rich payload fields
 - `POST /api/chat.delete` - delete message
 - `POST /api/chat.meMessage` - /me message
 
@@ -611,8 +611,8 @@ Fully stateful Slack Web API emulation with channels, messages, threads, reactio
 - `POST /api/conversations.list` - list channels (cursor pagination)
 - `POST /api/conversations.info` - get channel info
 - `POST /api/conversations.create` - create channel
-- `POST /api/conversations.history` - channel history
-- `POST /api/conversations.replies` - thread replies
+- `POST /api/conversations.history` - channel history with rich message fields
+- `POST /api/conversations.replies` - thread replies with rich message fields
 - `POST /api/conversations.join` / `conversations.leave` - join/leave
 - `POST /api/conversations.members` - list members
 
@@ -625,7 +625,7 @@ Fully stateful Slack Web API emulation with channels, messages, threads, reactio
 ### Team, Bots & Webhooks
 - `POST /api/team.info` - workspace info
 - `POST /api/bots.info` - bot info
-- `POST /services/:teamId/:botId/:webhookId` - incoming webhook
+- `POST /services/:teamId/:botId/:webhookId` - incoming webhook with text or rich payload fields
 
 ### OAuth
 - `GET /oauth/v2/authorize` - authorization (shows user picker)

@@ -1,6 +1,6 @@
 import type { RouteContext } from "@emulators/core";
 import { getSlackStore } from "../store.js";
-import { generateSlackId, slackOk, slackError, parseSlackBody } from "../helpers.js";
+import { formatSlackMessage, generateSlackId, parseSlackBody, slackError, slackOk } from "../helpers.js";
 
 export function conversationsRoutes(ctx: RouteContext): void {
   const { app, store } = ctx;
@@ -117,7 +117,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
     const nextCursor = hasMore ? allMessages[startIndex + limit].ts : "";
 
     return slackOk(c, {
-      messages: page.map(formatMessage),
+      messages: page.map(formatSlackMessage),
       has_more: hasMore,
       response_metadata: { next_cursor: nextCursor },
     });
@@ -140,7 +140,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
       .sort((a, b) => (a.ts > b.ts ? 1 : -1));
 
     return slackOk(c, {
-      messages: allMessages.map(formatMessage),
+      messages: allMessages.map(formatSlackMessage),
       has_more: false,
     });
   });
@@ -229,28 +229,5 @@ function formatChannel(ch: {
     creator: ch.creator,
     num_members: ch.num_members,
     created: Math.floor(new Date(ch.created_at).getTime() / 1000),
-  };
-}
-
-function formatMessage(msg: {
-  ts: string;
-  user: string;
-  text: string;
-  type: string;
-  subtype?: string;
-  thread_ts?: string;
-  reply_count: number;
-  reply_users: string[];
-  reactions: Array<{ name: string; users: string[]; count: number }>;
-}) {
-  return {
-    type: msg.type,
-    user: msg.user,
-    text: msg.text,
-    ts: msg.ts,
-    ...(msg.subtype ? { subtype: msg.subtype } : {}),
-    ...(msg.thread_ts ? { thread_ts: msg.thread_ts } : {}),
-    ...(msg.reply_count > 0 ? { reply_count: msg.reply_count, reply_users: msg.reply_users } : {}),
-    ...(msg.reactions.length > 0 ? { reactions: msg.reactions } : {}),
   };
 }

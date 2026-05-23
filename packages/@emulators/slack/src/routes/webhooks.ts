@@ -1,6 +1,6 @@
 import type { RouteContext } from "@emulators/core";
 import { getSlackStore } from "../store.js";
-import { generateTs } from "../helpers.js";
+import { formatSlackMessage, generateTs, hasSlackMessageContent, parseSlackRichMessageFields } from "../helpers.js";
 
 export function webhookRoutes(ctx: RouteContext): void {
   const { app, store, webhooks } = ctx;
@@ -37,8 +37,12 @@ export function webhookRoutes(ctx: RouteContext): void {
     const text = typeof body.text === "string" ? body.text : "";
     const channelName = typeof body.channel === "string" ? body.channel : "";
     const threadTs = typeof body.thread_ts === "string" ? body.thread_ts : undefined;
+    const richMessage = parseSlackRichMessageFields(body);
+    if (richMessage.error) {
+      return c.text(richMessage.error, 400);
+    }
 
-    if (!text && !body.blocks && !body.attachments) {
+    if (!hasSlackMessageContent(text, richMessage.fields)) {
       return c.text("no_text", 400);
     }
 
@@ -68,14 +72,16 @@ export function webhookRoutes(ctx: RouteContext): void {
     const ts = generateTs();
     const botId = c.req.param("botId");
 
-    ss().messages.insert({
+    const msg = ss().messages.insert({
       ts,
       channel_id: targetChannel.channel_id,
       user: botId,
-      text: text || "(rich message)",
+      text,
       type: "message" as const,
       subtype: "bot_message",
       thread_ts: threadTs,
+      ...richMessage.fields,
+      bot_id: botId,
       reply_count: 0,
       reply_users: [],
       reactions: [],
@@ -87,13 +93,11 @@ export function webhookRoutes(ctx: RouteContext): void {
       {
         type: "event_callback",
         event: {
+          ...formatSlackMessage(msg),
           type: "message",
           subtype: "bot_message",
           channel: targetChannel.channel_id,
           bot_id: botId,
-          text: text || "(rich message)",
-          ts,
-          thread_ts: threadTs,
         },
       },
       "slack",

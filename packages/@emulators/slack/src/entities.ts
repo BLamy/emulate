@@ -38,6 +38,8 @@ export interface SlackChannel extends Entity {
   num_members: number;
 }
 
+export type SlackJsonObject = Record<string, unknown>;
+
 export interface SlackMessage extends Entity {
   ts: string;
   channel_id: string;
@@ -45,6 +47,21 @@ export interface SlackMessage extends Entity {
   text: string;
   type: "message";
   subtype?: string;
+  blocks?: SlackJsonObject[];
+  attachments?: SlackJsonObject[];
+  metadata?: SlackJsonObject;
+  mrkdwn?: boolean;
+  parse?: string;
+  link_names?: boolean;
+  unfurl_links?: boolean;
+  unfurl_media?: boolean;
+  username?: string;
+  icon_url?: string;
+  icon_emoji?: string;
+  bot_id?: string;
+  app_id?: string;
+  client_msg_id?: string;
+  reply_broadcast?: boolean;
   thread_ts?: string;
   reply_count: number;
   reply_users: string[];
