@@ -21,11 +21,13 @@ export function chatRoutes(ctx: RouteContext): void {
   const { app, store, webhooks, baseUrl } = ctx;
   const ss = () => getSlackStore(store);
   const findChannel = (channel: string) =>
-    ss().channels.findOneBy("channel_id", channel) ?? ss().channels.findOneBy("name", channel);
+    ss().channels.findOneBy("channel_id", channel) ??
+    ss()
+      .channels.all()
+      .find((ch) => !ch.is_im && !ch.is_mpim && ch.name === channel);
   const getAuthSlackUser = (authUser: { login: string }) =>
     ss().users.findOneBy("user_id", authUser.login) ?? ss().users.findOneBy("name", authUser.login);
-  const getAuthUserId = (authUser: { login: string }) =>
-    getAuthSlackUser(authUser)?.user_id ?? authUser.login;
+  const getAuthUserId = (authUser: { login: string }) => getAuthSlackUser(authUser)?.user_id ?? authUser.login;
   const isAuthChannelMember = (channel: SlackChannel, authUser: { login: string }) => {
     const user = getAuthSlackUser(authUser);
     const userId = user?.user_id ?? authUser.login;
@@ -52,7 +54,7 @@ export function chatRoutes(ctx: RouteContext): void {
       .find(
         (ch) =>
           ch.is_im && ch.members.length === members.length && [...ch.members].sort().join(",") === members.join(","),
-    );
+      );
     if (existing) {
       if (!getSlackConversationOpenState(existing, authUserId)) {
         return ss().channels.update(existing.id, setSlackConversationOpenState(existing, authUserId, true));
@@ -481,7 +483,7 @@ export function chatRoutes(ctx: RouteContext): void {
 
     if (!channel) return slackError(c, "channel_not_found");
 
-    const ch = ss().channels.findOneBy("channel_id", channel) ?? ss().channels.findOneBy("name", channel);
+    const ch = findChannel(channel);
     if (!ch) return slackError(c, "channel_not_found");
     if (ch.is_archived) return slackError(c, "is_archived");
     if (!canAccessConversation(ch, authUser)) return slackError(c, "not_in_channel");

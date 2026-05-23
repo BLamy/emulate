@@ -148,8 +148,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
     const nameError = validateChannelName(name);
     if (nameError) return slackError(c, nameError);
 
-    // Check for duplicate name
-    const existing = ss().channels.findOneBy("name", name);
+    const existing = findNamedChannel(ss().channels.all(), name);
     if (existing) return slackError(c, "name_taken");
 
     const team = ss().teams.all()[0];
@@ -268,7 +267,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
       return slackError(c, "not_authorized");
     }
 
-    const existing = ss().channels.findOneBy("name", name);
+    const existing = findNamedChannel(ss().channels.all(), name);
     if (existing && existing.id !== ch.id) return slackError(c, "name_taken");
     if (name === ch.name) return slackOk(c, { channel: formatChannel(ch) });
 
@@ -443,6 +442,11 @@ export function conversationsRoutes(ctx: RouteContext): void {
     if (ch.is_im || ch.is_mpim) return slackError(c, "method_not_supported_for_channel_type");
 
     const authUserId = getAuthUserId(authUser);
+    const authSlackUser = getAuthSlackUser(authUser);
+    if (ch.is_private && !isChannelMember(ch, authSlackUser, authUserId)) {
+      return slackError(c, "not_in_channel");
+    }
+
     if (!ch.members.includes(authUserId)) {
       const updated = ss().channels.update(ch.id, {
         members: [...ch.members, authUserId],
@@ -630,7 +634,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
       team_id: team?.team_id ?? "T000000001",
       name: isMpim
         ? `mpdm-${targetUsers.map((user) => user.name).join("-")}`
-        : targetUsers[0]?.name ?? "direct-message",
+        : (targetUsers[0]?.name ?? "direct-message"),
       is_channel: false,
       is_private: true,
       is_im: !isMpim,
@@ -797,7 +801,12 @@ function conversationNoun(ch: SlackChannel): "channel" | "group" {
 
 function parseConversationTypes(value: unknown): Set<string> {
   const raw = typeof value === "string" && value.length > 0 ? value : "public_channel";
-  return new Set(raw.split(",").map((type) => type.trim()).filter(Boolean));
+  return new Set(
+    raw
+      .split(",")
+      .map((type) => type.trim())
+      .filter(Boolean),
+  );
 }
 
 function matchesConversationTypes(ch: SlackChannel, types: Set<string>): boolean {
@@ -828,6 +837,10 @@ function findConversationByMembers(
   return channels.find(
     (ch) => Boolean(ch.is_mpim) === isMpim && Boolean(ch.is_im) === !isMpim && sameMembers(ch.members, members),
   );
+}
+
+function findNamedChannel(channels: SlackChannel[], name: string): SlackChannel | undefined {
+  return channels.find((ch) => !ch.is_im && !ch.is_mpim && ch.name === name);
 }
 
 function channelTypeLetter(ch: SlackChannel): "C" | "D" | "G" {

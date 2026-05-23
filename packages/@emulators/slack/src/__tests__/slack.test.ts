@@ -836,14 +836,15 @@ describe("Slack plugin - conversations", () => {
     expect(list.ok).toBe(true);
     expect(list.channels.map((listed: any) => listed.id)).not.toContain(channel);
 
-    const blockedReads = [
+    const blockedRequests = [
       { path: "conversations.info", body: { channel } },
       { path: "conversations.history", body: { channel } },
       { path: "conversations.replies", body: { channel, ts: posted.ts } },
+      { path: "conversations.join", body: { channel } },
       { path: "conversations.members", body: { channel } },
     ];
 
-    for (const request of blockedReads) {
+    for (const request of blockedRequests) {
       const res = await app.request(`${base}/api/${request.path}`, {
         method: "POST",
         headers: outsiderHeaders,
@@ -1387,6 +1388,38 @@ describe("Slack plugin - conversations", () => {
     });
     const duplicateClose = (await duplicateCloseRes.json()) as any;
     expect(duplicateClose).toMatchObject({ ok: true, no_op: true, already_closed: true });
+  });
+
+  it("does not let direct conversation names reserve channel names", async () => {
+    insertSlackTestUser(store, "U000000002", "support");
+
+    const openRes = await app.request(`${base}/api/conversations.open`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ users: "U000000002", return_im: true }),
+    });
+    const opened = (await openRes.json()) as any;
+    expect(opened.ok).toBe(true);
+    expect(opened.channel.name).toBe("support");
+
+    const createRes = await app.request(`${base}/api/conversations.create`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ name: "support" }),
+    });
+    const created = (await createRes.json()) as any;
+    expect(created.ok).toBe(true);
+    expect(created.channel.name).toBe("support");
+
+    const postRes = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: "support", text: "channel message" }),
+    });
+    const posted = (await postRes.json()) as any;
+    expect(posted.ok).toBe(true);
+    expect(posted.channel).toBe(created.channel.id);
+    expect(posted.channel).not.toBe(opened.channel.id);
   });
 
   it("keeps direct message open state per member and protects channel id writes", async () => {

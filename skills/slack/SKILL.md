@@ -276,12 +276,12 @@ curl -X POST http://localhost:4003/api/conversations.join \
 curl -X POST http://localhost:4003/api/conversations.invite \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"channel": "C000000001", "users": "U000000002"}'
+  -d '{"channel": "C000000002", "users": "U000000002"}'
 
 curl -X POST http://localhost:4003/api/conversations.kick \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"channel": "C000000001", "user": "U000000002"}'
+  -d '{"channel": "C000000002", "user": "U000000002"}'
 
 # Open / close DM
 curl -X POST http://localhost:4003/api/conversations.open \

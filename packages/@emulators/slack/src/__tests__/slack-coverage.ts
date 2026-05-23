@@ -97,7 +97,8 @@ export const slackCoverageMatrix: SlackCoverageEntry[] = [
     route: "POST /api/conversations.list",
     status: "partial",
     testedBy: ["slack.test.ts", "slack-sdk.test.ts"],
-    notes: "Lists conversations with simple cursor pagination, exclude_archived, and basic public/private/IM/MPIM type filtering.",
+    notes:
+      "Lists conversations with simple cursor pagination, exclude_archived, and basic public/private/IM/MPIM type filtering.",
   },
   {
     family: "conversations",
@@ -206,7 +207,8 @@ export const slackCoverageMatrix: SlackCoverageEntry[] = [
     route: "POST /api/conversations.invite",
     status: "partial",
     testedBy: ["slack.test.ts", "slack-sdk.test.ts", "slack-events.test.ts"],
-    notes: "Adds users to public/private channels and MPIMs, with basic membership errors and member_joined_channel events.",
+    notes:
+      "Adds users to public/private channels and MPIMs, with basic membership errors and member_joined_channel events.",
   },
   {
     family: "conversations",

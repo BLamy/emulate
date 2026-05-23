@@ -5,6 +5,11 @@ import { formatSlackMessage, generateTs, hasSlackMessageContent, parseSlackRichM
 export function webhookRoutes(ctx: RouteContext): void {
   const { app, store, webhooks } = ctx;
   const ss = () => getSlackStore(store);
+  const findChannel = (channel: string) =>
+    ss().channels.findOneBy("channel_id", channel) ??
+    ss()
+      .channels.all()
+      .find((ch) => !ch.is_im && !ch.is_mpim && ch.name === channel);
 
   // Incoming Webhooks - POST /services/:teamId/:botId/:token
   // The simplest Slack integration: apps POST JSON to send a message to a channel.
@@ -51,18 +56,14 @@ export function webhookRoutes(ctx: RouteContext): void {
       .incomingWebhooks.all()
       .find((w) => w.token === c.req.param("token"));
 
-    let targetChannel = channelName
-      ? (ss().channels.findOneBy("name", channelName) ?? ss().channels.findOneBy("channel_id", channelName))
-      : null;
+    let targetChannel = channelName ? findChannel(channelName) : null;
 
     if (!targetChannel && webhook) {
-      targetChannel =
-        ss().channels.findOneBy("name", webhook.default_channel) ??
-        ss().channels.findOneBy("channel_id", webhook.default_channel);
+      targetChannel = findChannel(webhook.default_channel);
     }
 
     if (!targetChannel) {
-      targetChannel = ss().channels.findOneBy("name", "general");
+      targetChannel = findChannel("general");
     }
 
     if (!targetChannel) {
