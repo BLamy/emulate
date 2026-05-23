@@ -674,9 +674,10 @@ describe("Slack plugin - scheduled messages", () => {
 describe("Slack plugin - conversations", () => {
   let app: SlackTestApp["app"];
   let store: Store;
+  let tokenMap: SlackTestApp["tokenMap"];
 
   beforeEach(() => {
-    ({ app, store } = createTestApp());
+    ({ app, store, tokenMap } = createTestApp());
   });
 
   it("lists channels", async () => {
@@ -1214,6 +1215,112 @@ describe("Slack plugin - conversations", () => {
     });
     const duplicateClose = (await duplicateCloseRes.json()) as any;
     expect(duplicateClose).toMatchObject({ ok: true, no_op: true, already_closed: true });
+  });
+
+  it("keeps direct message open state per member and protects channel id writes", async () => {
+    insertSlackTestUser(store, "U000000002", "dmpeer");
+    insertSlackTestUser(store, "U000000003", "dmoutsider");
+    tokenMap.set("xoxb-dm-peer-token", { login: "U000000002", id: 2, scopes: ["chat:write"] });
+    tokenMap.set("xoxb-dm-outsider-token", { login: "U000000003", id: 3, scopes: ["chat:write"] });
+    const peerHeaders = { Authorization: "Bearer xoxb-dm-peer-token", "Content-Type": "application/json" };
+    const outsiderHeaders = { Authorization: "Bearer xoxb-dm-outsider-token", "Content-Type": "application/json" };
+
+    const openRes = await app.request(`${base}/api/conversations.open`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ users: "U000000002", return_im: true }),
+    });
+    const opened = (await openRes.json()) as any;
+    const channel = opened.channel.id;
+    expect(opened.channel.is_open).toBe(true);
+
+    const peerInfoRes = await app.request(`${base}/api/conversations.info`, {
+      method: "POST",
+      headers: peerHeaders,
+      body: JSON.stringify({ channel }),
+    });
+    const peerInfo = (await peerInfoRes.json()) as any;
+    expect(peerInfo.channel.is_open).toBe(false);
+
+    const outsiderOpenRes = await app.request(`${base}/api/conversations.open`, {
+      method: "POST",
+      headers: outsiderHeaders,
+      body: JSON.stringify({ channel }),
+    });
+    const outsiderOpen = (await outsiderOpenRes.json()) as any;
+    expect(outsiderOpen.ok).toBe(false);
+    expect(outsiderOpen.error).toBe("not_in_channel");
+
+    const outsiderCloseRes = await app.request(`${base}/api/conversations.close`, {
+      method: "POST",
+      headers: outsiderHeaders,
+      body: JSON.stringify({ channel }),
+    });
+    const outsiderClose = (await outsiderCloseRes.json()) as any;
+    expect(outsiderClose.ok).toBe(false);
+    expect(outsiderClose.error).toBe("not_in_channel");
+
+    const closeRes = await app.request(`${base}/api/conversations.close`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel }),
+    });
+    expect(((await closeRes.json()) as any).ok).toBe(true);
+
+    const peerOpenRes = await app.request(`${base}/api/conversations.open`, {
+      method: "POST",
+      headers: peerHeaders,
+      body: JSON.stringify({ channel, return_im: true }),
+    });
+    const peerOpen = (await peerOpenRes.json()) as any;
+    expect(peerOpen.ok).toBe(true);
+    expect(peerOpen.channel.is_open).toBe(true);
+
+    const adminInfoRes = await app.request(`${base}/api/conversations.info`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel }),
+    });
+    const adminInfo = (await adminInfoRes.json()) as any;
+    expect(adminInfo.channel.is_open).toBe(false);
+  });
+
+  it("rejects lifecycle writes for direct conversations", async () => {
+    insertSlackTestUser(store, "U000000002", "directlifeone");
+    insertSlackTestUser(store, "U000000003", "directlifetwo");
+
+    const dmRes = await app.request(`${base}/api/conversations.open`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ users: "U000000002", return_im: true }),
+    });
+    const dm = (await dmRes.json()) as any;
+
+    const mpimRes = await app.request(`${base}/api/conversations.open`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ users: "U000000002,U000000003", return_im: true }),
+    });
+    const mpim = (await mpimRes.json()) as any;
+
+    const unsupportedRequests = [
+      { path: "conversations.archive", body: { channel: dm.channel.id } },
+      { path: "conversations.unarchive", body: { channel: dm.channel.id } },
+      { path: "conversations.rename", body: { channel: dm.channel.id, name: "direct-life-renamed" } },
+      { path: "conversations.setTopic", body: { channel: mpim.channel.id, topic: "no topic" } },
+      { path: "conversations.setPurpose", body: { channel: mpim.channel.id, purpose: "no purpose" } },
+    ];
+
+    for (const request of unsupportedRequests) {
+      const res = await app.request(`${base}/api/${request.path}`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify(request.body),
+      });
+      const body = (await res.json()) as any;
+      expect(body.ok, request.path).toBe(false);
+      expect(body.error, request.path).toBe("method_not_supported_for_channel_type");
+    }
   });
 
   it("opens MPIMs and filters conversation list types", async () => {

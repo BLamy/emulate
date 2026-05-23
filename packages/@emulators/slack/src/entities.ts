@@ -33,6 +33,7 @@ export interface SlackChannel extends Entity {
   is_im?: boolean;
   is_mpim?: boolean;
   is_open?: boolean;
+  is_open_by_user?: Record<string, boolean>;
   user?: string;
   is_archived: boolean;
   topic: { value: string; creator: string; last_set: number };

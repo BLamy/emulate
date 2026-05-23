@@ -8,9 +8,11 @@ import {
   formatSlackScheduledMessageListItem,
   generateSlackId,
   generateTs,
+  getSlackConversationOpenState,
   hasSlackMessageContent,
   parseSlackBody,
   parseSlackRichMessageFields,
+  setSlackConversationOpenState,
   slackError,
   slackOk,
 } from "../helpers.js";
@@ -39,9 +41,11 @@ export function chatRoutes(ctx: RouteContext): void {
       .find(
         (ch) =>
           ch.is_im && ch.members.length === members.length && [...ch.members].sort().join(",") === members.join(","),
-      );
+    );
     if (existing) {
-      if (existing.is_open === false) return ss().channels.update(existing.id, { is_open: true });
+      if (!getSlackConversationOpenState(existing, authUserId)) {
+        return ss().channels.update(existing.id, setSlackConversationOpenState(existing, authUserId, true));
+      }
       return existing;
     }
 
@@ -55,7 +59,7 @@ export function chatRoutes(ctx: RouteContext): void {
       is_private: true,
       is_im: true,
       is_mpim: false,
-      is_open: true,
+      is_open_by_user: { [authUserId]: true },
       user: targetUser.user_id,
       is_archived: false,
       topic: { value: "", creator: authUserId, last_set: now },

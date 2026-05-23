@@ -1,7 +1,16 @@
 import type { RouteContext } from "@emulators/core";
 import type { SlackChannel, SlackMessage, SlackUser } from "../entities.js";
 import { getSlackStore } from "../store.js";
-import { formatSlackMessage, generateSlackId, generateTs, parseSlackBody, slackError, slackOk } from "../helpers.js";
+import {
+  formatSlackMessage,
+  generateSlackId,
+  generateTs,
+  getSlackConversationOpenState,
+  parseSlackBody,
+  setSlackConversationOpenState,
+  slackError,
+  slackOk,
+} from "../helpers.js";
 
 export function conversationsRoutes(ctx: RouteContext): void {
   const { app, store, webhooks } = ctx;
@@ -168,6 +177,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
 
     const ch = ss().channels.findOneBy("channel_id", channel);
     if (!ch) return slackError(c, "channel_not_found");
+    if (isDirectConversation(ch)) return slackError(c, "method_not_supported_for_channel_type");
     if (isGeneralChannel(ch)) return slackError(c, "cant_archive_general");
     if (ch.is_archived) return slackError(c, "already_archived");
 
@@ -199,6 +209,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
 
     const ch = ss().channels.findOneBy("channel_id", channel);
     if (!ch) return slackError(c, "channel_not_found");
+    if (isDirectConversation(ch)) return slackError(c, "method_not_supported_for_channel_type");
     if (!ch.is_archived) return slackError(c, "not_archived");
 
     const authSlackUser = getAuthSlackUser(authUser);
@@ -237,6 +248,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
 
     const ch = ss().channels.findOneBy("channel_id", channel);
     if (!ch) return slackError(c, "channel_not_found");
+    if (isDirectConversation(ch)) return slackError(c, "method_not_supported_for_channel_type");
     if (ch.is_archived) return slackError(c, "is_archived");
 
     const authSlackUser = getAuthSlackUser(authUser);
@@ -283,6 +295,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
 
     const ch = ss().channels.findOneBy("channel_id", channel);
     if (!ch) return slackError(c, "channel_not_found");
+    if (isDirectConversation(ch)) return slackError(c, "method_not_supported_for_channel_type");
     if (ch.is_archived) return slackError(c, "is_archived");
 
     const authSlackUser = getAuthSlackUser(authUser);
@@ -317,6 +330,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
 
     const ch = ss().channels.findOneBy("channel_id", channel);
     if (!ch) return slackError(c, "channel_not_found");
+    if (isDirectConversation(ch)) return slackError(c, "method_not_supported_for_channel_type");
     if (ch.is_archived) return slackError(c, "is_archived");
 
     const authSlackUser = getAuthSlackUser(authUser);
@@ -549,8 +563,12 @@ export function conversationsRoutes(ctx: RouteContext): void {
     if (channel) {
       const existing = ss().channels.findOneBy("channel_id", channel);
       if (!existing || (!existing.is_im && !existing.is_mpim)) return slackError(c, "channel_not_found");
-      const alreadyOpen = existing.is_open !== false;
-      const updated = alreadyOpen ? existing : ss().channels.update(existing.id, { is_open: true })!;
+      const authSlackUser = getAuthSlackUser(authUser);
+      if (!isChannelMember(existing, authSlackUser, authUserId)) return slackError(c, "not_in_channel");
+      const alreadyOpen = getSlackConversationOpenState(existing, authUserId);
+      const updated = alreadyOpen
+        ? existing
+        : ss().channels.update(existing.id, setSlackConversationOpenState(existing, authUserId, true))!;
       if (!alreadyOpen) await dispatchConversationEvent(openEventType(updated), { channel: updated.channel_id });
       return slackOk(c, {
         ...(alreadyOpen ? { no_op: true, already_open: true } : {}),
@@ -574,8 +592,10 @@ export function conversationsRoutes(ctx: RouteContext): void {
     const isMpim = memberIds.length > 2;
     const existing = findConversationByMembers(ss().channels.all(), memberIds, isMpim);
     if (existing) {
-      const alreadyOpen = existing.is_open !== false;
-      const updated = alreadyOpen ? existing : ss().channels.update(existing.id, { is_open: true })!;
+      const alreadyOpen = getSlackConversationOpenState(existing, authUserId);
+      const updated = alreadyOpen
+        ? existing
+        : ss().channels.update(existing.id, setSlackConversationOpenState(existing, authUserId, true))!;
       if (!alreadyOpen) await dispatchConversationEvent(openEventType(updated), { channel: updated.channel_id });
       return slackOk(c, {
         ...(alreadyOpen ? { no_op: true, already_open: true } : {}),
@@ -596,7 +616,7 @@ export function conversationsRoutes(ctx: RouteContext): void {
       is_private: true,
       is_im: !isMpim,
       is_mpim: isMpim,
-      is_open: true,
+      is_open_by_user: { [authUserId]: true },
       user: isMpim ? undefined : targetUsers[0]?.user_id,
       is_archived: false,
       topic: { value: "", creator: authUserId, last_set: now },
@@ -626,9 +646,14 @@ export function conversationsRoutes(ctx: RouteContext): void {
 
     const ch = ss().channels.findOneBy("channel_id", channel);
     if (!ch || (!ch.is_im && !ch.is_mpim)) return slackError(c, "channel_not_found");
-    if (ch.is_open === false) return slackOk(c, { no_op: true, already_closed: true });
+    const authUserId = getAuthUserId(authUser);
+    const authSlackUser = getAuthSlackUser(authUser);
+    if (!isChannelMember(ch, authSlackUser, authUserId)) return slackError(c, "not_in_channel");
+    if (!getSlackConversationOpenState(ch, authUserId)) {
+      return slackOk(c, { no_op: true, already_closed: true });
+    }
 
-    const updated = ss().channels.update(ch.id, { is_open: false })!;
+    const updated = ss().channels.update(ch.id, setSlackConversationOpenState(ch, authUserId, false))!;
     await dispatchConversationEvent(closeEventType(updated), { channel: updated.channel_id });
     return slackOk(c, {});
   });
@@ -688,7 +713,7 @@ function formatChannel(ch: SlackChannel, viewer?: string) {
     is_mpim: ch.is_mpim ?? false,
     is_private: ch.is_private,
     is_archived: ch.is_archived,
-    is_open: ch.is_open ?? false,
+    is_open: getSlackConversationOpenState(ch, viewer),
     ...(ch.user ? { user: ch.user } : {}),
     is_member: viewer ? ch.members.includes(viewer) : undefined,
     last_read: viewer ? (ch.last_read?.[viewer] ?? "0000000000.000000") : undefined,
@@ -725,6 +750,10 @@ function isTruthySlackBoolean(value: unknown): boolean {
 
 function isGeneralChannel(ch: SlackChannel): boolean {
   return ch.channel_id === "C000000001" || ch.name === "general";
+}
+
+function isDirectConversation(ch: SlackChannel): boolean {
+  return Boolean(ch.is_im || ch.is_mpim);
 }
 
 function lifecycleEventType(ch: SlackChannel, action: "archive" | "rename" | "unarchive"): string {

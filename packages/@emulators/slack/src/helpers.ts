@@ -1,7 +1,7 @@
 import { randomBytes } from "crypto";
 import type { Context } from "@emulators/core";
 import type { ContentfulStatusCode } from "@emulators/core";
-import type { SlackJsonObject, SlackMessage, SlackScheduledMessage } from "./entities.js";
+import type { SlackChannel, SlackJsonObject, SlackMessage, SlackScheduledMessage } from "./entities.js";
 
 let tsCounter = 0;
 
@@ -151,6 +151,22 @@ export function formatSlackScheduledMessageListItem(msg: SlackScheduledMessage) 
     date_created: msg.date_created,
     text: msg.text,
   };
+}
+
+export function getSlackConversationOpenState(ch: SlackChannel, userId?: string): boolean {
+  if ((ch.is_im || ch.is_mpim) && userId && ch.is_open_by_user) {
+    return ch.is_open_by_user[userId] === true;
+  }
+  return ch.is_open ?? false;
+}
+
+export function setSlackConversationOpenState(
+  ch: SlackChannel,
+  userId: string,
+  isOpen: boolean,
+): Partial<SlackChannel> {
+  if (!ch.is_im && !ch.is_mpim) return { is_open: isOpen };
+  return { is_open_by_user: { ...(ch.is_open_by_user ?? {}), [userId]: isOpen } };
 }
 
 export function parseSlackRichMessageFields(body: Record<string, unknown>): SlackRichMessageParseResult {
