@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { slackCoverageMatrix } from "./slack-coverage.js";
+import { createSlackTestApp } from "./helpers.js";
+
+interface RegisteredRoute {
+  method: string;
+  compiled: {
+    pattern: string;
+  };
+}
+
+function registeredSlackRoutes(): string[] {
+  const { app } = createSlackTestApp();
+  const routes = (app as unknown as { routes: RegisteredRoute[] }).routes;
+  return routes.map((route) => `${route.method} ${route.compiled.pattern}`).sort();
+}
 
 describe("Slack coverage matrix", () => {
   it("has unique method entries", () => {
@@ -7,9 +21,10 @@ describe("Slack coverage matrix", () => {
     expect(new Set(methods).size).toBe(methods.length);
   });
 
-  it("maps every current endpoint to at least one test file", () => {
+  it("maps every registered endpoint to at least one test file", () => {
     const currentEntries = slackCoverageMatrix.filter((entry) => entry.status !== "not_started");
     expect(currentEntries.length).toBeGreaterThan(0);
+    expect(currentEntries.map((entry) => entry.route).sort()).toEqual(registeredSlackRoutes());
 
     for (const entry of currentEntries) {
       expect(entry.route).toMatch(/^(GET|POST) /);

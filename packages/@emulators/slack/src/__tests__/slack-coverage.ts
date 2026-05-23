@@ -196,6 +196,14 @@ export const slackCoverageMatrix: SlackCoverageEntry[] = [
     notes: "Renders emulator user picker and validates configured OAuth apps.",
   },
   {
+    family: "oauth",
+    method: "oauth.v2.authorize.callback",
+    route: "POST /oauth/v2/authorize/callback",
+    status: "partial",
+    testedBy: ["slack.test.ts"],
+    notes: "Stores a temporary code and redirects back to the configured OAuth redirect URI.",
+  },
+  {
     family: "webhooks",
     method: "incoming_webhook",
     route: "POST /services/:teamId/:botId/:token",
