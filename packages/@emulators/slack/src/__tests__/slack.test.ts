@@ -849,7 +849,8 @@ describe("Slack plugin - conversations", () => {
   it("handles legacy username channel membership consistently", async () => {
     const ss = getSlackStore(store);
     const ch = ss.channels.findOneBy("name", "random")!;
-    ss.channels.update(ch.id, { members: ["admin"], num_members: 1 });
+    insertSlackTestUser(store, "U000000002", "legacy-member-peer");
+    ss.channels.update(ch.id, { members: ["admin", "U000000002"], num_members: 2 });
 
     const infoRes = await app.request(`${base}/api/conversations.info`, {
       method: "POST",
@@ -867,8 +868,8 @@ describe("Slack plugin - conversations", () => {
     });
     const joined = (await joinRes.json()) as any;
     expect(joined.ok).toBe(true);
-    expect(joined.channel.num_members).toBe(1);
-    expect(ss.channels.findOneBy("channel_id", ch.channel_id)?.members).toEqual(["admin"]);
+    expect(joined.channel.num_members).toBe(2);
+    expect(ss.channels.findOneBy("channel_id", ch.channel_id)?.members).toEqual(["admin", "U000000002"]);
 
     const leaveRes = await app.request(`${base}/api/conversations.leave`, {
       method: "POST",
@@ -876,7 +877,7 @@ describe("Slack plugin - conversations", () => {
       body: JSON.stringify({ channel: ch.channel_id }),
     });
     expect(((await leaveRes.json()) as any).ok).toBe(true);
-    expect(ss.channels.findOneBy("channel_id", ch.channel_id)?.members).toEqual([]);
+    expect(ss.channels.findOneBy("channel_id", ch.channel_id)?.members).toEqual(["U000000002"]);
   });
 
   it("hides private channel reads from non-members", async () => {
@@ -1150,6 +1151,13 @@ describe("Slack plugin - conversations", () => {
     const created = (await createRes.json()) as any;
     const channelId = created.channel.id;
 
+    insertSlackTestUser(store, "U000000002", "lifecycle-state-peer");
+    await app.request(`${base}/api/conversations.invite`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: channelId, users: "U000000002" }),
+    });
+
     await app.request(`${base}/api/conversations.leave`, {
       method: "POST",
       headers: authHeaders(),
@@ -1263,6 +1271,13 @@ describe("Slack plugin - conversations", () => {
     const created = (await createRes.json()) as any;
     const channelId = created.channel.id;
 
+    insertSlackTestUser(store, "U000000002", "join-test-peer");
+    await app.request(`${base}/api/conversations.invite`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: channelId, users: "U000000002" }),
+    });
+
     // Leave
     const leaveRes = await app.request(`${base}/api/conversations.leave`, {
       method: "POST",
@@ -1279,7 +1294,53 @@ describe("Slack plugin - conversations", () => {
     });
     const joined = (await joinRes.json()) as any;
     expect(joined.ok).toBe(true);
-    expect(joined.channel.num_members).toBe(1);
+    expect(joined.channel.num_members).toBe(2);
+  });
+
+  it("rejects invalid leave states without mutating membership", async () => {
+    const ss = getSlackStore(store);
+    const general = ss.channels.findOneBy("name", "general")!;
+    const generalLeaveRes = await app.request(`${base}/api/conversations.leave`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: general.channel_id }),
+    });
+    const generalLeave = (await generalLeaveRes.json()) as any;
+    expect(generalLeave.ok).toBe(false);
+    expect(generalLeave.error).toBe("cant_leave_general");
+    expect(ss.channels.findOneBy("channel_id", general.channel_id)?.members).toEqual(["U000000001"]);
+
+    const createRes = await app.request(`${base}/api/conversations.create`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ name: "leave-guards" }),
+    });
+    const created = (await createRes.json()) as any;
+    const channelId = created.channel.id;
+
+    const lastMemberLeaveRes = await app.request(`${base}/api/conversations.leave`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: channelId }),
+    });
+    const lastMemberLeave = (await lastMemberLeaveRes.json()) as any;
+    expect(lastMemberLeave.ok).toBe(false);
+    expect(lastMemberLeave.error).toBe("last_member");
+    expect(ss.channels.findOneBy("channel_id", channelId)?.members).toEqual(["U000000001"]);
+
+    insertSlackTestUser(store, "U000000002", "leave-outsider");
+    tokenMap.set("xoxb-leave-outsider-token", { login: "U000000002", id: 2, scopes: ["channels:write"] });
+    const outsiderLeaveRes = await app.request(`${base}/api/conversations.leave`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer xoxb-leave-outsider-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ channel: channelId }),
+    });
+    const outsiderLeave = (await outsiderLeaveRes.json()) as any;
+    expect(outsiderLeave).toEqual({ ok: false, not_in_channel: true });
+    expect(ss.channels.findOneBy("channel_id", channelId)?.members).toEqual(["U000000001"]);
   });
 
   it("lists channel members", async () => {

@@ -479,19 +479,22 @@ export function conversationsRoutes(ctx: RouteContext): void {
     const ch = ss().channels.findOneBy("channel_id", channel);
     if (!ch) return slackError(c, "channel_not_found");
     if (ch.is_im) return slackError(c, "method_not_supported_for_channel_type");
+    if (isGeneralChannel(ch)) return slackError(c, "cant_leave_general");
 
     const authUserId = getAuthUserId(authUser);
     const authSlackUser = getAuthSlackUser(authUser);
     const memberKey = getChannelMemberKey(ch, authSlackUser, authUserId);
-    if (memberKey) {
-      const aliases = memberAliases(authSlackUser, authUserId);
-      const updatedMembers = ch.members.filter((m) => !aliases.has(m));
-      const updated = ss().channels.update(ch.id, {
-        members: updatedMembers,
-        num_members: updatedMembers.length,
-      })!;
-      await dispatchMemberLeft(updated, authUserId);
-    }
+    if (!memberKey) return c.json({ ok: false, not_in_channel: true });
+
+    const aliases = memberAliases(authSlackUser, authUserId);
+    const updatedMembers = ch.members.filter((m) => !aliases.has(m));
+    if (updatedMembers.length === 0) return slackError(c, "last_member");
+
+    const updated = ss().channels.update(ch.id, {
+      members: updatedMembers,
+      num_members: updatedMembers.length,
+    })!;
+    await dispatchMemberLeft(updated, authUserId);
 
     return slackOk(c, {});
   });

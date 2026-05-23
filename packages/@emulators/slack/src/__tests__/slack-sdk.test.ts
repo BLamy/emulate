@@ -151,15 +151,34 @@ describe("Slack plugin - real @slack/web-api WebClient baseline", () => {
   });
 
   it("exercises conversation membership through the Slack SDK", async () => {
+    getSlackStore(emulator!.store).users.insert({
+      user_id: "U000000010",
+      team_id: "T000000001",
+      name: "sdk-membership-peer",
+      real_name: "sdk-membership-peer",
+      email: "sdk-membership-peer@emulate.dev",
+      is_admin: false,
+      is_bot: false,
+      deleted: false,
+      profile: {
+        display_name: "sdk-membership-peer",
+        real_name: "sdk-membership-peer",
+        email: "sdk-membership-peer@emulate.dev",
+        image_48: "",
+        image_192: "",
+      },
+    });
+
     const created = await client.conversations.create({ name: "sdk-membership" });
     const channel = created.channel!.id!;
+    await client.conversations.invite({ channel, users: "U000000010" });
 
     const leave = await client.conversations.leave({ channel });
     expect(leave.ok).toBe(true);
 
     const join = await client.conversations.join({ channel });
     expect(join.ok).toBe(true);
-    expect((join.channel as { num_members?: number } | undefined)?.num_members).toBe(1);
+    expect((join.channel as { num_members?: number } | undefined)?.num_members).toBe(2);
 
     const members = await client.conversations.members({ channel });
     expect(members.ok).toBe(true);
