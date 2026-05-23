@@ -22,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
+      emulate_needs_publish: ${{ steps.check.outputs.emulate_needs_publish }}
       needs_github_release: ${{ steps.check.outputs.needs_github_release }}
       version: ${{ steps.check.outputs.version }}
     steps:
@@ -40,12 +41,14 @@ jobs:
         run: |
           LOCAL_VERSION=$(node -p "require('./packages/emulate/package.json').version")
           SHOULD_RELEASE=false
+          EMULATE_NEEDS_PUBLISH=false
           NEEDS_GITHUB_RELEASE=false
 
           REGISTRY_VERSION=$(npm view emulate version 2>/dev/null || echo "0.0.0")
           echo "emulate — local: $LOCAL_VERSION, registry: $REGISTRY_VERSION"
           if [ "$LOCAL_VERSION" != "$REGISTRY_VERSION" ]; then
             SHOULD_RELEASE=true
+            EMULATE_NEEDS_PUBLISH=true
           fi
 
           for pkg in $EMULATOR_PACKAGES; do
@@ -73,6 +76,7 @@ jobs:
           fi
 
           echo "should_release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "emulate_needs_publish=$EMULATE_NEEDS_PUBLISH" >> "$GITHUB_OUTPUT"
           echo "needs_github_release=$NEEDS_GITHUB_RELEASE" >> "$GITHUB_OUTPUT"
           echo "version=$LOCAL_VERSION" >> "$GITHUB_OUTPUT"
 
@@ -83,7 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: Release
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - name: Checkout repository
@@ -128,6 +132,83 @@ jobs:
           path: /tmp/emulate-native-assets/*
           retention-days: 7
 
+      - name: Extract changelog entry
+        if: needs.check-release.outputs.needs_github_release == 'true'
+        run: |
+          VERSION="${{ needs.check-release.outputs.version }}"
+
+          awk '/<!-- release:start -->/{found=1; next} /<!-- release:end -->/{found=0} found{print}' CHANGELOG.md > /tmp/release-notes.md
+
+          LINES=$(wc -l < /tmp/release-notes.md | tr -d ' ')
+          if [ "$LINES" -lt 2 ]; then
+            echo "Error: No release notes found between <!-- release:start --> and <!-- release:end --> markers in CHANGELOG.md"
+            exit 1
+          fi
+          echo "Extracted release notes for $VERSION ($LINES lines)"
+
+      - name: Publish GitHub release assets
+        if: needs.check-release.outputs.needs_github_release == 'true'
+        run: |
+          VERSION="${{ needs.check-release.outputs.version }}"
+          TAG="v$VERSION"
+          EMULATE_NEEDS_PUBLISH="${{ needs.check-release.outputs.emulate_needs_publish }}"
+          EXISTING_ASSETS="/tmp/emulate-existing-release-assets.txt"
+          RELEASE_EXISTS=false
+          touch "$EXISTING_ASSETS"
+
+          if gh release view "$TAG" --json assets --jq '.assets[].name' > "$EXISTING_ASSETS" 2>/dev/null; then
+            RELEASE_EXISTS=true
+          fi
+
+          if [ "$EMULATE_NEEDS_PUBLISH" != "true" ]; then
+            TMP_DIR=$(mktemp -d)
+            TARBALL=$(npm pack "emulate@$VERSION" --pack-destination "$TMP_DIR" --silent)
+            case "$TARBALL" in
+              /*) TARBALL_PATH="$TARBALL" ;;
+              *) TARBALL_PATH="$TMP_DIR/$TARBALL" ;;
+            esac
+            tar -xzf "$TARBALL_PATH" -C "$TMP_DIR" package/dist/native-manifest.json
+            if ! cmp -s "$TMP_DIR/package/dist/native-manifest.json" /tmp/emulate-native-assets/native-manifest.json; then
+              echo "Generated native manifest does not match emulate@$VERSION on npm. Refusing to repair GitHub release assets."
+              exit 1
+            fi
+          fi
+
+          ASSETS_TO_UPLOAD=()
+          for asset_path in /tmp/emulate-native-assets/*; do
+            asset_name=$(basename "$asset_path")
+            if [ "$RELEASE_EXISTS" = "false" ]; then
+              ASSETS_TO_UPLOAD+=("$asset_path")
+            elif grep -qx "$asset_name" "$EXISTING_ASSETS"; then
+              if [ "$EMULATE_NEEDS_PUBLISH" = "true" ]; then
+                ASSETS_TO_UPLOAD+=("$asset_path")
+              else
+                echo "GitHub release $TAG already has $asset_name, leaving it unchanged"
+              fi
+            else
+              ASSETS_TO_UPLOAD+=("$asset_path")
+            fi
+          done
+
+          if [ "$RELEASE_EXISTS" = "false" ]; then
+            echo "Creating release $TAG..."
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --target ${{ github.sha }} \
+              --notes-file /tmp/release-notes.md \
+              "${ASSETS_TO_UPLOAD[@]}"
+          elif [ "${#ASSETS_TO_UPLOAD[@]}" -eq 0 ]; then
+            echo "GitHub release $TAG already has all native assets"
+          elif [ "$EMULATE_NEEDS_PUBLISH" = "true" ]; then
+            echo "Uploading native assets to release $TAG"
+            gh release upload "$TAG" "${ASSETS_TO_UPLOAD[@]}" --clobber
+          else
+            echo "Uploading missing native assets to release $TAG"
+            gh release upload "$TAG" "${ASSETS_TO_UPLOAD[@]}"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish packages
         if: needs.check-release.outputs.should_release == 'true'
         run: |
@@ -160,52 +241,3 @@ jobs:
             echo "Failed to publish:$FAILED"
             exit 1
           fi
-
-  github-release:
-    name: Create GitHub Release
-    needs: [check-release, publish]
-    if: needs.check-release.outputs.needs_github_release == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download native release assets
-        uses: actions/download-artifact@v4
-        with:
-          name: native-release-assets
-          path: /tmp/emulate-native-assets
-
-      - name: Extract changelog entry
-        run: |
-          VERSION="${{ needs.check-release.outputs.version }}"
-
-          awk '/<!-- release:start -->/{found=1; next} /<!-- release:end -->/{found=0} found{print}' CHANGELOG.md > /tmp/release-notes.md
-
-          LINES=$(wc -l < /tmp/release-notes.md | tr -d ' ')
-          if [ "$LINES" -lt 2 ]; then
-            echo "Error: No release notes found between <!-- release:start --> and <!-- release:end --> markers in CHANGELOG.md"
-            exit 1
-          fi
-          echo "Extracted release notes for $VERSION ($LINES lines)"
-
-      - name: Create GitHub Release
-        run: |
-          VERSION="${{ needs.check-release.outputs.version }}"
-          TAG="v$VERSION"
-
-          if gh release view "$TAG" &>/dev/null; then
-            echo "Release $TAG already exists, uploading native assets"
-            gh release upload "$TAG" /tmp/emulate-native-assets/* --clobber
-          else
-            echo "Creating release $TAG..."
-            gh release create "$TAG" \
-              --title "$TAG" \
-              --target ${{ github.sha }} \
-              --notes-file /tmp/release-notes.md \
-              /tmp/emulate-native-assets/*
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
