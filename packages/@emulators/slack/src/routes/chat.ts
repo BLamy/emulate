@@ -118,11 +118,10 @@ export function chatRoutes(ctx: RouteContext): void {
     }
 
     const eventTs = generateTs();
-    const updated = ss()
-      .messages.update(msg.id, {
-        ...updates,
-        edited: { user: authUser.login, ts: eventTs },
-      })!;
+    const updated = ss().messages.update(msg.id, {
+      ...updates,
+      edited: { user: authUser.login, ts: eventTs },
+    })!;
 
     await webhooks.dispatch(
       "message",
