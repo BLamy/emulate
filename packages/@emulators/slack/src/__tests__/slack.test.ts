@@ -1779,9 +1779,10 @@ describe("Slack plugin - users", () => {
 describe("Slack plugin - reactions", () => {
   let app: SlackTestApp["app"];
   let store: Store;
+  let tokenMap: SlackTestApp["tokenMap"];
 
   beforeEach(() => {
-    ({ app, store } = createTestApp());
+    ({ app, store, tokenMap } = createTestApp());
   });
 
   it("adds and gets a reaction", async () => {
@@ -1875,6 +1876,116 @@ describe("Slack plugin - reactions", () => {
     const dupe = (await dupeRes.json()) as any;
     expect(dupe.ok).toBe(false);
     expect(dupe.error).toBe("already_reacted");
+  });
+
+  it("blocks non-member reactions on private channels", async () => {
+    insertSlackTestUser(store, "U000000002", "reaction-outsider");
+    tokenMap.set("xoxb-reaction-outsider-token", { login: "U000000002", id: 2, scopes: ["reactions:write"] });
+    const outsiderHeaders = {
+      Authorization: "Bearer xoxb-reaction-outsider-token",
+      "Content-Type": "application/json",
+    };
+
+    const createRes = await app.request(`${base}/api/conversations.create`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ name: "private-reactions", is_private: true }),
+    });
+    const channel = ((await createRes.json()) as any).channel.id;
+
+    const postRes = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel, text: "private reaction target" }),
+    });
+    const posted = (await postRes.json()) as any;
+
+    await app.request(`${base}/api/reactions.add`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel, timestamp: posted.ts, name: "lock" }),
+    });
+
+    const blockedRequests = [
+      { path: "reactions.get", body: { channel, timestamp: posted.ts } },
+      { path: "reactions.add", body: { channel, timestamp: posted.ts, name: "eyes" } },
+      { path: "reactions.remove", body: { channel, timestamp: posted.ts, name: "lock" } },
+    ];
+
+    for (const request of blockedRequests) {
+      const res = await app.request(`${base}/api/${request.path}`, {
+        method: "POST",
+        headers: outsiderHeaders,
+        body: JSON.stringify(request.body),
+      });
+      const body = (await res.json()) as any;
+      expect(body.ok, request.path).toBe(false);
+      expect(body.error, request.path).toBe("not_in_channel");
+    }
+
+    const msg = getSlackStore(store).messages.findOneBy("ts", posted.ts)!;
+    expect(msg.reactions).toHaveLength(1);
+    expect(msg.reactions[0]).toMatchObject({ name: "lock", count: 1 });
+  });
+
+  it("blocks non-member reactions on direct messages", async () => {
+    insertSlackTestUser(store, "U000000002", "reaction-dm-peer");
+    insertSlackTestUser(store, "U000000003", "reaction-dm-outsider");
+    tokenMap.set("xoxb-reaction-dm-outsider-token", { login: "U000000003", id: 3, scopes: ["reactions:write"] });
+    const outsiderHeaders = {
+      Authorization: "Bearer xoxb-reaction-dm-outsider-token",
+      "Content-Type": "application/json",
+    };
+
+    const openRes = await app.request(`${base}/api/conversations.open`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ users: "U000000002", return_im: true }),
+    });
+    const channel = ((await openRes.json()) as any).channel.id;
+
+    const postRes = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel, text: "dm reaction target" }),
+    });
+    const posted = (await postRes.json()) as any;
+
+    await app.request(`${base}/api/reactions.add`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel, timestamp: posted.ts, name: "lock" }),
+    });
+
+    const getRes = await app.request(`${base}/api/reactions.get`, {
+      method: "POST",
+      headers: outsiderHeaders,
+      body: JSON.stringify({ channel, timestamp: posted.ts }),
+    });
+    const getBody = (await getRes.json()) as any;
+    expect(getBody.ok).toBe(false);
+    expect(getBody.error).toBe("not_in_channel");
+
+    const addRes = await app.request(`${base}/api/reactions.add`, {
+      method: "POST",
+      headers: outsiderHeaders,
+      body: JSON.stringify({ channel, timestamp: posted.ts, name: "eyes" }),
+    });
+    const addBody = (await addRes.json()) as any;
+    expect(addBody.ok).toBe(false);
+    expect(addBody.error).toBe("not_in_channel");
+
+    const removeRes = await app.request(`${base}/api/reactions.remove`, {
+      method: "POST",
+      headers: outsiderHeaders,
+      body: JSON.stringify({ channel, timestamp: posted.ts, name: "lock" }),
+    });
+    const removeBody = (await removeRes.json()) as any;
+    expect(removeBody.ok).toBe(false);
+    expect(removeBody.error).toBe("not_in_channel");
+    expect(getSlackStore(store).messages.findOneBy("ts", posted.ts)?.reactions).toEqual([
+      expect.objectContaining({ name: "lock", count: 1 }),
+    ]);
   });
 });
 

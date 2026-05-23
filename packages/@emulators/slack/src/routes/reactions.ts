@@ -1,10 +1,20 @@
 import type { RouteContext } from "@emulators/core";
+import type { SlackChannel } from "../entities.js";
 import { getSlackStore } from "../store.js";
 import { formatSlackMessage, slackOk, slackError, parseSlackBody } from "../helpers.js";
 
 export function reactionsRoutes(ctx: RouteContext): void {
   const { app, store, webhooks } = ctx;
   const ss = () => getSlackStore(store);
+  const getAuthSlackUser = (authUser: { login: string }) =>
+    ss().users.findOneBy("user_id", authUser.login) ?? ss().users.findOneBy("name", authUser.login);
+  const isAuthChannelMember = (channel: SlackChannel, authUser: { login: string }) => {
+    const user = getAuthSlackUser(authUser);
+    const userId = user?.user_id ?? authUser.login;
+    return channel.members.includes(userId) || (user ? channel.members.includes(user.name) : false);
+  };
+  const canAccessConversation = (channel: SlackChannel, authUser: { login: string }) =>
+    !channel.is_private || isAuthChannelMember(channel, authUser);
 
   // reactions.add
   app.post("/api/reactions.add", async (c) => {
@@ -17,6 +27,9 @@ export function reactionsRoutes(ctx: RouteContext): void {
     const name = typeof body.name === "string" ? body.name : "";
 
     if (!name) return slackError(c, "invalid_name");
+
+    const ch = ss().channels.findOneBy("channel_id", channel);
+    if (ch && !canAccessConversation(ch, authUser)) return slackError(c, "not_in_channel");
 
     const msg = ss()
       .messages.all()
@@ -67,6 +80,9 @@ export function reactionsRoutes(ctx: RouteContext): void {
 
     if (!name) return slackError(c, "invalid_name");
 
+    const ch = ss().channels.findOneBy("channel_id", channel);
+    if (ch && !canAccessConversation(ch, authUser)) return slackError(c, "not_in_channel");
+
     const msg = ss()
       .messages.all()
       .find((m) => m.ts === timestamp && m.channel_id === channel);
@@ -110,6 +126,9 @@ export function reactionsRoutes(ctx: RouteContext): void {
     const body = await parseSlackBody(c);
     const channel = typeof body.channel === "string" ? body.channel : "";
     const timestamp = typeof body.timestamp === "string" ? body.timestamp : "";
+
+    const ch = ss().channels.findOneBy("channel_id", channel);
+    if (ch && !canAccessConversation(ch, authUser)) return slackError(c, "not_in_channel");
 
     const msg = ss()
       .messages.all()
