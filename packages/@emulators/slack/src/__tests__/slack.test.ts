@@ -4028,6 +4028,56 @@ describe("Slack plugin - views", () => {
     expect(((await reusedTriggerRes.json()) as any).error).toBe("exchanged_trigger_id");
   });
 
+  it("accepts interactivity pointers for modal opens and pushes", async () => {
+    const openPointerRes = await app.request(`${base}/api/views.generateTriggerId`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ user_id: "U000000001" }),
+    });
+    const openPointer = (await openPointerRes.json()) as any;
+    expect(openPointer.ok).toBe(true);
+
+    const openRes = await app.request(`${base}/api/views.open`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        interactivity_pointer: openPointer.trigger_id,
+        view: {
+          type: "modal",
+          title: { type: "plain_text", text: "Pointer Modal" },
+          blocks: [{ type: "section", text: { type: "plain_text", text: "Opened from pointer" } }],
+        },
+      }),
+    });
+    const opened = (await openRes.json()) as any;
+    expect(opened.ok).toBe(true);
+
+    const pushPointerRes = await app.request(`${base}/api/views.generateTriggerId`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ view_id: opened.view.id }),
+    });
+    const pushPointer = (await pushPointerRes.json()) as any;
+    expect(pushPointer.ok).toBe(true);
+
+    const pushRes = await app.request(`${base}/api/views.push`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        interactivity_pointer: pushPointer.trigger_id,
+        view: {
+          type: "modal",
+          title: { type: "plain_text", text: "Pushed Pointer Modal" },
+          blocks: [{ type: "section", text: { type: "plain_text", text: "Pushed from pointer" } }],
+        },
+      }),
+    });
+    const pushed = (await pushRes.json()) as any;
+    expect(pushed.ok).toBe(true);
+    expect(pushed.view.previous_view_id).toBe(opened.view.id);
+    expect(pushed.view.root_view_id).toBe(opened.view.id);
+  });
+
   it("requires valid unexpired trigger ids for modal opens", async () => {
     const view = {
       type: "modal",
@@ -4131,7 +4181,7 @@ describe("Slack plugin - views", () => {
         },
       }),
     });
-    expect(((await wrongAppUpdateRes.json()) as any).error).toBe("view_not_found");
+    expect(((await wrongAppUpdateRes.json()) as any).error).toBe("not_found");
     expect(ss.views.findOneBy("view_id", opened.view.id)?.title?.text).toBe("App A Modal");
 
     const wrongAppTriggerRes = await app.request(`${base}/api/views.generateTriggerId`, {
@@ -4316,6 +4366,20 @@ describe("Slack plugin - views", () => {
     });
     const published = (await publishRes.json()) as any;
     expect(published.ok).toBe(true);
+
+    const missingUpdateRes = await app.request(`${base}/api/views.update`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        view_id: "VNOPE",
+        view: {
+          type: "modal",
+          title: { type: "plain_text", text: "Missing" },
+          blocks: [],
+        },
+      }),
+    });
+    expect(((await missingUpdateRes.json()) as any).error).toBe("not_found");
 
     const staleRes = await app.request(`${base}/api/views.publish`, {
       method: "POST",

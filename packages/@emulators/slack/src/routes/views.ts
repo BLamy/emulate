@@ -88,7 +88,7 @@ export function viewsRoutes(ctx: RouteContext): void {
     const viewPayload = parsed.view;
 
     const actor = viewActor(c);
-    const trigger = consumeTrigger(stringField(body.trigger_id), actor.app_id);
+    const trigger = consumeTrigger(viewExchangeId(body), actor.app_id);
     if (trigger.error) return slackError(c, trigger.error);
     const userId = trigger.value!.user_id!;
     if (!resolveUserId(userId)) return slackError(c, "user_not_found");
@@ -108,9 +108,9 @@ export function viewsRoutes(ctx: RouteContext): void {
 
     const body = await parseSlackBody(c);
     const view = findView(stringField(body.view_id), stringField(body.external_id));
-    if (!view) return slackError(c, "view_not_found");
+    if (!view) return slackError(c, "not_found");
     const actor = viewActor(c);
-    if (view.app_id !== actor.app_id) return slackError(c, "view_not_found");
+    if (view.app_id !== actor.app_id) return slackError(c, "not_found");
 
     const hash = stringField(body.hash);
     if (hash && hash !== view.hash) return slackError(c, "hash_conflict");
@@ -140,7 +140,7 @@ export function viewsRoutes(ctx: RouteContext): void {
     const viewPayload = parsed.view;
 
     const actor = viewActor(c);
-    const trigger = consumeTrigger(stringField(body.trigger_id), actor.app_id);
+    const trigger = consumeTrigger(viewExchangeId(body), actor.app_id);
     if (trigger.error) return slackError(c, trigger.error);
     const userId = trigger.value!.user_id!;
     if (!resolveUserId(userId)) return slackError(c, "user_not_found");
@@ -328,6 +328,10 @@ function isSlackJsonObject(value: unknown): value is SlackJsonObject {
 
 function stringField(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function viewExchangeId(body: Record<string, unknown>): string {
+  return stringField(body.trigger_id) || stringField(body.interactivity_pointer);
 }
 
 function booleanField(value: unknown, fallback: boolean): boolean {

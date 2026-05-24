@@ -510,7 +510,7 @@ curl -X POST http://localhost:4003/api/views.generateTriggerId \
   -H "Content-Type: application/json" \
   -d '{"user_id": "U000000001"}'
 
-# Open a modal view with the returned trigger_id within 3 seconds
+# Open a modal view with the returned trigger_id or interactivity_pointer within 3 seconds
 curl -X POST http://localhost:4003/api/views.open \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
@@ -528,7 +528,7 @@ curl -X POST http://localhost:4003/api/views.generateTriggerId \
   -H "Content-Type: application/json" \
   -d '{"view_id": "V000000001"}'
 
-# Push a modal view onto the current stack with the returned trigger_id
+# Push a modal view onto the current stack with the returned trigger_id or interactivity_pointer
 curl -X POST http://localhost:4003/api/views.push \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
