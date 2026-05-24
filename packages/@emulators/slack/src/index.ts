@@ -12,6 +12,8 @@ import { teamRoutes } from "./routes/team.js";
 import { oauthRoutes } from "./routes/oauth.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { filesRoutes } from "./routes/files.js";
+import { pinsRoutes } from "./routes/pins.js";
+import { bookmarksRoutes } from "./routes/bookmarks.js";
 import { inspectorRoutes } from "./routes/inspector.js";
 
 export { getSlackStore, type SlackStore } from "./store.js";
@@ -96,6 +98,10 @@ const DEFAULT_SLACK_SCOPES = [
   "users:write",
   "files:read",
   "files:write",
+  "pins:read",
+  "pins:write",
+  "bookmarks:read",
+  "bookmarks:write",
   "reactions:read",
   "reactions:write",
   "team:read",
@@ -368,6 +374,8 @@ export const slackPlugin: ServicePlugin = {
     oauthRoutes(ctx);
     webhookRoutes(ctx);
     filesRoutes(ctx);
+    pinsRoutes(ctx);
+    bookmarksRoutes(ctx);
     inspectorRoutes(ctx);
   },
   seed(store: Store, baseUrl: string): void {

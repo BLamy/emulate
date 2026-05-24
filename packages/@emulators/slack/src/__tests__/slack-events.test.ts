@@ -197,6 +197,60 @@ describe("Slack plugin - event dispatch baseline", () => {
     ]);
   });
 
+  it("dispatches pin add and remove events", async () => {
+    const { app, store, webhooks } = createSlackTestApp();
+    const capture = captureFetchRequests();
+    registerSlackEventSubscription(webhooks, ["pin_added", "pin_removed"]);
+
+    const ch = getSlackStore(store).channels.findOneBy("name", "general")!;
+    const postRes = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, text: "pin event baseline" }),
+    });
+    const posted = (await postRes.json()) as { ts: string };
+
+    await app.request(`${base}/api/pins.add`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, timestamp: posted.ts }),
+    });
+
+    await app.request(`${base}/api/pins.remove`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, timestamp: posted.ts }),
+    });
+
+    expect(capture.requests).toHaveLength(2);
+    expect(capture.jsonBodies()).toEqual([
+      expect.objectContaining({
+        event: expect.objectContaining({
+          type: "pin_added",
+          user: "U000000001",
+          channel_id: ch.channel_id,
+          item: expect.objectContaining({
+            type: "message",
+            channel: ch.channel_id,
+            message: expect.objectContaining({ text: "pin event baseline", pinned_to: [ch.channel_id] }),
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        event: expect.objectContaining({
+          type: "pin_removed",
+          user: "U000000001",
+          channel_id: ch.channel_id,
+          has_pins: false,
+          item: expect.objectContaining({
+            type: "message",
+            channel: ch.channel_id,
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("dispatches user_change events for profile writes", async () => {
     const { app, webhooks } = createSlackTestApp();
     const capture = captureFetchRequests();

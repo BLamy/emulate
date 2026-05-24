@@ -1,7 +1,14 @@
 import type { RouteContext } from "@emulators/core";
 import { escapeHtml, renderSettingsPage } from "@emulators/core";
 import { getSlackStore } from "../store.js";
-import type { SlackChannel, SlackEphemeralMessage, SlackMessage, SlackScheduledMessage } from "../entities.js";
+import type {
+  SlackBookmark,
+  SlackChannel,
+  SlackEphemeralMessage,
+  SlackMessage,
+  SlackPin,
+  SlackScheduledMessage,
+} from "../entities.js";
 
 const SERVICE_LABEL = "Slack";
 
@@ -112,11 +119,31 @@ function renderScheduledMessage(msg: SlackScheduledMessage): string {
 <div class="info-text">${escapeHtml(richMessagePreview(msg))}</div>`;
 }
 
+function renderPin(pin: SlackPin, message: SlackMessage | undefined, users: Map<string, string>): string {
+  const creator = users.get(pin.created_by) ?? pin.created_by;
+  const text = message ? richMessagePreview(message) : pin.message_ts;
+  return `<div class="org-row">
+  <span class="org-icon">P</span>
+  <span class="org-name">${escapeHtml(creator)} <span class="badge badge-requested">pin</span></span>
+  <span class="user-meta">${timeAgo(new Date(pin.created * 1000).toISOString())}</span>
+</div>
+<div class="info-text">${escapeHtml(text)}</div>`;
+}
+
+function renderBookmark(bookmark: SlackBookmark): string {
+  return `<div class="org-row">
+  <span class="org-icon">B</span>
+  <span class="org-name">${escapeHtml(bookmark.title)} <span class="badge badge-granted">bookmark</span></span>
+  <span class="user-meta">${escapeHtml(bookmark.type)}</span>
+</div>
+<div class="info-text">${escapeHtml(bookmark.link)}</div>`;
+}
+
 function renderChannelSidebar(channels: SlackChannel[], activeId: string): string {
   return channels
     .map((ch) => {
       const active = ch.channel_id === activeId ? ' class="active"' : "";
-      const prefix = ch.is_private ? "🔒 " : "# ";
+      const prefix = ch.is_private ? "private " : "# ";
       return `<a href="/?channel=${escapeHtml(ch.channel_id)}"${active}>${prefix}${escapeHtml(ch.name)}</a>`;
     })
     .join("\n");
@@ -171,6 +198,14 @@ export function inspectorRoutes(ctx: RouteContext): void {
       .scheduledMessages.findBy("channel_id", activeChannel.channel_id)
       .sort((a, b) => a.post_at - b.post_at)
       .slice(0, 20);
+    const pins = ss()
+      .pins.findBy("channel_id", activeChannel.channel_id)
+      .sort((a, b) => b.created - a.created)
+      .slice(0, 20);
+    const bookmarks = ss()
+      .bookmarks.findBy("channel_id", activeChannel.channel_id)
+      .sort((a, b) => a.date_created - b.date_created)
+      .slice(0, 20);
 
     const sidebar = renderChannelSidebar(channels, activeChannel.channel_id);
 
@@ -191,6 +226,24 @@ export function inspectorRoutes(ctx: RouteContext): void {
         : `<div class="section-heading">Scheduled</div>${scheduledMessages
             .map(renderScheduledMessage)
             .join("\n<div style='height:8px'></div>\n")}`;
+    const pinsHtml =
+      pins.length === 0
+        ? ""
+        : `<div class="section-heading">Pins</div>${pins
+            .map((pin) =>
+              renderPin(
+                pin,
+                messages.find((message) => message.ts === pin.message_ts),
+                userMap,
+              ),
+            )
+            .join("\n<div style='height:8px'></div>\n")}`;
+    const bookmarksHtml =
+      bookmarks.length === 0
+        ? ""
+        : `<div class="section-heading">Bookmarks</div>${bookmarks
+            .map(renderBookmark)
+            .join("\n<div style='height:8px'></div>\n")}`;
 
     const stats = `${ss().users.all().length} users, ${channels.length} channels, ${ss().messages.all().length} messages`;
 
@@ -210,6 +263,8 @@ export function inspectorRoutes(ctx: RouteContext): void {
   ${messageHtml}
   ${ephemeralHtml}
   ${scheduledHtml}
+  ${pinsHtml}
+  ${bookmarksHtml}
 </div>`;
 
     return c.html(renderSettingsPage(`${team?.name ?? "Slack"} - Message Inspector`, sidebar, bodyHtml, SERVICE_LABEL));

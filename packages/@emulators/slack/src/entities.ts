@@ -268,3 +268,33 @@ export interface SlackFileUploadSession extends Entity {
   content_base64?: string;
   completed: boolean;
 }
+
+export interface SlackPin extends Entity {
+  pin_id: string;
+  team_id: string;
+  channel_id: string;
+  message_ts: string;
+  created: number;
+  created_by: string;
+}
+
+export interface SlackBookmark extends Entity {
+  bookmark_id: string;
+  team_id: string;
+  channel_id: string;
+  title: string;
+  type: "link";
+  link: string;
+  emoji: string;
+  icon_url: string;
+  entity_id: string | null;
+  date_created: number;
+  date_updated: number;
+  rank: string;
+  last_updated_by_user_id: string;
+  last_updated_by_team_id: string;
+  shortcut_id: string | null;
+  app_id: string | null;
+  access_level?: "read" | "write";
+  parent_id?: string;
+}

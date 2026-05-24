@@ -265,13 +265,13 @@ slack:
       name: My Slack App
       redirect_uris:
         - http://localhost:3000/api/auth/callback/slack
-      scopes: [chat:write, channels:read, users.profile:read, users.profile:write, users:write, files:read, files:write]
+      scopes: [chat:write, channels:read, users.profile:read, users.profile:write, users:write, files:read, files:write, pins:read, pins:write, bookmarks:read, bookmarks:write]
       user_scopes: [users:read, users.profile:read]
       bot_name: my-bot
   tokens:
     - token: xoxb-local-test
       user: developer
-      scopes: [chat:write, channels:read, users.profile:read, users.profile:write, users:write, files:read, files:write]
+      scopes: [chat:write, channels:read, users.profile:read, users.profile:write, users:write, files:read, files:write, pins:read, pins:write, bookmarks:read, bookmarks:write]
   strict_scopes: false
 
 apple:
@@ -612,7 +612,7 @@ OAuth 2.0, OpenID Connect, and mutable Google Workspace-style surfaces for local
 
 ## Slack API
 
-Fully stateful Slack Web API emulation with channels, messages, threads, reactions, user profiles, presence, modern file uploads, OAuth v2, and incoming webhooks. Chat writes preserve common rich message fields such as `blocks`, `attachments`, `metadata`, formatting flags, unfurl flags, and client message ids. Conversation writes update archive state, names, topics, purposes, membership, DMs, MPIMs, and read cursors. User writes update profile fields, status, custom fields, and deterministic active or away presence. File writes support the current external upload flow with local upload URLs, file share messages, reads, lists, downloads, and deletes. Seeded OAuth apps and OAuth installs create bot users and installation records. OAuth exchanges and explicit token seeds create scoped token records.
+Fully stateful Slack Web API emulation with channels, messages, threads, reactions, user profiles, presence, modern file uploads, pins, bookmarks, OAuth v2, and incoming webhooks. Chat writes preserve common rich message fields such as `blocks`, `attachments`, `metadata`, formatting flags, unfurl flags, and client message ids. Conversation writes update archive state, names, topics, purposes, membership, DMs, MPIMs, and read cursors. User writes update profile fields, status, custom fields, and deterministic active or away presence. File writes support the current external upload flow with local upload URLs, file share messages, reads, lists, downloads, and deletes. Pin and bookmark writes support channel message pins and link bookmarks. Seeded OAuth apps and OAuth installs create bot users and installation records. OAuth exchanges and explicit token seeds create scoped token records.
 
 ### Auth & Chat
 - `POST /api/auth.test` - test authentication
@@ -660,6 +660,15 @@ Fully stateful Slack Web API emulation with channels, messages, threads, reactio
 - `GET /files-pri/:fileId/:filename` - download file bytes with a bearer token that can access the file
 - `POST /api/files.delete` - delete a completed file
 
+### Pins & Bookmarks
+- `POST /api/pins.add` - pin a message to a channel
+- `GET /api/pins.list` / `POST /api/pins.list` - list pinned message items for a channel
+- `POST /api/pins.remove` - remove a message pin from a channel
+- `POST /api/bookmarks.add` - add a link bookmark to a channel
+- `POST /api/bookmarks.edit` - update a link bookmark
+- `POST /api/bookmarks.list` - list channel bookmarks
+- `POST /api/bookmarks.remove` - remove a bookmark from a channel
+
 ### Team, Bots & Webhooks
 - `POST /api/team.info` - workspace info
 - `POST /api/bots.info` - bot info
@@ -669,7 +678,7 @@ Fully stateful Slack Web API emulation with channels, messages, threads, reactio
 - `GET /oauth/v2/authorize` - authorization (shows user picker)
 - `POST /api/oauth.v2.access` - token exchange
 
-Slack scope checks are relaxed by default so local tests can use simple bearer tokens. Set `slack.strict_scopes: true` in seed config to make supported Web API methods return Slack-style `missing_scope` errors with `needed` and `provided` fields. Supported user, presence, and file checks include `users:read`, `users:read.email`, `users.profile:read`, `users.profile:write`, `users:write`, `files:read`, and `files:write`.
+Slack scope checks are relaxed by default so local tests can use simple bearer tokens. Set `slack.strict_scopes: true` in seed config to make supported Web API methods return Slack-style `missing_scope` errors with `needed` and `provided` fields. Supported user, presence, file, pin, and bookmark checks include `users:read`, `users:read.email`, `users.profile:read`, `users.profile:write`, `users:write`, `files:read`, `files:write`, `pins:read`, `pins:write`, `bookmarks:read`, and `bookmarks:write`.
 
 ## Apple Sign In
 

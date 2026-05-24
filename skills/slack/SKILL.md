@@ -6,7 +6,7 @@ allowed-tools: Bash(npx emulate:*), Bash(curl:*)
 
 # Slack API Emulator
 
-Fully stateful Slack Web API emulation with channels, messages, threads, reactions, user profiles, presence, modern file uploads, OAuth v2, and incoming webhooks. Chat writes preserve common rich message fields such as `blocks`, `attachments`, `metadata`, formatting flags, unfurl flags, and client message ids. Conversation writes update archive state, names, topics, purposes, membership, DMs, MPIMs, and read cursors. User writes update profile fields, status, custom fields, and deterministic active or away presence. File writes support the current external upload flow with local upload URLs, file share messages, reads, lists, downloads, and deletes. Seeded OAuth apps and OAuth installs create bot users and installation records. OAuth exchanges and explicit token seeds create scoped token records. State changes dispatch `event_callback` payloads to configured webhook URLs.
+Fully stateful Slack Web API emulation with channels, messages, threads, reactions, user profiles, presence, modern file uploads, pins, bookmarks, OAuth v2, and incoming webhooks. Chat writes preserve common rich message fields such as `blocks`, `attachments`, `metadata`, formatting flags, unfurl flags, and client message ids. Conversation writes update archive state, names, topics, purposes, membership, DMs, MPIMs, and read cursors. User writes update profile fields, status, custom fields, and deterministic active or away presence. File writes support the current external upload flow with local upload URLs, file share messages, reads, lists, downloads, and deletes. Pin and bookmark writes support channel message pins and link bookmarks. Seeded OAuth apps and OAuth installs create bot users and installation records. OAuth exchanges and explicit token seeds create scoped token records. State changes dispatch `event_callback` payloads to configured webhook URLs.
 
 ## Start
 
@@ -38,7 +38,7 @@ curl -X POST http://localhost:4003/api/auth.test \
 
 When no token is provided, requests fall back to the first seeded user.
 
-Scope checks are relaxed by default for local development. Set `slack.strict_scopes: true` in seed config when you need supported Web API methods to return Slack-style `missing_scope` errors with `needed` and `provided` fields. Supported user, presence, and file checks include `users:read`, `users:read.email`, `users.profile:read`, `users.profile:write`, `users:write`, `files:read`, and `files:write`.
+Scope checks are relaxed by default for local development. Set `slack.strict_scopes: true` in seed config when you need supported Web API methods to return Slack-style `missing_scope` errors with `needed` and `provided` fields. Supported user, presence, file, pin, and bookmark checks include `users:read`, `users:read.email`, `users.profile:read`, `users.profile:write`, `users:write`, `files:read`, `files:write`, `pins:read`, `pins:write`, `bookmarks:read`, and `bookmarks:write`.
 
 ## Pointing Your App at the Emulator
 
@@ -130,6 +130,10 @@ slack:
         - users:write
         - files:read
         - files:write
+        - pins:read
+        - pins:write
+        - bookmarks:read
+        - bookmarks:write
       user_scopes:
         - users:read
         - users.profile:read
@@ -145,6 +149,10 @@ slack:
         - users:write
         - files:read
         - files:write
+        - pins:read
+        - pins:write
+        - bookmarks:read
+        - bookmarks:write
   incoming_webhooks:
     - channel: general
       label: CI Notifications
@@ -443,6 +451,50 @@ curl -X POST http://localhost:4003/api/files.delete \
   -d '{"file": "F000000001"}'
 ```
 
+### Pins And Bookmarks
+
+```bash
+# Pin a message
+curl -X POST http://localhost:4003/api/pins.add \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel": "C000000001", "timestamp": "1234567890.123456"}'
+
+# List pinned messages
+curl -X GET 'http://localhost:4003/api/pins.list?channel=C000000001' \
+  -H "Authorization: Bearer $TOKEN"
+
+# Remove a message pin
+curl -X POST http://localhost:4003/api/pins.remove \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel": "C000000001", "timestamp": "1234567890.123456"}'
+
+# Add a link bookmark
+curl -X POST http://localhost:4003/api/bookmarks.add \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_id": "C000000001", "title": "Runbook", "type": "link", "link": "https://example.com/runbook"}'
+
+# Edit a bookmark
+curl -X POST http://localhost:4003/api/bookmarks.edit \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_id": "C000000001", "bookmark_id": "Bk000000001", "title": "Updated Runbook"}'
+
+# List bookmarks
+curl -X POST http://localhost:4003/api/bookmarks.list \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_id": "C000000001"}'
+
+# Remove a bookmark
+curl -X POST http://localhost:4003/api/bookmarks.remove \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_id": "C000000001", "bookmark_id": "Bk000000001"}'
+```
+
 ### Reactions
 
 ```bash
@@ -531,13 +583,14 @@ Returns a Slack-style response:
 
 ## Event Dispatching
 
-When messages are posted, updated, deleted, or reactions are added/removed, the emulator dispatches `event_callback` payloads to configured webhook URLs. These payloads match Slack's Events API format:
+When messages are posted, updated, deleted, reactions change, pins change, or files change, the emulator dispatches `event_callback` payloads to configured webhook URLs. These payloads match Slack's Events API format:
 
 - `message` events on `chat.postMessage`
 - `message` with `subtype: message_changed` on `chat.update`
 - `message` with `subtype: message_deleted` on `chat.delete`
 - rich message fields are included on posted `message` events when present
 - `reaction_added` / `reaction_removed` events on `reactions.add` / `reactions.remove`
+- `pin_added` / `pin_removed` events on `pins.add` / `pins.remove`
 - `message` with `subtype: bot_message` on incoming webhook posts
 - `channel_archive` / `channel_unarchive` for public lifecycle archive writes
 - `group_archive` / `group_unarchive` for private lifecycle archive writes

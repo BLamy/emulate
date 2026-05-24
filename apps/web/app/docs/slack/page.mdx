@@ -1,12 +1,12 @@
 # Slack API
 
-Fully stateful Slack Web API emulation with channels, messages, threads, reactions, user profiles, presence, modern file uploads, OAuth v2, and incoming webhooks. Chat writes preserve common rich message fields such as `blocks`, `attachments`, `metadata`, formatting flags, unfurl flags, and client message ids. Conversation writes update archive state, names, topics, purposes, membership, DMs, MPIMs, and read cursors. User writes update profile fields, status, custom fields, and deterministic active or away presence. File writes support the current external upload flow with local upload URLs, file share messages, reads, lists, downloads, and deletes. Seeded OAuth apps and OAuth installs create bot users and installation records. OAuth exchanges and explicit token seeds create scoped token records. State changes dispatch `event_callback` payloads to configured webhook URLs.
+Fully stateful Slack Web API emulation with channels, messages, threads, reactions, user profiles, presence, modern file uploads, pins, bookmarks, OAuth v2, and incoming webhooks. Chat writes preserve common rich message fields such as `blocks`, `attachments`, `metadata`, formatting flags, unfurl flags, and client message ids. Conversation writes update archive state, names, topics, purposes, membership, DMs, MPIMs, and read cursors. User writes update profile fields, status, custom fields, and deterministic active or away presence. File writes support the current external upload flow with local upload URLs, file share messages, reads, lists, downloads, and deletes. Pin and bookmark writes support channel message pins and link bookmarks. Seeded OAuth apps and OAuth installs create bot users and installation records. OAuth exchanges and explicit token seeds create scoped token records. State changes dispatch `event_callback` payloads to configured webhook URLs.
 
 ## Auth
 
 - `POST /api/auth.test` - test authentication
 
-Scope checks are relaxed by default for local development. Set `slack.strict_scopes: true` in seed config to make supported Web API methods return Slack-style `missing_scope` errors with `needed` and `provided` fields. Supported user, presence, and file checks include `users:read`, `users:read.email`, `users.profile:read`, `users.profile:write`, `users:write`, `files:read`, and `files:write`.
+Scope checks are relaxed by default for local development. Set `slack.strict_scopes: true` in seed config to make supported Web API methods return Slack-style `missing_scope` errors with `needed` and `provided` fields. Supported user, presence, file, pin, and bookmark checks include `users:read`, `users:read.email`, `users.profile:read`, `users.profile:write`, `users:write`, `files:read`, `files:write`, `pins:read`, `pins:write`, `bookmarks:read`, and `bookmarks:write`.
 
 ## Chat
 
@@ -67,6 +67,16 @@ Scope checks are relaxed by default for local development. Set `slack.strict_sco
 - `GET /files-pri/:fileId/:filename` - download file bytes with a bearer token that can access the file
 - `POST /api/files.delete` - delete a completed file
 
+## Pins And Bookmarks
+
+- `POST /api/pins.add` - pin a message to a channel
+- `GET /api/pins.list` / `POST /api/pins.list` - list pinned message items for a channel
+- `POST /api/pins.remove` - remove a message pin from a channel
+- `POST /api/bookmarks.add` - add a link bookmark to a channel
+- `POST /api/bookmarks.edit` - update a link bookmark
+- `POST /api/bookmarks.list` - list channel bookmarks
+- `POST /api/bookmarks.remove` - remove a bookmark from a channel
+
 ## Team
 
 - `POST /api/team.info` - get workspace info
@@ -88,13 +98,14 @@ Scope checks are relaxed by default for local development. Set `slack.strict_sco
 
 ## Event Dispatching
 
-When messages are posted, updated, deleted, or reactions change, the emulator dispatches `event_callback` payloads to configured webhook URLs matching Slack's Events API format:
+When messages are posted, updated, deleted, reactions change, pins change, or files change, the emulator dispatches `event_callback` payloads to configured webhook URLs matching Slack's Events API format:
 
 - `message` events on `chat.postMessage`
 - `message` with `subtype: message_changed` on `chat.update`
 - `message` with `subtype: message_deleted` on `chat.delete`
 - rich message fields are included on posted `message` events when present
 - `reaction_added` / `reaction_removed` events on `reactions.add` / `reactions.remove`
+- `pin_added` / `pin_removed` events on `pins.add` / `pins.remove`
 - `message` with `subtype: bot_message` on incoming webhook posts
 - `channel_archive` / `channel_unarchive` for public lifecycle archive writes
 - `group_archive` / `group_unarchive` for private lifecycle archive writes

@@ -387,6 +387,49 @@ describe("Slack plugin - real @slack/web-api WebClient baseline", () => {
     expect(bot.bot?.name).toBe("test-bot");
   });
 
+  it("exercises pins and bookmarks through the Slack SDK", async () => {
+    expect(emulator).toBeDefined();
+    const channel = getSlackStore(emulator!.store).channels.findOneBy("name", "general")!.channel_id;
+    const posted = await client.chat.postMessage({ channel, text: "pin via WebClient" });
+
+    await expect(client.pins.add({ channel, timestamp: posted.ts! })).resolves.toMatchObject({ ok: true });
+
+    const pins = await client.pins.list({ channel });
+    expect(pins.ok).toBe(true);
+    expect(pins.items?.[0]).toMatchObject({
+      type: "message",
+      channel,
+      message: expect.objectContaining({ text: "pin via WebClient" }),
+    });
+
+    await expect(client.pins.remove({ channel, timestamp: posted.ts! })).resolves.toMatchObject({ ok: true });
+
+    const added = (await client.bookmarks.add({
+      channel_id: channel,
+      title: "SDK Bookmark",
+      type: "link",
+      link: "https://example.com/sdk",
+    } as any)) as any;
+    expect(added.ok).toBe(true);
+    expect(added.bookmark.title).toBe("SDK Bookmark");
+
+    const edited = (await client.bookmarks.edit({
+      channel_id: channel,
+      bookmark_id: added.bookmark.id,
+      title: "SDK Bookmark Updated",
+    } as any)) as any;
+    expect(edited.ok).toBe(true);
+    expect(edited.bookmark.title).toBe("SDK Bookmark Updated");
+
+    const bookmarks = (await client.bookmarks.list({ channel_id: channel } as any)) as any;
+    expect(bookmarks.ok).toBe(true);
+    expect(bookmarks.bookmarks.map((bookmark: any) => bookmark.id)).toContain(added.bookmark.id);
+
+    await expect(
+      client.bookmarks.remove({ channel_id: channel, bookmark_id: added.bookmark.id } as any),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
   it("uploads files through the Slack SDK uploadV2 helper", async () => {
     expect(emulator).toBeDefined();
     const channel = getSlackStore(emulator!.store).channels.findOneBy("name", "general")!.channel_id;

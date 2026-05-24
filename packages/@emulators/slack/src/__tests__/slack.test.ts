@@ -3416,6 +3416,223 @@ describe("Slack plugin - files", () => {
   });
 });
 
+describe("Slack plugin - pins and bookmarks", () => {
+  let app: SlackTestApp["app"];
+  let store: Store;
+  let tokenMap: SlackTestApp["tokenMap"];
+
+  beforeEach(() => {
+    ({ app, store, tokenMap } = createTestApp());
+  });
+
+  async function postPinnedMessage(channel: string, text = "pin me") {
+    const res = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel, text }),
+    });
+    return (await res.json()) as any;
+  }
+
+  it("adds, lists, and removes message pins", async () => {
+    const channel = getSlackStore(store).channels.findOneBy("name", "general")!.channel_id;
+    const posted = await postPinnedMessage(channel, "Pinned route message");
+
+    const addRes = await app.request(`${base}/api/pins.add`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel, timestamp: posted.ts }),
+    });
+    expect((await addRes.json()) as any).toMatchObject({ ok: true });
+
+    const duplicateRes = await app.request(`${base}/api/pins.add`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel, timestamp: posted.ts }),
+    });
+    expect(((await duplicateRes.json()) as any).error).toBe("already_pinned");
+
+    const listRes = await app.request(`${base}/api/pins.list?channel=${channel}`, {
+      method: "GET",
+      headers: { Authorization: "Bearer xoxb-test-token" },
+    });
+    const listed = (await listRes.json()) as any;
+    expect(listed.ok).toBe(true);
+    expect(listed.items).toHaveLength(1);
+    expect(listed.items[0]).toMatchObject({
+      type: "message",
+      channel,
+      message: {
+        text: "Pinned route message",
+        pinned_to: [channel],
+      },
+    });
+    expect(listed.items[0].message.permalink).toContain(`/archives/${channel}/p`);
+
+    const removeRes = await app.request(`${base}/api/pins.remove`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel, timestamp: posted.ts }),
+    });
+    expect((await removeRes.json()) as any).toMatchObject({ ok: true });
+
+    const removedListRes = await app.request(`${base}/api/pins.list`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel }),
+    });
+    expect(((await removedListRes.json()) as any).items).toEqual([]);
+  });
+
+  it("adds, edits, lists, and removes link bookmarks", async () => {
+    const channel = getSlackStore(store).channels.findOneBy("name", "general")!.channel_id;
+
+    const addRes = await app.request(`${base}/api/bookmarks.add`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        channel_id: channel,
+        title: "Runbook",
+        type: "link",
+        link: "https://example.com/runbook",
+        emoji: ":book:",
+      }),
+    });
+    const added = (await addRes.json()) as any;
+    expect(added.ok).toBe(true);
+    expect(added.bookmark).toMatchObject({
+      channel_id: channel,
+      title: "Runbook",
+      type: "link",
+      link: "https://example.com/runbook",
+      emoji: ":book:",
+    });
+
+    const editRes = await app.request(`${base}/api/bookmarks.edit`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        channel_id: channel,
+        bookmark_id: added.bookmark.id,
+        title: "Updated Runbook",
+        link: "https://example.com/updated",
+      }),
+    });
+    const edited = (await editRes.json()) as any;
+    expect(edited.ok).toBe(true);
+    expect(edited.bookmark.title).toBe("Updated Runbook");
+    expect(edited.bookmark.date_updated).toBeGreaterThan(0);
+
+    const listRes = await app.request(`${base}/api/bookmarks.list`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel_id: channel }),
+    });
+    const listed = (await listRes.json()) as any;
+    expect(listed.ok).toBe(true);
+    expect(listed.bookmarks.map((bookmark: any) => bookmark.id)).toEqual([added.bookmark.id]);
+
+    const removeRes = await app.request(`${base}/api/bookmarks.remove`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel_id: channel, bookmark_id: added.bookmark.id }),
+    });
+    expect((await removeRes.json()) as any).toMatchObject({ ok: true });
+
+    const removedListRes = await app.request(`${base}/api/bookmarks.list`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel_id: channel }),
+    });
+    expect(((await removedListRes.json()) as any).bookmarks).toEqual([]);
+  });
+
+  it("enforces private channel access for pins and bookmarks", async () => {
+    const ss = getSlackStore(store);
+    insertSlackTestUser(store, "U000000002", "pin-bookmark-outsider");
+    tokenMap.set("xoxb-pin-bookmark-outsider-token", {
+      login: "U000000002",
+      id: 2,
+      scopes: ["pins:read", "pins:write", "bookmarks:read", "bookmarks:write"],
+    });
+
+    const privateChannel = ss.channels.insert({
+      channel_id: "G000000555",
+      team_id: "T000000001",
+      name: "pin-bookmark-private",
+      is_channel: false,
+      is_private: true,
+      is_archived: false,
+      topic: { value: "", creator: "U000000001", last_set: 0 },
+      purpose: { value: "", creator: "U000000001", last_set: 0 },
+      members: ["U000000001"],
+      creator: "U000000001",
+      num_members: 1,
+    });
+    const posted = await postPinnedMessage(privateChannel.channel_id, "private pin");
+
+    const pinRes = await app.request(`${base}/api/pins.add`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer xoxb-pin-bookmark-outsider-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ channel: privateChannel.channel_id, timestamp: posted.ts }),
+    });
+    expect(((await pinRes.json()) as any).error).toBe("not_in_channel");
+
+    const bookmarkRes = await app.request(`${base}/api/bookmarks.list`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer xoxb-pin-bookmark-outsider-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ channel_id: privateChannel.channel_id }),
+    });
+    expect(((await bookmarkRes.json()) as any).error).toBe("not_in_channel");
+  });
+
+  it("enforces pin and bookmark scopes in strict mode", async () => {
+    store.setData("slack.strict_scopes", true);
+    tokenMap.set("xoxb-pins-read-token", { login: "U000000001", id: 1, scopes: ["pins:read"] });
+    tokenMap.set("xoxb-bookmarks-read-token", { login: "U000000001", id: 1, scopes: ["bookmarks:read"] });
+
+    const channel = getSlackStore(store).channels.findOneBy("name", "general")!.channel_id;
+    const posted = await postPinnedMessage(channel, "strict pin");
+
+    const pinRes = await app.request(`${base}/api/pins.add`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer xoxb-pins-read-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ channel, timestamp: posted.ts }),
+    });
+    const pin = (await pinRes.json()) as any;
+    expect(pin.ok).toBe(false);
+    expect(pin.error).toBe("missing_scope");
+    expect(pin.needed).toBe("pins:write");
+
+    const bookmarkRes = await app.request(`${base}/api/bookmarks.add`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer xoxb-bookmarks-read-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel_id: channel,
+        title: "Strict Bookmark",
+        type: "link",
+        link: "https://example.com/strict",
+      }),
+    });
+    const bookmark = (await bookmarkRes.json()) as any;
+    expect(bookmark.ok).toBe(false);
+    expect(bookmark.error).toBe("missing_scope");
+    expect(bookmark.needed).toBe("bookmarks:write");
+  });
+});
+
 describe("Slack plugin - Message Inspector", () => {
   let app: SlackTestApp["app"];
   let store: Store;
@@ -3449,6 +3666,42 @@ describe("Slack plugin - Message Inspector", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain("Inspector test message");
+  });
+
+  it("shows pins and bookmarks in the inspector", async () => {
+    const ss = getSlackStore(store);
+    const ch = ss.channels.all()[0];
+
+    const postRes = await app.request(`${base}/api/chat.postMessage`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, text: "Inspector pinned message" }),
+    });
+    const posted = (await postRes.json()) as any;
+
+    await app.request(`${base}/api/pins.add`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, timestamp: posted.ts }),
+    });
+    await app.request(`${base}/api/bookmarks.add`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        channel_id: ch.channel_id,
+        title: "Inspector Bookmark",
+        type: "link",
+        link: "https://example.com/inspector",
+      }),
+    });
+
+    const res = await app.request(`${base}/?channel=${ch.channel_id}`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Pins");
+    expect(html).toContain("Inspector pinned message");
+    expect(html).toContain("Bookmarks");
+    expect(html).toContain("Inspector Bookmark");
   });
 
   it("shows rich messages with no text in the inspector", async () => {

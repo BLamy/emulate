@@ -13,6 +13,8 @@ import type {
   SlackIncomingWebhook,
   SlackFile,
   SlackFileUploadSession,
+  SlackPin,
+  SlackBookmark,
 } from "./entities.js";
 
 export interface SlackStore {
@@ -29,6 +31,8 @@ export interface SlackStore {
   incomingWebhooks: Collection<SlackIncomingWebhook>;
   files: Collection<SlackFile>;
   fileUploadSessions: Collection<SlackFileUploadSession>;
+  pins: Collection<SlackPin>;
+  bookmarks: Collection<SlackBookmark>;
 }
 
 export function getSlackStore(store: Store): SlackStore {
@@ -58,5 +62,7 @@ export function getSlackStore(store: Store): SlackStore {
     incomingWebhooks: store.collection<SlackIncomingWebhook>("slack.incoming_webhooks", ["token"]),
     files: store.collection<SlackFile>("slack.files", ["file_id", "user"]),
     fileUploadSessions: store.collection<SlackFileUploadSession>("slack.file_upload_sessions", ["file_id"]),
+    pins: store.collection<SlackPin>("slack.pins", ["pin_id", "channel_id", "message_ts"]),
+    bookmarks: store.collection<SlackBookmark>("slack.bookmarks", ["bookmark_id", "channel_id"]),
   };
 }

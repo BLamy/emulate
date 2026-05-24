@@ -215,7 +215,7 @@ export const SERVICE_REGISTRY: Record<ServiceName, ServiceEntry> = {
 
   slack: {
     label: "Slack API emulator",
-    endpoints: "auth, chat, conversations, users, files, reactions, team, OAuth, incoming webhooks",
+    endpoints: "auth, chat, conversations, users, files, pins, bookmarks, reactions, team, OAuth, incoming webhooks",
     async load() {
       const mod = await import("@emulators/slack");
       return { plugin: mod.slackPlugin, seedFromConfig: mod.seedFromConfig };
@@ -263,6 +263,10 @@ export const SERVICE_REGISTRY: Record<ServiceName, ServiceEntry> = {
               "users:write",
               "files:read",
               "files:write",
+              "pins:read",
+              "pins:write",
+              "bookmarks:read",
+              "bookmarks:write",
             ],
             user_scopes: ["users:read", "users.profile:read"],
             bot_name: "my-bot",
