@@ -35,6 +35,7 @@ export function bookmarksRoutes(ctx: RouteContext): void {
     const link = stringField(body.link) || stringField(body.url);
     if (type !== "link") return slackError(c, "invalid_bookmark_type");
     if (!title || !link) return slackError(c, "invalid_arguments");
+    if (!isValidBookmarkLink(link)) return slackError(c, "invalid_link");
     if (ss().bookmarks.findBy("channel_id", channel.channel_id).length >= 100) {
       return slackError(c, "too_many_bookmarks");
     }
@@ -93,6 +94,7 @@ export function bookmarksRoutes(ctx: RouteContext): void {
     const emoji = stringField(body.emoji);
     if (title) updates.title = title;
     if (link) {
+      if (!isValidBookmarkLink(link)) return slackError(c, "invalid_link");
       updates.link = link;
       updates.icon_url = bookmarkIconUrl(link);
     }
@@ -119,7 +121,7 @@ export function bookmarksRoutes(ctx: RouteContext): void {
 
     const bookmarks = ss()
       .bookmarks.findBy("channel_id", channel.channel_id)
-      .sort((a, b) => a.date_created - b.date_created || a.bookmark_id.localeCompare(b.bookmark_id))
+      .sort(compareSlackBookmarks)
       .map(formatBookmark);
 
     return slackOk(c, { bookmarks });
@@ -161,8 +163,20 @@ export function bookmarksRoutes(ctx: RouteContext): void {
   }
 
   function bookmarkRank(channelId: string): string {
-    return (ss().bookmarks.findBy("channel_id", channelId).length + 1).toString(36);
+    const maxRank = ss()
+      .bookmarks.findBy("channel_id", channelId)
+      .reduce((max, bookmark) => Math.max(max, validBookmarkRankNumber(bookmark) ?? 0), 0);
+    return (maxRank + 1).toString(36);
   }
+}
+
+export function compareSlackBookmarks(a: SlackBookmark, b: SlackBookmark): number {
+  return (
+    bookmarkRankNumber(a) - bookmarkRankNumber(b) ||
+    a.date_created - b.date_created ||
+    a.id - b.id ||
+    a.bookmark_id.localeCompare(b.bookmark_id)
+  );
 }
 
 function formatBookmark(bookmark: SlackBookmark) {
@@ -194,11 +208,30 @@ function accessLevel(value: unknown): "read" | "write" | undefined {
   return undefined;
 }
 
+function bookmarkRankNumber(bookmark: SlackBookmark): number {
+  return validBookmarkRankNumber(bookmark) ?? Number.MAX_SAFE_INTEGER;
+}
+
+function validBookmarkRankNumber(bookmark: SlackBookmark): number | undefined {
+  if (!/^[0-9a-z]+$/i.test(bookmark.rank)) return undefined;
+  const rank = parseInt(bookmark.rank, 36);
+  return Number.isSafeInteger(rank) ? rank : undefined;
+}
+
 function bookmarkIconUrl(link: string): string {
   try {
     const url = new URL(link);
     return `${url.origin}/favicon.ico`;
   } catch {
     return "";
+  }
+}
+
+function isValidBookmarkLink(link: string): boolean {
+  try {
+    const url = new URL(link);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
   }
 }

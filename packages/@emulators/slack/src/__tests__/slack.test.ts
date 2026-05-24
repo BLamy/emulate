@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Hono, Store, WebhookDispatcher } from "@emulators/core";
 import { slackPlugin, seedFromConfig, getSlackStore } from "../index.js";
 import {
@@ -3425,6 +3425,10 @@ describe("Slack plugin - pins and bookmarks", () => {
     ({ app, store, tokenMap } = createTestApp());
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   async function postPinnedMessage(channel: string, text = "pin me") {
     const res = await app.request(`${base}/api/chat.postMessage`, {
       method: "POST",
@@ -3603,6 +3607,95 @@ describe("Slack plugin - pins and bookmarks", () => {
     expect(((await removedListRes.json()) as any).bookmarks).toEqual([]);
   });
 
+  it("orders bookmarks deterministically by rank", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const channel = getSlackStore(store).channels.findOneBy("name", "general")!.channel_id;
+    const addBookmark = async (title: string) => {
+      const res = await app.request(`${base}/api/bookmarks.add`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          channel_id: channel,
+          title,
+          type: "link",
+          link: `https://example.com/${encodeURIComponent(title)}`,
+        }),
+      });
+      return (await res.json()) as any;
+    };
+
+    const first = await addBookmark("Ranked Bookmark A");
+    const second = await addBookmark("Ranked Bookmark B");
+    const third = await addBookmark("Ranked Bookmark C");
+    expect([first.bookmark.rank, second.bookmark.rank, third.bookmark.rank]).toEqual(["1", "2", "3"]);
+
+    await app.request(`${base}/api/bookmarks.remove`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel_id: channel, bookmark_id: second.bookmark.id }),
+    });
+    const fourth = await addBookmark("Ranked Bookmark D");
+    expect(fourth.bookmark.rank).toBe("4");
+
+    const listRes = await app.request(`${base}/api/bookmarks.list`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel_id: channel }),
+    });
+    const listed = (await listRes.json()) as any;
+    expect(listed.bookmarks.map((bookmark: any) => bookmark.title)).toEqual([
+      "Ranked Bookmark A",
+      "Ranked Bookmark C",
+      "Ranked Bookmark D",
+    ]);
+
+    const inspectorRes = await app.request(`${base}/?channel=${channel}`);
+    const html = await inspectorRes.text();
+    expect(html.indexOf("Ranked Bookmark A")).toBeLessThan(html.indexOf("Ranked Bookmark C"));
+    expect(html.indexOf("Ranked Bookmark C")).toBeLessThan(html.indexOf("Ranked Bookmark D"));
+  });
+
+  it("rejects invalid bookmark links", async () => {
+    const channel = getSlackStore(store).channels.findOneBy("name", "general")!.channel_id;
+
+    const invalidAddRes = await app.request(`${base}/api/bookmarks.add`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        channel_id: channel,
+        title: "Invalid Runbook",
+        type: "link",
+        link: "ftp://example.com/runbook",
+      }),
+    });
+    expect(((await invalidAddRes.json()) as any).error).toBe("invalid_link");
+
+    const addRes = await app.request(`${base}/api/bookmarks.add`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        channel_id: channel,
+        title: "Runbook",
+        type: "link",
+        link: "https://example.com/runbook",
+      }),
+    });
+    const added = (await addRes.json()) as any;
+    expect(added.ok).toBe(true);
+
+    const invalidEditRes = await app.request(`${base}/api/bookmarks.edit`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        channel_id: channel,
+        bookmark_id: added.bookmark.id,
+        link: "javascript:alert(1)",
+      }),
+    });
+    expect(((await invalidEditRes.json()) as any).error).toBe("invalid_link");
+  });
+
   it("enforces private channel access for pins and bookmarks", async () => {
     const ss = getSlackStore(store);
     insertSlackTestUser(store, "U000000002", "pin-bookmark-outsider");
@@ -3758,6 +3851,46 @@ describe("Slack plugin - Message Inspector", () => {
     expect(html).toContain("Inspector pinned message");
     expect(html).toContain("Bookmarks");
     expect(html).toContain("Inspector Bookmark");
+  });
+
+  it("shows pinned messages outside the recent message slice in the inspector", async () => {
+    const ss = getSlackStore(store);
+    const ch = ss.channels.all()[0];
+    const pinnedTs = "1000000000.000001";
+    ss.messages.insert({
+      ts: pinnedTs,
+      channel_id: ch.channel_id,
+      user: "U000000001",
+      text: "Inspector old pinned message",
+      type: "message" as const,
+      reply_count: 0,
+      reply_users: [],
+      reactions: [],
+    });
+    await app.request(`${base}/api/pins.add`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ channel: ch.channel_id, timestamp: pinnedTs }),
+    });
+
+    for (let index = 0; index < 55; index++) {
+      ss.messages.insert({
+        ts: `1000000${String(index + 1).padStart(3, "0")}.000001`,
+        channel_id: ch.channel_id,
+        user: "U000000001",
+        text: `Recent inspector message ${index}`,
+        type: "message" as const,
+        reply_count: 0,
+        reply_users: [],
+        reactions: [],
+      });
+    }
+
+    const res = await app.request(`${base}/?channel=${ch.channel_id}`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Pins");
+    expect(html).toContain("Inspector old pinned message");
   });
 
   it("shows rich messages with no text in the inspector", async () => {

@@ -9,6 +9,7 @@ import type {
   SlackPin,
   SlackScheduledMessage,
 } from "../entities.js";
+import { compareSlackBookmarks } from "./bookmarks.js";
 
 const SERVICE_LABEL = "Slack";
 
@@ -186,10 +187,10 @@ export function inspectorRoutes(ctx: RouteContext): void {
     }
 
     // Get messages for the active channel, newest first
-    const messages = ss()
+    const channelMessages = ss()
       .messages.findBy("channel_id", activeChannel.channel_id)
-      .sort((a, b) => (b.ts > a.ts ? 1 : -1))
-      .slice(0, 50);
+      .sort((a, b) => (b.ts > a.ts ? 1 : -1));
+    const messages = channelMessages.slice(0, 50);
     const ephemeralMessages = ss()
       .ephemeralMessages.findBy("channel_id", activeChannel.channel_id)
       .sort((a, b) => (b.ts > a.ts ? 1 : -1))
@@ -200,16 +201,12 @@ export function inspectorRoutes(ctx: RouteContext): void {
       .slice(0, 20);
     const pins = ss()
       .pins.findBy("channel_id", activeChannel.channel_id)
-      .filter((pin) =>
-        ss()
-          .messages.findBy("channel_id", pin.channel_id)
-          .some((message) => message.ts === pin.message_ts),
-      )
+      .filter((pin) => channelMessages.some((message) => message.ts === pin.message_ts))
       .sort((a, b) => b.created - a.created)
       .slice(0, 20);
     const bookmarks = ss()
       .bookmarks.findBy("channel_id", activeChannel.channel_id)
-      .sort((a, b) => a.date_created - b.date_created)
+      .sort(compareSlackBookmarks)
       .slice(0, 20);
 
     const sidebar = renderChannelSidebar(channels, activeChannel.channel_id);
@@ -238,7 +235,7 @@ export function inspectorRoutes(ctx: RouteContext): void {
             .map((pin) =>
               renderPin(
                 pin,
-                messages.find((message) => message.ts === pin.message_ts),
+                channelMessages.find((message) => message.ts === pin.message_ts),
                 userMap,
               ),
             )
