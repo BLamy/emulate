@@ -75,6 +75,18 @@ export function filesRoutes(ctx: RouteContext): void {
       .channels.all()
       .find((ch) => !ch.is_im && !ch.is_mpim && ch.name === channel);
 
+  type ShareTargetRef = { key: string; channel?: SlackChannel; directUserId?: string };
+
+  const findDirectMessage = (authUserId: string, userId: string) => {
+    const members = [authUserId, userId].sort();
+    return ss()
+      .channels.all()
+      .find(
+        (ch) =>
+          ch.is_im && ch.members.length === members.length && [...ch.members].sort().join(",") === members.join(","),
+      );
+  };
+
   const findOrCreateDirectMessage = (authUser: { login: string }, userId: string) => {
     const targetUser = ss().users.findOneBy("user_id", userId);
     if (!targetUser || targetUser.deleted) return undefined;
@@ -83,12 +95,7 @@ export function filesRoutes(ctx: RouteContext): void {
     if (targetUser.user_id === authUserId) return undefined;
 
     const members = [authUserId, targetUser.user_id].sort();
-    const existing = ss()
-      .channels.all()
-      .find(
-        (ch) =>
-          ch.is_im && ch.members.length === members.length && [...ch.members].sort().join(",") === members.join(","),
-      );
+    const existing = findDirectMessage(authUserId, targetUser.user_id);
     if (existing) return existing;
 
     const team = ss().teams.all()[0];
@@ -113,8 +120,21 @@ export function filesRoutes(ctx: RouteContext): void {
     });
   };
 
-  const findShareTarget = (authUser: { login: string }, channel: string) =>
-    findChannel(channel) ?? (channel.startsWith("U") ? findOrCreateDirectMessage(authUser, channel) : undefined);
+  const resolveShareTarget = (authUser: { login: string }, channel: string): ShareTargetRef | undefined => {
+    const existingChannel = findChannel(channel);
+    if (existingChannel) return { key: existingChannel.channel_id, channel: existingChannel };
+    if (!channel.startsWith("U")) return undefined;
+
+    const targetUser = ss().users.findOneBy("user_id", channel);
+    if (!targetUser || targetUser.deleted) return undefined;
+
+    const authUserId = getAuthUserId(authUser);
+    if (targetUser.user_id === authUserId) return undefined;
+
+    const existingDirectMessage = findDirectMessage(authUserId, targetUser.user_id);
+    if (existingDirectMessage) return { key: existingDirectMessage.channel_id, channel: existingDirectMessage };
+    return { key: `user:${targetUser.user_id}`, directUserId: targetUser.user_id };
+  };
 
   app.post("/api/files.getUploadURLExternal", async (c) => {
     const authUser = c.get("authUser");
@@ -179,16 +199,6 @@ export function filesRoutes(ctx: RouteContext): void {
     }
 
     const authUserId = getAuthUserId(authUser);
-    const rawChannelIds = parseDestinationChannels(body.channel_id, body.channels);
-    const targets: SlackChannel[] = [];
-    for (const channelId of rawChannelIds) {
-      const channel = findShareTarget(authUser, channelId);
-      if (!channel) return slackError(c, "channel_not_found");
-      if (channel.is_archived) return slackError(c, "is_archived");
-      if (!canReadConversation(channel, getAuthSlackUser(authUser), authUserId)) return slackError(c, "not_in_channel");
-      targets.push(channel);
-    }
-
     const initialComment = typeof body.initial_comment === "string" ? body.initial_comment : "";
     const threadTs = typeof body.thread_ts === "string" ? body.thread_ts : undefined;
     const blocks = parseBlocks(body.blocks);
@@ -201,6 +211,29 @@ export function filesRoutes(ctx: RouteContext): void {
         return slackError(c, "file_not_found");
       }
       requestedSessions.push(session);
+    }
+
+    const rawChannelIds = parseDestinationChannels(body.channel_id, body.channels);
+    const targetRefs: ShareTargetRef[] = [];
+    const targetKeys = new Set<string>();
+    for (const channelId of rawChannelIds) {
+      const target = resolveShareTarget(authUser, channelId);
+      if (!target) return slackError(c, "channel_not_found");
+      if (target.channel?.is_archived) return slackError(c, "is_archived");
+      if (target.channel && !canReadConversation(target.channel, getAuthSlackUser(authUser), authUserId)) {
+        return slackError(c, "not_in_channel");
+      }
+      if (!targetKeys.has(target.key)) {
+        targetKeys.add(target.key);
+        targetRefs.push(target);
+      }
+    }
+
+    const targets: SlackChannel[] = [];
+    for (const target of targetRefs) {
+      const channel = target.channel ?? findOrCreateDirectMessage(authUser, target.directUserId ?? "");
+      if (!channel) return slackError(c, "channel_not_found");
+      targets.push(channel);
     }
 
     const completedFiles: SlackFile[] = [];

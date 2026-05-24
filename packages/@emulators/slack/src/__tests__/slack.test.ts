@@ -3288,6 +3288,66 @@ describe("Slack plugin - files", () => {
     expect(ss.messages.all()).toHaveLength(0);
   });
 
+  it("does not create direct messages when file completion validation fails", async () => {
+    insertSlackTestUser(store, "U000000002", "file-dm-target");
+
+    const uploadRes = await app.request(`${base}/api/files.getUploadURLExternal`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ filename: "dm-failure.txt", length: 7 }),
+    });
+    const upload = (await uploadRes.json()) as any;
+    await app.request(upload.upload_url, { method: "POST", body: "failure" });
+
+    const completeRes = await app.request(`${base}/api/files.completeUploadExternal`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        files: [{ id: upload.file_id, title: "DM Failure" }],
+        channel_id: "U000000002",
+        blocks: "not-json",
+      }),
+    });
+    const completed = (await completeRes.json()) as any;
+    expect(completed.ok).toBe(false);
+    expect(completed.error).toBe("invalid_blocks");
+
+    const ss = getSlackStore(store);
+    expect(ss.channels.all().filter((channel) => channel.is_im)).toHaveLength(0);
+    expect(ss.files.findOneBy("file_id", upload.file_id)).toBeUndefined();
+    expect(ss.fileUploadSessions.findOneBy("file_id", upload.file_id)?.completed).toBe(false);
+  });
+
+  it("deduplicates resolved file share channels", async () => {
+    const channel = getSlackStore(store).channels.findOneBy("name", "general")!.channel_id;
+
+    const uploadRes = await app.request(`${base}/api/files.getUploadURLExternal`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ filename: "dedupe.txt", length: 6 }),
+    });
+    const upload = (await uploadRes.json()) as any;
+    await app.request(upload.upload_url, { method: "POST", body: "dedupe" });
+
+    const completeRes = await app.request(`${base}/api/files.completeUploadExternal`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        files: [{ id: upload.file_id, title: "Dedupe" }],
+        channel_id: channel,
+        channels: "general",
+      }),
+    });
+    const completed = (await completeRes.json()) as any;
+    expect(completed.ok).toBe(true);
+
+    const ss = getSlackStore(store);
+    const messages = ss.messages.findBy("channel_id", channel);
+    const file = ss.files.findOneBy("file_id", upload.file_id)!;
+    expect(messages).toHaveLength(1);
+    expect(file.shares.public?.[channel]).toHaveLength(1);
+  });
+
   it("enforces file scopes in strict mode", async () => {
     store.setData("slack.strict_scopes", true);
     tokenMap.set("xoxb-files-read-token", { login: "U000000001", id: 1, scopes: ["files:read"] });
