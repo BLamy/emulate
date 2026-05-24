@@ -512,7 +512,9 @@ async function formValueToBuffer(value: unknown, kind: "file" | "string"): Promi
   return undefined;
 }
 
-function parseCompleteFiles(value: unknown): Array<{ id: string; title?: string; highlight_type?: string }> | undefined {
+function parseCompleteFiles(
+  value: unknown,
+): Array<{ id: string; title?: string; highlight_type?: string }> | undefined {
   const parsed = parseJsonMaybe(value);
   if (!Array.isArray(parsed)) return undefined;
 

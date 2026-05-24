@@ -53,10 +53,7 @@ function richMessagePreview(msg: Pick<SlackMessage, "text" | "blocks" | "attachm
       .filter((value): value is string => typeof value === "string" && value.trim().length > 0) ?? [];
   if (attachmentText.length > 0) return attachmentText.join(" ");
 
-  const fileText =
-    msg.files
-      ?.map((file) => file.title || file.name)
-      .filter((value) => value.trim().length > 0) ?? [];
+  const fileText = msg.files?.map((file) => file.title || file.name).filter((value) => value.trim().length > 0) ?? [];
   if (fileText.length > 0) return fileText.join(" ");
 
   if (msg.blocks?.length) return `${msg.blocks.length} ${msg.blocks.length === 1 ? "block" : "blocks"}`;
