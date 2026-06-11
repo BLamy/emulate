@@ -7,6 +7,7 @@ import { deleteFileAction } from "@/app/actions";
 import { Button } from "@/components/ui/button";
 import { CopyLinkButton } from "@/components/copy-link-button";
 import { formatBytes, formatDate } from "@/lib/format";
+import { sharePathForPathname } from "@/lib/share-url";
 import { cn } from "@/lib/utils";
 
 const IMAGE_EXT = /\.(avif|gif|jpe?g|png|svg|webp)$/i;
@@ -21,6 +22,7 @@ interface FileRowProps {
 export function FileRow({ url, pathname, size, uploadedAt }: FileRowProps) {
   const [removing, setRemoving] = useState(false);
   const [, startTransition] = useTransition();
+  const sharePath = sharePathForPathname(pathname);
 
   function handleDelete() {
     setRemoving(true);
@@ -44,12 +46,12 @@ export function FileRow({ url, pathname, size, uploadedAt }: FileRowProps) {
               <File className="size-4 text-muted-foreground" />
             </div>
           )}
-          <Link href={`/f/${pathname}`} className="min-w-0 flex-1 truncate font-medium hover:underline">
+          <Link href={sharePath} className="min-w-0 flex-1 truncate font-medium hover:underline">
             {pathname}
           </Link>
           <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(size)}</span>
           <span className="shrink-0 text-xs text-muted-foreground">{formatDate(uploadedAt)}</span>
-          <CopyLinkButton url={`/f/${pathname}`} compact />
+          <CopyLinkButton url={sharePath} compact />
           <Button
             variant="ghost"
             size="icon"

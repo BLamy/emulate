@@ -1,6 +1,7 @@
 "use server";
 
 import { put, del } from "@/lib/blob";
+import { sharePathForPathname } from "@/lib/share-url";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -25,7 +26,7 @@ export async function uploadFileAction(
     return { error: err instanceof Error ? err.message : "Upload failed" };
   }
 
-  redirect(`/f/${pathname}`);
+  redirect(sharePathForPathname(pathname));
 }
 
 export async function deleteFileAction(url: string) {

@@ -294,4 +294,44 @@ describe("Vercel Blob mounted under a path prefix", () => {
     const listRes = await app.request("/api/blob?prefix=prefixed/", { headers });
     expect(((await listRes.json()) as { blobs: unknown[] }).blobs).toHaveLength(0);
   });
+
+  it("copy resolves a blob URL that includes the mount prefix", async () => {
+    const app = createPrefixedApp();
+    const putRes = await app.request("/api/blob?pathname=prefixed/source.txt", {
+      method: "PUT",
+      headers,
+      body: "copy source",
+    });
+    const uploaded = (await putRes.json()) as { url: string };
+
+    const copyRes = await app.request(
+      `/api/blob?pathname=prefixed/copy.txt&fromUrl=${encodeURIComponent(uploaded.url)}`,
+      {
+        method: "PUT",
+        headers,
+      },
+    );
+    expect(copyRes.status).toBe(200);
+
+    const headRes = await app.request(
+      `/api/blob?url=${encodeURIComponent(`${prefixedBase}/blob/${storeId}/prefixed/copy.txt`)}`,
+      { headers },
+    );
+    expect(headRes.status).toBe(200);
+    expect(((await headRes.json()) as { size: number }).size).toBe("copy source".length);
+  });
+
+  it("does not strip the mount prefix from hosted Vercel Blob URLs", async () => {
+    const app = createPrefixedApp();
+    await app.request("/api/blob?pathname=emulate/vercel/hosted.txt", {
+      method: "PUT",
+      headers,
+      body: "hosted path",
+    });
+
+    const hostedUrl = `https://${storeId}.public.blob.vercel-storage.com/emulate/vercel/hosted.txt`;
+    const headRes = await app.request(`/api/blob?url=${encodeURIComponent(hostedUrl)}`, { headers });
+    expect(headRes.status).toBe(200);
+    expect(((await headRes.json()) as { pathname: string }).pathname).toBe("emulate/vercel/hosted.txt");
+  });
 });

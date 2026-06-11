@@ -6,12 +6,13 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Button } from "@/components/ui/button";
 import { ShareLinkField } from "@/components/share-link-field";
 import { formatBytes, formatDate } from "@/lib/format";
+import { pathnameFromShareSegments, sharePathForPathname } from "@/lib/share-url";
 
 export const dynamic = "force-dynamic";
 
 export default async function FilePage({ params }: { params: Promise<{ pathname: string[] }> }) {
   const { pathname } = await params;
-  const path = pathname.map(decodeURIComponent).join("/");
+  const path = pathnameFromShareSegments(pathname);
 
   let blob;
   try {
@@ -53,7 +54,7 @@ export default async function FilePage({ params }: { params: Promise<{ pathname:
               className="mx-auto max-h-80 max-w-full rounded-lg border border-border animate-in fade-in duration-500"
             />
           )}
-          <ShareLinkField path={`/f/${blob.pathname}`} />
+          <ShareLinkField path={sharePathForPathname(blob.pathname)} />
           <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5">
             {details.map(([label, value]) => (
               <div key={label} className="contents">

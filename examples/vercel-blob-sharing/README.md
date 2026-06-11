@@ -85,4 +85,5 @@ src/
     blob.ts                     @vercel/blob configured for the emulator
     format.ts                   Byte/date formatting helpers
     limits.ts                   Upload size cap shared with next.config.ts
+    share-url.ts                Share route encoding helpers
 ```
