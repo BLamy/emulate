@@ -244,3 +244,54 @@ describe("Vercel Blob direct HTTP error shapes", () => {
     expect(body.error.message).toBe("The requested blob does not exist");
   });
 });
+
+describe("Vercel Blob mounted under a path prefix", () => {
+  // When embedded (e.g. the Next.js adapter serves the emulator at
+  // /emulate/vercel), blob URLs carry the mount prefix and head/del/copy must
+  // still resolve them.
+  const prefixedBase = "http://app.example/emulate/vercel";
+  const headers = { authorization: `Bearer ${token}` };
+
+  function createPrefixedApp(): Hono {
+    const store = new Store();
+    const webhooks = new WebhookDispatcher();
+    const app = new Hono();
+    vercelPlugin.register(app as any, store, webhooks, prefixedBase);
+    return app;
+  }
+
+  it("head resolves a blob URL that includes the mount prefix", async () => {
+    const app = createPrefixedApp();
+    const putRes = await app.request("/api/blob?pathname=prefixed/head.txt", {
+      method: "PUT",
+      headers,
+      body: "head me",
+    });
+    const uploaded = (await putRes.json()) as { url: string };
+    expect(uploaded.url).toBe(`${prefixedBase}/blob/${storeId}/prefixed/head.txt`);
+
+    const headRes = await app.request(`/api/blob?url=${encodeURIComponent(uploaded.url)}`, { headers });
+    expect(headRes.status).toBe(200);
+    expect(((await headRes.json()) as { pathname: string }).pathname).toBe("prefixed/head.txt");
+  });
+
+  it("del resolves a blob URL that includes the mount prefix", async () => {
+    const app = createPrefixedApp();
+    const putRes = await app.request("/api/blob?pathname=prefixed/del.txt", {
+      method: "PUT",
+      headers,
+      body: "delete me",
+    });
+    const uploaded = (await putRes.json()) as { url: string };
+
+    const delRes = await app.request("/api/blob/delete", {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ urls: [uploaded.url] }),
+    });
+    expect(delRes.status).toBe(200);
+
+    const listRes = await app.request("/api/blob?prefix=prefixed/", { headers });
+    expect(((await listRes.json()) as { blobs: unknown[] }).blobs).toHaveLength(0);
+  });
+});
