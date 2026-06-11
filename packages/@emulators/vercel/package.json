@@ -38,6 +38,7 @@
     "@emulators/core": "workspace:*"
   },
   "devDependencies": {
+    "@vercel/blob": "^2.4.0",
     "tsup": "^8",
     "typescript": "^5.7",
     "vitest": "^4.1.0"

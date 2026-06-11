@@ -34,7 +34,7 @@ export const SERVICE_NAMES: readonly ServiceName[] = SERVICE_NAME_LIST;
 export const SERVICE_REGISTRY: Record<ServiceName, ServiceEntry> = {
   vercel: {
     label: "Vercel REST API emulator",
-    endpoints: "projects, deployments, domains, env vars, users, teams, file uploads, protection bypass",
+    endpoints: "projects, deployments, domains, env vars, users, teams, file uploads, protection bypass, blob storage",
     async load() {
       const mod = await import("@emulators/vercel");
       return { plugin: mod.vercelPlugin, seedFromConfig: mod.seedFromConfig };
