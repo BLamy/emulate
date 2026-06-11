@@ -5,7 +5,7 @@ import { getVercelStore } from "../store.js";
 import type { VercelStore } from "../store.js";
 import type { VercelBlob } from "../entities.js";
 
-const DEFAULT_CACHE_MAX_AGE = 31536000;
+const DEFAULT_CACHE_MAX_AGE = 2592000;
 const DEFAULT_LIST_LIMIT = 1000;
 
 const MIME_TYPES: Record<string, string> = {
@@ -109,27 +109,40 @@ function contentDispositionFor(pathname: string): string {
   return `attachment; filename="${basename}"`;
 }
 
-/**
- * Accepts either a full blob URL (as returned by the upload endpoint)
- * or a bare pathname and resolves it to a store pathname.
- */
-function resolvePathname(urlOrPathname: string): string {
+interface BlobRef {
+  pathname: string;
+  storeId?: string;
+}
+
+function resolveBlobRef(urlOrPathname: string): BlobRef {
   if (!/^https?:\/\//i.test(urlOrPathname)) {
-    return urlOrPathname;
+    return { pathname: urlOrPathname };
   }
-  let path: string;
+  let url: URL;
   try {
-    path = decodeURIComponent(new URL(urlOrPathname).pathname);
+    url = new URL(urlOrPathname);
   } catch {
-    return urlOrPathname;
+    return { pathname: urlOrPathname };
   }
-  const match = /^\/blob\/[^/]+\/(.+)$/.exec(path);
-  if (match) return match[1];
-  return path.replace(/^\//, "");
+  const path = decodeURIComponent(url.pathname);
+  const match = /^\/blob\/([^/]+)\/(.+)$/.exec(path);
+  if (match) {
+    return { storeId: match[1], pathname: match[2] };
+  }
+  const vercelHost = /^([^.]+)\.(?:public|private)\.blob\.vercel-storage\.com$/i.exec(url.hostname);
+  if (vercelHost) {
+    return { storeId: vercelHost[1], pathname: path.replace(/^\//, "") };
+  }
+  return { pathname: path.replace(/^\//, "") };
 }
 
 function findBlob(vs: VercelStore, storeId: string, pathname: string): VercelBlob | undefined {
   return vs.blobs.findBy("pathname", pathname).find((b) => b.storeId === storeId);
+}
+
+function findBlobRef(vs: VercelStore, storeId: string, ref: BlobRef): VercelBlob | undefined {
+  if (ref.storeId && ref.storeId !== storeId) return undefined;
+  return findBlob(vs, storeId, ref.pathname);
 }
 
 function headResponse(baseUrl: string, blob: VercelBlob): Record<string, unknown> {
@@ -171,7 +184,6 @@ export function blobRoutes({ app, store, baseUrl }: RouteContext): void {
 
     const pathname = c.req.header("x-add-random-suffix") === "1" ? withRandomSuffix(rawPathname) : rawPathname;
 
-    const body = Buffer.from(await c.req.arrayBuffer());
     const existing = findBlob(vs, storeId, pathname);
 
     const ifMatch = c.req.header("x-if-match");
@@ -184,6 +196,13 @@ export function blobRoutes({ app, store, baseUrl }: RouteContext): void {
       return blobErr(c, 400, "bad_request", "This blob already exists, use allowOverwrite: true to overwrite it");
     }
 
+    const fromUrl = c.req.query("fromUrl");
+    const source = fromUrl === undefined ? undefined : findBlobRef(vs, storeId, resolveBlobRef(fromUrl));
+    if (fromUrl !== undefined && !source) {
+      return blobErr(c, 404, "not_found", "The requested blob does not exist");
+    }
+
+    const body = source ? Buffer.from(source.dataBase64, "base64") : Buffer.from(await c.req.arrayBuffer());
     const contentType = c.req.header("x-content-type") || inferContentType(pathname);
     const maxAgeHeader = c.req.header("x-cache-control-max-age");
     const maxAge = maxAgeHeader ? parseInt(maxAgeHeader, 10) : NaN;
@@ -231,7 +250,7 @@ export function blobRoutes({ app, store, baseUrl }: RouteContext): void {
 
     const urlParam = c.req.query("url");
     if (urlParam !== undefined) {
-      const blob = findBlob(vs, storeId, resolvePathname(urlParam));
+      const blob = findBlobRef(vs, storeId, resolveBlobRef(urlParam));
       if (!blob) {
         return blobErr(c, 404, "not_found", "The requested blob does not exist");
       }
@@ -311,7 +330,7 @@ export function blobRoutes({ app, store, baseUrl }: RouteContext): void {
 
     const ifMatch = c.req.header("x-if-match");
     for (const urlOrPathname of urls) {
-      const blob = findBlob(vs, storeId, resolvePathname(urlOrPathname));
+      const blob = findBlobRef(vs, storeId, resolveBlobRef(urlOrPathname));
       if (!blob) continue;
       if (ifMatch) {
         const normalized = ifMatch.startsWith('"') ? ifMatch : `"${ifMatch}"`;

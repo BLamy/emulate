@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { Hono, serve } from "@emulators/core";
 import { Store, WebhookDispatcher, authMiddleware, type TokenMap } from "@emulators/core";
-import { put, head, list, del, BlobNotFoundError, BlobAccessError } from "@vercel/blob";
+import { put, head, list, del, copy, BlobNotFoundError, BlobAccessError } from "@vercel/blob";
 import { vercelPlugin } from "../index.js";
 
 const token = "vercel_blob_rw_teststore_secret";
@@ -63,7 +63,7 @@ describe("Vercel Blob via the @vercel/blob SDK", () => {
     const body = Buffer.from(await res.arrayBuffer());
     expect(body.equals(data)).toBe(true);
     expect(res.headers.get("etag")).toBe(result.etag);
-    expect(res.headers.get("cache-control")).toBe("public, max-age=31536000");
+    expect(res.headers.get("cache-control")).toBe("public, max-age=2592000");
   });
 
   it("put with addRandomSuffix appends a suffix before the extension", async () => {
@@ -136,6 +136,20 @@ describe("Vercel Blob via the @vercel/blob SDK", () => {
     expect(await res.text()).toBe("oidc token");
   });
 
+  it("copy duplicates source content into the destination blob", async () => {
+    const source = await put("copy/source.txt", "copy me", { access: "public", token });
+    const copied = await copy(source.url, "copy/dest.txt", { access: "public", token });
+
+    expect(copied.pathname).toBe("copy/dest.txt");
+    const res = await fetch(copied.url);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("copy me");
+
+    const meta = await head(copied.url, { token });
+    expect(meta.size).toBe("copy me".length);
+    expect(meta.etag).toBe(source.etag);
+  });
+
   it("list filters by prefix and returns metadata", async () => {
     await put("listing/a.txt", "a", { access: "public", token });
     await put("listing/b.txt", "b", { access: "public", token });
@@ -175,6 +189,22 @@ describe("Vercel Blob via the @vercel/blob SDK", () => {
     await expect(head(uploaded.url, { token })).rejects.toBeInstanceOf(BlobNotFoundError);
     const res = await fetch(uploaded.url);
     expect(res.status).toBe(404);
+  });
+
+  it("full blob URLs cannot target a different authenticated store", async () => {
+    const otherToken = "vercel_blob_rw_otherstore_secret";
+    const own = await put("store-scope/shared.txt", "own", { access: "public", token });
+    const other = await put("store-scope/shared.txt", "other", { access: "public", token: otherToken });
+
+    await expect(head(other.url, { token })).rejects.toBeInstanceOf(BlobNotFoundError);
+
+    await del(other.url, { token });
+    const ownRes = await fetch(own.url);
+    const otherRes = await fetch(other.url);
+    expect(ownRes.status).toBe(200);
+    expect(await ownRes.text()).toBe("own");
+    expect(otherRes.status).toBe(200);
+    expect(await otherRes.text()).toBe("other");
   });
 
   it("downloadUrl serves the content with an attachment disposition", async () => {
