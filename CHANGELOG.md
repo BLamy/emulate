@@ -1,8 +1,24 @@
 # Changelog
 
+<!-- release:start -->
+## 0.6.1
+
+### New Features
+
+- **Vercel Blob emulator** — local emulation for Vercel Blob store operations, including uploads, downloads, listings, deletes, copy support, and inspector visibility (#175)
+
+### Improvements
+
+- **Vercel Blob examples** — added and hardened an example app that exercises upload sharing URL handling
+
+### Contributors
+
+- @ctate
+
+<!-- release:end -->
+
 ## 0.6.0
 
-<!-- release:start -->
 ### New Features
 
 - **Expanded Slack emulator support** — stateful Slack writes for rich chat messages, updates, deletes, permalinks, ephemeral and scheduled messages, conversations and DMs, OAuth installs and scopes, user profiles and presence, modern file uploads, pins and bookmarks, App Home views, modals, inspector tabs, event delivery visibility, docs, and coverage matrix (#152-#164)
@@ -15,7 +31,6 @@
 ### Contributors
 
 - @ctate
-<!-- release:end -->
 
 ## 0.5.0
 
