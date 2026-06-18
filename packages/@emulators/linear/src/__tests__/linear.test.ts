@@ -17,11 +17,11 @@ function createTestApp() {
   return { app, store, tokenMap };
 }
 
-async function gql(app: Hono, query: string, variables?: Record<string, unknown>) {
+async function gql(app: Hono, query: string, variables?: Record<string, unknown>, token = "lin_test_admin") {
   return app.request(`${base}/graphql`, {
     method: "POST",
     headers: {
-      Authorization: "Bearer lin_test_admin",
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ query, variables }),
@@ -182,6 +182,184 @@ describe("Linear emulator", () => {
     expect(refreshGraphql.status).toBe(401);
     const refreshBody = (await refreshGraphql.json()) as { message: string };
     expect(refreshBody.message).toContain("refresh tokens");
+  });
+
+  it("requires read scope for queries in strict mode", async () => {
+    seedFromConfig(store, base, {
+      strict_scopes: true,
+      tokens: [
+        {
+          token: "lin_no_scopes",
+          user: "admin@linear.local",
+          scopes: [],
+        },
+        {
+          token: "lin_read_only",
+          user: "admin@linear.local",
+          scopes: ["read"],
+        },
+      ],
+    });
+
+    const missingRead = await gql(
+      app,
+      "{ viewer { email } issues { nodes { identifier } } }",
+      undefined,
+      "lin_no_scopes",
+    );
+    expect(missingRead.status).toBe(400);
+    const missingBody = (await missingRead.json()) as any;
+    expect(missingBody.errors[0].message).toContain("read");
+
+    const read = await gql(app, "{ viewer { email } issues { nodes { identifier } } }", undefined, "lin_read_only");
+    expect(read.status).toBe(200);
+    const readBody = (await read.json()) as any;
+    expect(readBody.errors).toBeUndefined();
+    expect(readBody.data.viewer.email).toBe("admin@linear.local");
+  });
+
+  it("does not let write scope satisfy admin in strict mode", async () => {
+    seedFromConfig(store, base, {
+      strict_scopes: true,
+      tokens: [
+        {
+          token: "lin_write_only",
+          user: "admin@linear.local",
+          scopes: ["write"],
+        },
+      ],
+    });
+
+    const res = await gql(
+      app,
+      `mutation($input: WebhookCreateInput!) {
+        webhookCreate(input: $input) { success webhook { id } }
+      }`,
+      { input: { url: "http://127.0.0.1:1/linear" } },
+      "lin_write_only",
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as any;
+    expect(body.errors[0].message).toContain("admin");
+  });
+
+  it("rejects OAuth scopes that are not registered on the app", async () => {
+    seedFromConfig(store, base, {
+      oauth_apps: [
+        {
+          client_id: "read-only-client",
+          client_secret: "read-only-secret",
+          name: "Read Only App",
+          redirect_uris: ["http://localhost:3000/callback"],
+          scopes: ["read"],
+        },
+      ],
+    });
+    const user = getLinearStore(store).users.findOneBy("email", "admin@linear.local")!;
+
+    const codeRes = await app.request(`${base}/oauth/authorize/callback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        user_ref: user.linear_id,
+        actor: "user",
+        redirect_uri: "http://localhost:3000/callback",
+        scope: "admin",
+        state: "state-1",
+        client_id: "read-only-client",
+      }).toString(),
+    });
+    expect(codeRes.status).toBe(400);
+    expect(await codeRes.text()).toContain("Invalid scope");
+
+    const clientCredentialsRes = await app.request(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: "read-only-client",
+        client_secret: "read-only-secret",
+        scope: "admin",
+      }).toString(),
+    });
+    expect(clientCredentialsRes.status).toBe(400);
+    const tokenBody = (await clientCredentialsRes.json()) as any;
+    expect(tokenBody.error).toBe("invalid_scope");
+  });
+
+  it("binds refresh tokens to the OAuth client that received them", async () => {
+    seedFromConfig(store, base, {
+      oauth_apps: [
+        {
+          client_id: "client-a",
+          client_secret: "secret-a",
+          name: "Client A",
+          redirect_uris: ["http://localhost:3000/callback"],
+          scopes: ["read"],
+        },
+        {
+          client_id: "client-b",
+          client_secret: "secret-b",
+          name: "Client B",
+          redirect_uris: ["http://localhost:3000/callback"],
+          scopes: ["read"],
+        },
+      ],
+    });
+    const user = getLinearStore(store).users.findOneBy("email", "admin@linear.local")!;
+
+    const codeRes = await app.request(`${base}/oauth/authorize/callback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        user_ref: user.linear_id,
+        actor: "user",
+        redirect_uri: "http://localhost:3000/callback",
+        scope: "read",
+        client_id: "client-a",
+      }).toString(),
+    });
+    const location = new URL(codeRes.headers.get("location") ?? "");
+
+    const tokenRes = await app.request(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: location.searchParams.get("code") ?? "",
+        client_id: "client-a",
+        client_secret: "secret-a",
+        redirect_uri: "http://localhost:3000/callback",
+      }).toString(),
+    });
+    expect(tokenRes.status).toBe(200);
+    const issued = (await tokenRes.json()) as any;
+
+    const wrongClient = await app.request(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: issued.refresh_token,
+        client_id: "client-b",
+        client_secret: "secret-b",
+      }).toString(),
+    });
+    expect(wrongClient.status).toBe(400);
+    const wrongClientBody = (await wrongClient.json()) as any;
+    expect(wrongClientBody.error).toBe("invalid_grant");
+
+    const rightClient = await app.request(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: issued.refresh_token,
+        client_id: "client-a",
+        client_secret: "secret-a",
+      }).toString(),
+    });
+    expect(rightClient.status).toBe(200);
   });
 
   it("stores webhook deliveries for issue mutations", async () => {

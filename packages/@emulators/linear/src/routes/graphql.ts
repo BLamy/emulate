@@ -508,49 +508,86 @@ async function readGraphQLBody(c: Context): Promise<{
 function createRoot(context: LinearGraphQLContext) {
   const { store, c, baseUrl } = context;
   const ls = () => getLinearStore(store);
+  const requireRead = () => requireLinearScopes(store, c, ["read"]);
 
   return {
-    viewer: () => formatUser(context, requireCurrentUser(context)),
-    organization: () => formatOrganization(context),
-    users: (args: ConnectionArgs & { filter?: Record<string, unknown> }) =>
-      connectUsers(context, filterUsers(context, ls().users.all(), args.filter), args),
+    viewer: () => {
+      requireRead();
+      return formatUser(context, requireCurrentUser(context));
+    },
+    organization: () => {
+      requireRead();
+      return formatOrganization(context);
+    },
+    users: (args: ConnectionArgs & { filter?: Record<string, unknown> }) => {
+      requireRead();
+      return connectUsers(context, filterUsers(context, ls().users.all(), args.filter), args);
+    },
     user: ({ id }: { id: string }) => {
+      requireRead();
       const user = resolveUser(store, id);
       return user ? formatUser(context, user) : null;
     },
-    teams: (args: ConnectionArgs) => connectTeams(context, sortByCreated(ls().teams.all()), args),
+    teams: (args: ConnectionArgs) => {
+      requireRead();
+      return connectTeams(context, sortByCreated(ls().teams.all()), args);
+    },
     team: ({ id }: { id: string }) => {
+      requireRead();
       const team = resolveTeam(store, id);
       return team ? formatTeam(context, team) : null;
     },
-    workflowStates: (args: ConnectionArgs) => connectStates(context, sortByPosition(ls().workflowStates.all()), args),
+    workflowStates: (args: ConnectionArgs) => {
+      requireRead();
+      return connectStates(context, sortByPosition(ls().workflowStates.all()), args);
+    },
     workflowState: ({ id }: { id: string }) => {
+      requireRead();
       const state = resolveState(store, id);
       return state ? formatState(context, state) : null;
     },
-    issues: (args: ConnectionArgs & { filter?: Record<string, unknown>; orderBy?: string }) =>
-      connectIssues(context, filteredIssues(context, args.filter, args.orderBy), args),
+    issues: (args: ConnectionArgs & { filter?: Record<string, unknown>; orderBy?: string }) => {
+      requireRead();
+      return connectIssues(context, filteredIssues(context, args.filter, args.orderBy), args);
+    },
     issue: ({ id }: { id: string }) => {
+      requireRead();
       const issue = resolveIssue(store, id);
       return issue ? formatIssue(context, issue) : null;
     },
-    comments: (args: ConnectionArgs) => connectComments(context, sortByCreated(ls().comments.all()), args),
+    comments: (args: ConnectionArgs) => {
+      requireRead();
+      return connectComments(context, sortByCreated(ls().comments.all()), args);
+    },
     comment: ({ id }: { id: string }) => {
+      requireRead();
       const comment = ls().comments.findOneBy("linear_id", id);
       return comment ? formatComment(context, comment) : null;
     },
-    issueLabels: (args: ConnectionArgs) => connectLabels(context, sortByCreated(ls().issueLabels.all()), args),
+    issueLabels: (args: ConnectionArgs) => {
+      requireRead();
+      return connectLabels(context, sortByCreated(ls().issueLabels.all()), args);
+    },
     issueLabel: ({ id }: { id: string }) => {
+      requireRead();
       const label = resolveLabel(store, id);
       return label ? formatLabel(context, label) : null;
     },
-    projects: (args: ConnectionArgs) => connectProjects(context, sortByCreated(ls().projects.all()), args),
+    projects: (args: ConnectionArgs) => {
+      requireRead();
+      return connectProjects(context, sortByCreated(ls().projects.all()), args);
+    },
     project: ({ id }: { id: string }) => {
+      requireRead();
       const project = resolveProject(store, id);
       return project ? formatProject(context, project) : null;
     },
-    cycles: (args: ConnectionArgs) => connectCycles(context, sortByCreated(ls().cycles.all()), args),
+    cycles: (args: ConnectionArgs) => {
+      requireRead();
+      return connectCycles(context, sortByCreated(ls().cycles.all()), args);
+    },
     cycle: ({ id }: { id: string }) => {
+      requireRead();
       const cycle = resolveCycle(store, id);
       return cycle ? formatCycle(context, cycle) : null;
     },
@@ -563,9 +600,12 @@ function createRoot(context: LinearGraphQLContext) {
       const webhook = ls().webhooks.findOneBy("linear_id", id);
       return webhook ? formatWebhook(context, webhook) : null;
     },
-    agentSessions: (args: ConnectionArgs) =>
-      connectAgentSessions(context, sortByCreated(ls().agentSessions.all()), args),
+    agentSessions: (args: ConnectionArgs) => {
+      requireRead();
+      return connectAgentSessions(context, sortByCreated(ls().agentSessions.all()), args);
+    },
     agentSession: ({ id }: { id: string }) => {
+      requireRead();
       const session = ls().agentSessions.findOneBy("linear_id", id);
       return session ? formatAgentSession(context, session) : null;
     },
@@ -1070,14 +1110,16 @@ function formatTeam(context: LinearGraphQLContext, team: LinearTeam) {
       ),
     cycles: (args: ConnectionArgs) =>
       connectCycles(context, sortByCreated(ls.cycles.findBy("team_id", team.linear_id)), args),
-    webhooks: (args: ConnectionArgs) =>
-      connectWebhooks(
+    webhooks: (args: ConnectionArgs) => {
+      requireLinearScopes(context.store, context.c, ["admin"]);
+      return connectWebhooks(
         context,
         sortByCreated(
           ls.webhooks.all().filter((webhook) => webhook.team_id === team.linear_id || webhook.all_public_teams),
         ),
         args,
-      ),
+      );
+    },
   };
 }
 

@@ -82,6 +82,17 @@ export function oauthRoutes({ app, store, tokenMap }: RouteContext): void {
     }
 
     const requestedScopes = normalizeScopes(scope, oauthApp?.scopes ?? ["read"]);
+    const invalidScopes = scopesOutsideApp(requestedScopes, oauthApp);
+    if (invalidScopes.length > 0) {
+      return c.html(
+        renderErrorPage(
+          "Invalid scope",
+          `The app is not registered for scopes: ${invalidScopes.join(", ")}.`,
+          SERVICE_LABEL,
+        ),
+        400,
+      );
+    }
     const title = actor === "app" ? "Install Linear App" : "Authorize Linear App";
     const appName = oauthApp?.name ?? "Linear App";
 
@@ -161,6 +172,17 @@ export function oauthRoutes({ app, store, tokenMap }: RouteContext): void {
         );
       }
     }
+    const invalidScopes = scopesOutsideApp(scopes, oauthApp);
+    if (invalidScopes.length > 0) {
+      return c.html(
+        renderErrorPage(
+          "Invalid scope",
+          `The app is not registered for scopes: ${invalidScopes.join(", ")}.`,
+          SERVICE_LABEL,
+        ),
+        400,
+      );
+    }
 
     const user =
       userRef && actor === "app"
@@ -224,6 +246,10 @@ export function oauthRoutes({ app, store, tokenMap }: RouteContext): void {
       if (pending.clientId !== clientAuth.clientId) {
         return oauthError("invalid_grant", "client_id does not match the authorization request.");
       }
+      const invalidScopes = scopesOutsideApp(pending.scopes, oauthApp);
+      if (invalidScopes.length > 0) {
+        return oauthError("invalid_scope", `The app is not registered for scopes: ${invalidScopes.join(", ")}.`);
+      }
       if (!verifyPkce(pending, bodyStr(body.code_verifier))) {
         return oauthError("invalid_grant", "PKCE verification failed.");
       }
@@ -237,12 +263,19 @@ export function oauthRoutes({ app, store, tokenMap }: RouteContext): void {
       if (!existing || existing.type !== "oauth_refresh" || existing.revoked) {
         return oauthError("invalid_grant", "Refresh token is invalid.");
       }
+      if (existing.app_id !== (oauthApp?.linear_id ?? null)) {
+        return oauthError("invalid_grant", "Refresh token was not issued to this OAuth app.");
+      }
       ls().tokens.update(existing.id, { revoked: true });
       return c.json(issueTokens(existing.user_id, existing.app_id, existing.actor_type, existing.scopes));
     }
 
     if (grantType === "client_credentials") {
       const scopes = normalizeScopes(bodyStr(body.scope), oauthApp?.scopes ?? ["read"]);
+      const invalidScopes = scopesOutsideApp(scopes, oauthApp);
+      if (invalidScopes.length > 0) {
+        return oauthError("invalid_scope", `The app is not registered for scopes: ${invalidScopes.join(", ")}.`);
+      }
       const appUserId =
         oauthApp?.app_user_id ??
         ls()
@@ -353,6 +386,12 @@ function clientCredentials(
 function normalizeActor(value: string | undefined): LinearTokenActorType | undefined {
   if (value === "app" || value === "user") return value;
   return undefined;
+}
+
+function scopesOutsideApp(scopes: string[], oauthApp: LinearOAuthApp | undefined): string[] {
+  if (!oauthApp) return [];
+  const allowed = new Set(oauthApp.scopes);
+  return scopes.filter((scope) => !allowed.has(scope));
 }
 
 function verifyPkce(code: PendingCode, verifier: string): boolean {

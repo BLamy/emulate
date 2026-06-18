@@ -39,8 +39,14 @@ export function requireLinearScopes(store: Store, c: Context, scopes: string[]):
   const strict = store.getData<boolean>("linear.strict_scopes") ?? false;
   if (!strict || scopes.length === 0) return;
   const provided = new Set(tokenScopes(store, c));
-  if (provided.has("admin") || provided.has("write")) return;
-  const missing = scopes.filter((scope) => !provided.has(scope));
+  if (provided.has("admin")) return;
+  const missing = scopes.filter((scope) => !hasLinearScope(provided, scope));
   if (missing.length === 0) return;
   throw new Error(`Missing required Linear scope: ${missing.join(", ")}`);
+}
+
+function hasLinearScope(provided: Set<string>, scope: string): boolean {
+  if (provided.has(scope)) return true;
+  if (scope === "issues:create" || scope === "comments:create") return provided.has("write");
+  return false;
 }

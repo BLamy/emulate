@@ -513,7 +513,7 @@ export const SERVICE_REGISTRY: Record<ServiceName, ServiceEntry> = {
     },
     defaultFallback(cfg) {
       const firstEmail = (cfg?.users as Array<{ email?: string }> | undefined)?.[0]?.email ?? "admin@linear.local";
-      return { login: firstEmail, id: 1, scopes: ["read", "write", "issues:create", "comments:create", "admin"] };
+      return { login: firstEmail, id: 1, scopes: [] };
     },
     initConfig: {
       linear: {
