@@ -825,7 +825,11 @@ describe("Linear emulator", () => {
     globalThis.fetch = async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url.startsWith(`${base}/graphql`)) {
-        return app.request(url, init);
+        return app.request(url, {
+          method: init?.method,
+          headers: init?.headers,
+          body: init?.body,
+        });
       }
       return originalFetch(input, init);
     };
@@ -846,28 +850,16 @@ describe("Linear emulator", () => {
     const oauthViewer = await oauthClient.viewer;
     expect(oauthViewer.email).toBe("admin@linear.local");
 
-    const teams = await client.client.rawRequest<
-      { teams: { nodes: Array<{ id: string; key: string; name: string }> } },
-      Record<string, never>
-    >(`query { teams { nodes { id key name } } }`);
-    expect(teams.data?.teams.nodes[0].key).toBe("ENG");
+    const teams = await client.teams();
+    expect(teams.nodes[0].key).toBe("ENG");
 
-    const teamId = teams.data!.teams.nodes[0].id;
-    const createIssue = await client.client.rawRequest<
-      { issueCreate: { success: boolean; issue: { id: string; identifier: string; title: string } } },
-      { input: { teamId: string; title: string } }
-    >(
-      `mutation($input: IssueCreateInput!) {
-        issueCreate(input: $input) {
-          success
-          issue { id identifier title }
-        }
-      }`,
-      { input: { teamId, title: "Created from SDK" } },
-    );
-    expect(createIssue.data?.issueCreate.issue.identifier).toBe("ENG-2");
+    const teamId = teams.nodes[0].id;
+    const createIssue = await client.createIssue({ teamId, title: "Created from SDK" });
+    expect(createIssue.success).toBe(true);
 
-    const issueId = createIssue.data!.issueCreate.issue.id;
+    expect(createIssue.issueId).toBeTruthy();
+    const issueId = createIssue.issueId!;
+    expect(getLinearStore(store).issues.findOneBy("linear_id", issueId)?.identifier).toBe("ENG-2");
     const updateIssue = await client.client.rawRequest<
       { issueUpdate: { success: boolean; issue: { id: string; title: string; priority: number } } },
       { input: { id: string; title: string; priority: number } }
@@ -918,18 +910,10 @@ describe("Linear emulator", () => {
     expect(nextIssuePage.data?.issues.nodes[0].identifier).toBe("ENG-2");
     expect(nextIssuePage.data?.issues.pageInfo.hasNextPage).toBe(false);
 
-    const createComment = await client.client.rawRequest<
-      { commentCreate: { success: boolean; comment: { id: string; body: string; issue: { identifier: string } } } },
-      { input: { issueId: string; body: string } }
-    >(
-      `mutation($input: CommentCreateInput!) {
-        commentCreate(input: $input) {
-          success
-          comment { id body issue { identifier } }
-        }
-      }`,
-      { input: { issueId, body: "Commented from SDK" } },
+    const createComment = await client.createComment({ issueId, body: "Commented from SDK" });
+    expect(createComment.success).toBe(true);
+    expect(getLinearStore(store).comments.findOneBy("linear_id", createComment.commentId!)?.body).toBe(
+      "Commented from SDK",
     );
-    expect(createComment.data?.commentCreate.comment.issue.identifier).toBe("ENG-2");
   });
 });

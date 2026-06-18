@@ -32,12 +32,23 @@ import type {
 import { dispatchLinearWebhook } from "../webhooks.js";
 
 const schema = buildSchema(`
+  scalar TeamFilter
+  scalar PaginationOrderBy
+
   type Query {
     viewer: User!
     organization: Organization!
     users(first: Int, after: String, last: Int, before: String, filter: UserFilter): UserConnection!
     user(id: String!): User
-    teams(first: Int, after: String, last: Int, before: String): TeamConnection!
+    teams(
+      first: Int
+      after: String
+      last: Int
+      before: String
+      filter: TeamFilter
+      includeArchived: Boolean
+      orderBy: PaginationOrderBy
+    ): TeamConnection!
     team(id: String!): Team
     workflowStates(first: Int, after: String, last: Int, before: String): WorkflowStateConnection!
     workflowState(id: String!): WorkflowState
@@ -87,7 +98,15 @@ const schema = buildSchema(`
     createdAt: String!
     updatedAt: String!
     users(first: Int, after: String, last: Int, before: String): UserConnection!
-    teams(first: Int, after: String, last: Int, before: String): TeamConnection!
+    teams(
+      first: Int
+      after: String
+      last: Int
+      before: String
+      filter: TeamFilter
+      includeArchived: Boolean
+      orderBy: PaginationOrderBy
+    ): TeamConnection!
   }
 
   type User {
@@ -137,6 +156,67 @@ const schema = buildSchema(`
     url: String!
     createdAt: String!
     updatedAt: String!
+    cycleIssueAutoAssignCompleted: Boolean
+    cycleLockToActive: Boolean
+    cycleIssueAutoAssignStarted: Boolean
+    cycleCalenderUrl: String
+    upcomingCycleCount: Int
+    autoArchivePeriod: Int
+    autoClosePeriod: Int
+    securitySettings: String
+    integrationsSettings: NodeRef
+    activeCycle: Cycle
+    triageResponsibility: NodeRef
+    scimGroupName: String
+    autoCloseStateId: String
+    cycleCooldownTime: Int
+    cycleStartDay: Int
+    defaultTemplateForMembers: NodeRef
+    defaultTemplateForNonMembers: NodeRef
+    defaultProjectTemplate: NodeRef
+    defaultIssueState: WorkflowState
+    cycleDuration: Int
+    icon: String
+    defaultTemplateForMembersId: String
+    defaultTemplateForNonMembersId: String
+    issueEstimationType: String
+    displayName: String
+    color: String
+    parent: Team
+    archivedAt: String
+    retiredAt: String
+    timezone: String
+    issueCount: Int
+    visibility: String
+    mergeWorkflowState: WorkflowState
+    draftWorkflowState: WorkflowState
+    startWorkflowState: WorkflowState
+    mergeableWorkflowState: WorkflowState
+    reviewWorkflowState: WorkflowState
+    markedAsDuplicateWorkflowState: WorkflowState
+    triageIssueState: WorkflowState
+    defaultIssueEstimate: Int
+    setIssueSortOrderOnStateChange: Boolean
+    allMembersCanJoin: Boolean
+    requirePriorityToLeaveTriage: Boolean
+    autoCloseChildIssues: Boolean
+    autoCloseParentIssues: Boolean
+    scimManaged: Boolean
+    inheritIssueEstimation: Boolean
+    inheritWorkflowStatuses: Boolean
+    cyclesEnabled: Boolean
+    issueEstimationExtended: Boolean
+    issueEstimationAllowZero: Boolean
+    aiDiscussionSummariesEnabled: Boolean
+    aiThreadSummariesEnabled: Boolean
+    groupIssueHistory: Boolean
+    slackIssueComments: Boolean
+    slackNewIssue: Boolean
+    slackIssueStatuses: Boolean
+    triageEnabled: Boolean
+    inviteHash: String
+    issueOrderingNoPriorityFirst: Boolean
+    issueSortOrderDefaultToBottom: Boolean
     states(first: Int, after: String, last: Int, before: String): WorkflowStateConnection!
     issues(first: Int, after: String, last: Int, before: String, filter: IssueFilter): IssueConnection!
     labels(first: Int, after: String, last: Int, before: String): IssueLabelConnection!
@@ -266,6 +346,10 @@ const schema = buildSchema(`
     user: User
   }
 
+  type NodeRef {
+    id: String!
+  }
+
   type PageInfo {
     hasNextPage: Boolean!
     hasPreviousPage: Boolean!
@@ -297,12 +381,12 @@ const schema = buildSchema(`
   type AgentSessionConnection { nodes: [AgentSession!]! edges: [AgentSessionEdge!]! pageInfo: PageInfo! }
   type AgentActivityConnection { nodes: [AgentActivity!]! edges: [AgentActivityEdge!]! pageInfo: PageInfo! }
 
-  type IssuePayload { success: Boolean! issue: Issue }
-  type CommentPayload { success: Boolean! comment: Comment }
-  type IssueLabelPayload { success: Boolean! issueLabel: IssueLabel }
-  type WebhookPayload { success: Boolean! webhook: Webhook }
-  type AgentSessionPayload { success: Boolean! agentSession: AgentSession }
-  type AgentActivityPayload { success: Boolean! agentActivity: AgentActivity }
+  type IssuePayload { success: Boolean! lastSyncId: Float issue: Issue }
+  type CommentPayload { success: Boolean! lastSyncId: Float comment: Comment }
+  type IssueLabelPayload { success: Boolean! lastSyncId: Float issueLabel: IssueLabel }
+  type WebhookPayload { success: Boolean! lastSyncId: Float webhook: Webhook }
+  type AgentSessionPayload { success: Boolean! lastSyncId: Float agentSession: AgentSession }
+  type AgentActivityPayload { success: Boolean! lastSyncId: Float agentActivity: AgentActivity }
   type ArchivePayload { success: Boolean! }
 
   input StringComparator {
@@ -528,9 +612,9 @@ function createRoot(context: LinearGraphQLContext) {
       const user = resolveUser(store, id);
       return user ? formatUser(context, user) : null;
     },
-    teams: (args: ConnectionArgs) => {
+    teams: (args: ConnectionArgs & { filter?: unknown; includeArchived?: boolean; orderBy?: unknown }) => {
       requireRead();
-      return connectTeams(context, sortByCreated(ls().teams.all()), args);
+      return connectTeams(context, filteredTeams(context, args.filter, args.includeArchived, args.orderBy), args);
     },
     team: ({ id }: { id: string }) => {
       requireRead();
@@ -659,7 +743,7 @@ function createRoot(context: LinearGraphQLContext) {
       if (issue.delegate_id) {
         await createAgentSessionForIssue(context, issue, issue.delegate_id, actor);
       }
-      return { success: true, issue: formatIssue(context, issue) };
+      return mutationPayload({ success: true, issue: formatIssue(context, issue) });
     },
 
     issueUpdate: async ({ input }: { input: Record<string, unknown> }) => {
@@ -710,7 +794,7 @@ function createRoot(context: LinearGraphQLContext) {
       if (updated.delegate_id && updated.delegate_id !== issue.delegate_id) {
         await createAgentSessionForIssue(context, updated, updated.delegate_id, actor);
       }
-      return { success: true, issue: formatIssue(context, updated) };
+      return mutationPayload({ success: true, issue: formatIssue(context, updated) });
     },
 
     issueDelete: async ({ id }: { id: string }) => {
@@ -749,7 +833,7 @@ function createRoot(context: LinearGraphQLContext) {
         teamId: updated.team_id,
         url: updated.url,
       });
-      return { success: true, issue: formatIssue(context, updated) };
+      return mutationPayload({ success: true, issue: formatIssue(context, updated) });
     },
 
     issueUnarchive: async ({ id }: { id: string }) => {
@@ -764,7 +848,7 @@ function createRoot(context: LinearGraphQLContext) {
         teamId: updated.team_id,
         url: updated.url,
       });
-      return { success: true, issue: formatIssue(context, updated) };
+      return mutationPayload({ success: true, issue: formatIssue(context, updated) });
     },
 
     commentCreate: async ({ input }: { input: Record<string, unknown> }) => {
@@ -793,7 +877,7 @@ function createRoot(context: LinearGraphQLContext) {
           .find((user) => user.app && comment.body.includes(user.display_name));
         if (appUser) await createAgentSessionForComment(context, comment, appUser.linear_id, actor);
       }
-      return { success: true, comment: formatComment(context, comment) };
+      return mutationPayload({ success: true, comment: formatComment(context, comment) });
     },
 
     commentUpdate: async ({ input }: { input: Record<string, unknown> }) => {
@@ -811,7 +895,7 @@ function createRoot(context: LinearGraphQLContext) {
         url: issue.url,
         updatedFrom: before,
       });
-      return { success: true, comment: formatComment(context, updated) };
+      return mutationPayload({ success: true, comment: formatComment(context, updated) });
     },
 
     commentDelete: async ({ id }: { id: string }) => {
@@ -853,7 +937,7 @@ function createRoot(context: LinearGraphQLContext) {
         actor: requireCurrentUser(context),
         teamId: label.team_id,
       });
-      return { success: true, issueLabel: formatLabel(context, label) };
+      return mutationPayload({ success: true, issueLabel: formatLabel(context, label) });
     },
 
     issueLabelUpdate: async ({ input }: { input: Record<string, unknown> }) => {
@@ -873,7 +957,7 @@ function createRoot(context: LinearGraphQLContext) {
         teamId: updated.team_id,
         updatedFrom: before,
       });
-      return { success: true, issueLabel: formatLabel(context, updated) };
+      return mutationPayload({ success: true, issueLabel: formatLabel(context, updated) });
     },
 
     issueLabelDelete: async ({ id }: { id: string }) => {
@@ -912,7 +996,7 @@ function createRoot(context: LinearGraphQLContext) {
         url: updated.url,
         updatedFrom: before,
       });
-      return { success: true, issue: formatIssue(context, updated) };
+      return mutationPayload({ success: true, issue: formatIssue(context, updated) });
     },
 
     issueRemoveLabel: async ({ id, labelId }: { id: string; labelId: string }) => {
@@ -933,7 +1017,7 @@ function createRoot(context: LinearGraphQLContext) {
         url: updated.url,
         updatedFrom: before,
       });
-      return { success: true, issue: formatIssue(context, updated) };
+      return mutationPayload({ success: true, issue: formatIssue(context, updated) });
     },
 
     webhookCreate: ({ input }: { input: Record<string, unknown> }) => {
@@ -950,7 +1034,7 @@ function createRoot(context: LinearGraphQLContext) {
         secret: nullableString(input.secret),
         creator_id: requireCurrentUser(context).linear_id,
       });
-      return { success: true, webhook: formatWebhook(context, webhook) };
+      return mutationPayload({ success: true, webhook: formatWebhook(context, webhook) });
     },
 
     webhookDelete: ({ id }: { id: string }) => {
@@ -978,7 +1062,7 @@ function createRoot(context: LinearGraphQLContext) {
         nullableString(input.plan),
         nullableString(input.externalUrl),
       );
-      return { success: true, agentSession: formatAgentSession(context, session) };
+      return mutationPayload({ success: true, agentSession: formatAgentSession(context, session) });
     },
 
     agentSessionCreateOnComment: async ({ input }: { input: Record<string, unknown> }) => {
@@ -999,7 +1083,7 @@ function createRoot(context: LinearGraphQLContext) {
         nullableString(input.plan),
         nullableString(input.externalUrl),
       );
-      return { success: true, agentSession: formatAgentSession(context, session) };
+      return mutationPayload({ success: true, agentSession: formatAgentSession(context, session) });
     },
 
     agentSessionUpdate: ({ input }: { input: Record<string, unknown> }) => {
@@ -1010,7 +1094,7 @@ function createRoot(context: LinearGraphQLContext) {
         plan: "plan" in input ? nullableString(input.plan) : session.plan,
         external_url: "externalUrl" in input ? nullableString(input.externalUrl) : session.external_url,
       })!;
-      return { success: true, agentSession: formatAgentSession(context, updated) };
+      return mutationPayload({ success: true, agentSession: formatAgentSession(context, updated) });
     },
 
     agentActivityCreate: async ({ input }: { input: Record<string, unknown> }) => {
@@ -1034,9 +1118,13 @@ function createRoot(context: LinearGraphQLContext) {
           teamId: session.issue_id ? requireIssue(store, session.issue_id).team_id : null,
         });
       }
-      return { success: true, agentActivity: formatAgentActivity(context, activity) };
+      return mutationPayload({ success: true, agentActivity: formatAgentActivity(context, activity) });
     },
   };
+}
+
+function mutationPayload<T extends Record<string, unknown>>(payload: T): T & { lastSyncId: number } {
+  return { lastSyncId: Date.now(), ...payload };
 }
 
 function formatOrganization(context: LinearGraphQLContext) {
@@ -1051,8 +1139,8 @@ function formatOrganization(context: LinearGraphQLContext) {
     updatedAt: org.updated_at,
     users: (args: ConnectionArgs) =>
       connectUsers(context, sortByCreated(getLinearStore(context.store).users.all()), args),
-    teams: (args: ConnectionArgs) =>
-      connectTeams(context, sortByCreated(getLinearStore(context.store).teams.all()), args),
+    teams: (args: ConnectionArgs & { filter?: unknown; includeArchived?: boolean; orderBy?: unknown }) =>
+      connectTeams(context, filteredTeams(context, args.filter, args.includeArchived, args.orderBy), args),
   };
 }
 
@@ -1108,6 +1196,9 @@ function formatUser(context: LinearGraphQLContext, user: LinearUser) {
 
 function formatTeam(context: LinearGraphQLContext, team: LinearTeam) {
   const ls = getLinearStore(context.store);
+  const teamStates = () => ls.workflowStates.findBy("team_id", team.linear_id);
+  const stateByType = (type: LinearWorkflowState["type"]) => teamStates().find((state) => state.type === type);
+  const formatOptionalState = (state: LinearWorkflowState | undefined) => (state ? formatState(context, state) : null);
   return {
     id: team.linear_id,
     key: team.key,
@@ -1117,6 +1208,70 @@ function formatTeam(context: LinearGraphQLContext, team: LinearTeam) {
     url: team.url,
     createdAt: team.created_at,
     updatedAt: team.updated_at,
+    cycleIssueAutoAssignCompleted: false,
+    cycleLockToActive: false,
+    cycleIssueAutoAssignStarted: false,
+    cycleCalenderUrl: null,
+    upcomingCycleCount: 0,
+    autoArchivePeriod: null,
+    autoClosePeriod: null,
+    securitySettings: null,
+    integrationsSettings: null,
+    activeCycle: () => {
+      const activeCycle = ls.cycles.findBy("team_id", team.linear_id)[0];
+      return activeCycle ? formatCycle(context, activeCycle) : null;
+    },
+    triageResponsibility: null,
+    scimGroupName: null,
+    autoCloseStateId: null,
+    cycleCooldownTime: 0,
+    cycleStartDay: 1,
+    defaultTemplateForMembers: null,
+    defaultTemplateForNonMembers: null,
+    defaultProjectTemplate: null,
+    defaultIssueState: () => formatOptionalState(stateByType("unstarted") ?? teamStates()[0]),
+    cycleDuration: 2,
+    icon: null,
+    defaultTemplateForMembersId: null,
+    defaultTemplateForNonMembersId: null,
+    issueEstimationType: "notUsed",
+    displayName: team.name,
+    color: "#5e6ad2",
+    parent: null,
+    archivedAt: null,
+    retiredAt: null,
+    timezone: "UTC",
+    issueCount: () => ls.issues.count((issue) => issue.team_id === team.linear_id),
+    visibility: team.private ? "private" : "public",
+    mergeWorkflowState: () => formatOptionalState(stateByType("completed")),
+    draftWorkflowState: () => formatOptionalState(stateByType("backlog")),
+    startWorkflowState: () => formatOptionalState(stateByType("started")),
+    mergeableWorkflowState: () => formatOptionalState(stateByType("started")),
+    reviewWorkflowState: () => formatOptionalState(stateByType("started")),
+    markedAsDuplicateWorkflowState: () => formatOptionalState(stateByType("canceled")),
+    triageIssueState: () => formatOptionalState(stateByType("unstarted") ?? teamStates()[0]),
+    defaultIssueEstimate: null,
+    setIssueSortOrderOnStateChange: false,
+    allMembersCanJoin: !team.private,
+    requirePriorityToLeaveTriage: false,
+    autoCloseChildIssues: false,
+    autoCloseParentIssues: false,
+    scimManaged: false,
+    inheritIssueEstimation: false,
+    inheritWorkflowStatuses: false,
+    cyclesEnabled: true,
+    issueEstimationExtended: false,
+    issueEstimationAllowZero: true,
+    aiDiscussionSummariesEnabled: false,
+    aiThreadSummariesEnabled: false,
+    groupIssueHistory: false,
+    slackIssueComments: false,
+    slackNewIssue: false,
+    slackIssueStatuses: false,
+    triageEnabled: false,
+    inviteHash: null,
+    issueOrderingNoPriorityFirst: false,
+    issueSortOrderDefaultToBottom: false,
     states: (args: ConnectionArgs) =>
       connectStates(context, sortByPosition(ls.workflowStates.findBy("team_id", team.linear_id)), args),
     issues: (args: ConnectionArgs & { filter?: Record<string, unknown> }) =>
@@ -1411,6 +1566,51 @@ function filteredIssues(
   }
   if (!filter) return issues;
   return issues.filter((issue) => issueMatchesFilter(context, issue, filter));
+}
+
+function filteredTeams(
+  context: LinearGraphQLContext,
+  filter?: unknown,
+  _includeArchived?: boolean,
+  orderBy?: unknown,
+): LinearTeam[] {
+  let teams = sortByCreated(getLinearStore(context.store).teams.all());
+  if (isRecord(orderBy)) {
+    const field = typeof orderBy.field === "string" ? orderBy.field : Object.keys(orderBy)[0];
+    const direction =
+      typeof orderBy.direction === "string"
+        ? orderBy.direction
+        : field && typeof orderBy[field] === "string"
+          ? orderBy[field]
+          : undefined;
+    const multiplier = direction?.toLowerCase().startsWith("desc") ? -1 : 1;
+    if (field === "key" || field === "name" || field === "createdAt" || field === "updatedAt") {
+      teams = [...teams].sort((a, b) => teamOrderValue(a, field).localeCompare(teamOrderValue(b, field)) * multiplier);
+    }
+  }
+  if (!isRecord(filter)) return teams;
+  return teams.filter((team) => teamMatchesFilter(team, filter));
+}
+
+function teamOrderValue(team: LinearTeam, field: string): string {
+  if (field === "key") return team.key;
+  if (field === "name") return team.name;
+  if (field === "updatedAt") return team.updated_at;
+  return team.created_at;
+}
+
+function teamMatchesFilter(team: LinearTeam, filter: Record<string, unknown>): boolean {
+  const checks = [
+    aliasComparatorMatches([team.linear_id, team.key, team.name], filter.id),
+    comparatorMatches(team.key, filter.key),
+    comparatorMatches(team.name, filter.name),
+    comparatorMatches(team.name, filter.displayName),
+    typeof filter.private !== "boolean" || team.private === filter.private,
+  ];
+  const orFilters = Array.isArray(filter.or) ? filter.or.filter(isRecord) : [];
+  const hasOwnPredicate = ["id", "key", "name", "displayName", "private"].some((field) => filter[field] != null);
+  const ownMatch = hasOwnPredicate ? checks.every(Boolean) : orFilters.length === 0;
+  return ownMatch || orFilters.some((orFilter) => teamMatchesFilter(team, orFilter));
 }
 
 function issueMatchesFilter(
