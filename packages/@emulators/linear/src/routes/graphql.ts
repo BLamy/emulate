@@ -70,23 +70,23 @@ const schema = buildSchema(`
 
   type Mutation {
     issueCreate(input: IssueCreateInput!): IssuePayload!
-    issueUpdate(input: IssueUpdateInput!): IssuePayload!
-    issueDelete(id: String!): ArchivePayload!
-    issueArchive(id: String!): IssuePayload!
-    issueUnarchive(id: String!): IssuePayload!
+    issueUpdate(id: String, input: IssueUpdateInput!): IssuePayload!
+    issueDelete(id: String!, permanentlyDelete: Boolean): IssueArchivePayload!
+    issueArchive(id: String!, trash: Boolean): IssueArchivePayload!
+    issueUnarchive(id: String!): IssueArchivePayload!
     commentCreate(input: CommentCreateInput!): CommentPayload!
-    commentUpdate(input: CommentUpdateInput!): CommentPayload!
-    commentDelete(id: String!): ArchivePayload!
-    issueLabelCreate(input: IssueLabelCreateInput!): IssueLabelPayload!
-    issueLabelUpdate(input: IssueLabelUpdateInput!): IssueLabelPayload!
-    issueLabelDelete(id: String!): ArchivePayload!
+    commentUpdate(id: String, input: CommentUpdateInput!, skipEditedAt: Boolean): CommentPayload!
+    commentDelete(id: String!): DeletePayload!
+    issueLabelCreate(input: IssueLabelCreateInput!, replaceTeamLabels: Boolean): IssueLabelPayload!
+    issueLabelUpdate(id: String, input: IssueLabelUpdateInput!, replaceTeamLabels: Boolean): IssueLabelPayload!
+    issueLabelDelete(id: String!): DeletePayload!
     issueAddLabel(id: String!, labelId: String!): IssuePayload!
     issueRemoveLabel(id: String!, labelId: String!): IssuePayload!
     webhookCreate(input: WebhookCreateInput!): WebhookPayload!
-    webhookDelete(id: String!): ArchivePayload!
-    agentSessionCreateOnIssue(input: AgentSessionCreateOnIssueInput!): AgentSessionPayload!
-    agentSessionCreateOnComment(input: AgentSessionCreateOnCommentInput!): AgentSessionPayload!
-    agentSessionUpdate(input: AgentSessionUpdateInput!): AgentSessionPayload!
+    webhookDelete(id: String!): DeletePayload!
+    agentSessionCreateOnIssue(input: AgentSessionCreateOnIssue!): AgentSessionPayload!
+    agentSessionCreateOnComment(input: AgentSessionCreateOnComment!): AgentSessionPayload!
+    agentSessionUpdate(id: String, input: AgentSessionUpdateInput!): AgentSessionPayload!
     agentActivityCreate(input: AgentActivityCreateInput!): AgentActivityPayload!
   }
 
@@ -387,7 +387,8 @@ const schema = buildSchema(`
   type WebhookPayload { success: Boolean! lastSyncId: Float webhook: Webhook }
   type AgentSessionPayload { success: Boolean! lastSyncId: Float agentSession: AgentSession }
   type AgentActivityPayload { success: Boolean! lastSyncId: Float agentActivity: AgentActivity }
-  type ArchivePayload { success: Boolean! }
+  type IssueArchivePayload { success: Boolean! lastSyncId: Float entity: Issue }
+  type DeletePayload { success: Boolean! lastSyncId: Float entityId: String }
 
   input StringComparator {
     eq: String
@@ -441,7 +442,7 @@ const schema = buildSchema(`
   }
 
   input IssueUpdateInput {
-    id: String!
+    id: String
     title: String
     description: String
     priority: Int
@@ -463,7 +464,7 @@ const schema = buildSchema(`
   }
 
   input CommentUpdateInput {
-    id: String!
+    id: String
     body: String!
   }
 
@@ -475,7 +476,7 @@ const schema = buildSchema(`
   }
 
   input IssueLabelUpdateInput {
-    id: String!
+    id: String
     name: String
     color: String
     description: String
@@ -491,14 +492,14 @@ const schema = buildSchema(`
     enabled: Boolean
   }
 
-  input AgentSessionCreateOnIssueInput {
+  input AgentSessionCreateOnIssue {
     issueId: String!
     agentUserId: String
     plan: String
     externalUrl: String
   }
 
-  input AgentSessionCreateOnCommentInput {
+  input AgentSessionCreateOnComment {
     commentId: String!
     agentUserId: String
     plan: String
@@ -506,7 +507,7 @@ const schema = buildSchema(`
   }
 
   input AgentSessionUpdateInput {
-    id: String!
+    id: String
     state: String
     plan: String
     externalUrl: String
@@ -705,9 +706,7 @@ function createRoot(context: LinearGraphQLContext) {
       if (requestedStateId && !state) throw new Error(`Workflow state not found: ${requestedStateId}`);
       if (!state) throw new Error("No workflow state exists for the selected team");
       const number = nextIssueNumber(store, team.linear_id);
-      const labelIds = arrayInput(input.labelIds)
-        .map((labelId) => resolveLabel(store, labelId, team.linear_id)?.linear_id)
-        .filter((id): id is string => Boolean(id));
+      const labelIds = resolveIssueLabelIds(store, input.labelIds, team.linear_id);
       const now = new Date().toISOString();
       const issue = ls().issues.insert({
         linear_id: linearId(),
@@ -718,11 +717,11 @@ function createRoot(context: LinearGraphQLContext) {
         description: nullableString(input.description),
         priority: normalizePriority(input.priority),
         state_id: state.linear_id,
-        assignee_id: resolveUser(store, stringInput(input.assigneeId))?.linear_id ?? null,
+        assignee_id: resolveNullableUserId(store, input.assigneeId, "assigneeId"),
         creator_id: actor.linear_id,
-        delegate_id: resolveUser(store, stringInput(input.delegateId))?.linear_id ?? null,
-        project_id: resolveProject(store, stringInput(input.projectId))?.linear_id ?? null,
-        cycle_id: resolveCycle(store, stringInput(input.cycleId), team.linear_id)?.linear_id ?? null,
+        delegate_id: resolveNullableUserId(store, input.delegateId, "delegateId"),
+        project_id: resolveNullableProjectId(store, input.projectId, team.linear_id),
+        cycle_id: resolveNullableCycleId(store, input.cycleId, team.linear_id),
         label_ids: labelIds,
         url: `${baseUrl}/issue/${team.key}-${number}`,
         archived_at: null,
@@ -747,10 +746,10 @@ function createRoot(context: LinearGraphQLContext) {
       return mutationPayload({ success: true, issue: formatIssue(context, issue) });
     },
 
-    issueUpdate: async ({ input }: { input: Record<string, unknown> }) => {
+    issueUpdate: async ({ id, input }: { id?: string; input: Record<string, unknown> }) => {
       requireLinearScopes(store, c, ["write"]);
       const actor = requireCurrentUser(context);
-      const issue = requireIssue(store, input.id);
+      const issue = requireIssue(store, id ?? input.id);
       const before = issueWebhookPayload(context, issue);
       const patch: Partial<LinearIssue> = {};
       if ("title" in input) patch.title = requiredString(input.title, "title");
@@ -766,19 +765,11 @@ function createRoot(context: LinearGraphQLContext) {
         patch.completed_at = state.type === "completed" ? (issue.completed_at ?? now) : null;
         patch.canceled_at = state.type === "canceled" ? (issue.canceled_at ?? now) : null;
       }
-      if ("assigneeId" in input)
-        patch.assignee_id = resolveUser(store, stringInput(input.assigneeId))?.linear_id ?? null;
-      if ("delegateId" in input)
-        patch.delegate_id = resolveUser(store, stringInput(input.delegateId))?.linear_id ?? null;
-      if ("projectId" in input)
-        patch.project_id = resolveProject(store, stringInput(input.projectId))?.linear_id ?? null;
-      if ("cycleId" in input)
-        patch.cycle_id = resolveCycle(store, stringInput(input.cycleId), issue.team_id)?.linear_id ?? null;
-      if ("labelIds" in input) {
-        patch.label_ids = arrayInput(input.labelIds)
-          .map((labelId) => resolveLabel(store, labelId, issue.team_id)?.linear_id)
-          .filter((id): id is string => Boolean(id));
-      }
+      if ("assigneeId" in input) patch.assignee_id = resolveNullableUserId(store, input.assigneeId, "assigneeId");
+      if ("delegateId" in input) patch.delegate_id = resolveNullableUserId(store, input.delegateId, "delegateId");
+      if ("projectId" in input) patch.project_id = resolveNullableProjectId(store, input.projectId, issue.team_id);
+      if ("cycleId" in input) patch.cycle_id = resolveNullableCycleId(store, input.cycleId, issue.team_id);
+      if ("labelIds" in input) patch.label_ids = resolveIssueLabelIds(store, input.labelIds, issue.team_id);
       if ("archivedAt" in input) patch.archived_at = nullableString(input.archivedAt);
       if ("dueDate" in input) patch.due_date = nullableString(input.dueDate);
       const updated = ls().issues.update(issue.id, patch);
@@ -819,7 +810,7 @@ function createRoot(context: LinearGraphQLContext) {
         teamId: issue.team_id,
         url: issue.url,
       });
-      return { success: true };
+      return issueArchivePayload(context, issue);
     },
 
     issueArchive: async ({ id }: { id: string }) => {
@@ -834,7 +825,7 @@ function createRoot(context: LinearGraphQLContext) {
         teamId: updated.team_id,
         url: updated.url,
       });
-      return mutationPayload({ success: true, issue: formatIssue(context, updated) });
+      return issueArchivePayload(context, updated);
     },
 
     issueUnarchive: async ({ id }: { id: string }) => {
@@ -849,7 +840,7 @@ function createRoot(context: LinearGraphQLContext) {
         teamId: updated.team_id,
         url: updated.url,
       });
-      return mutationPayload({ success: true, issue: formatIssue(context, updated) });
+      return issueArchivePayload(context, updated);
     },
 
     commentCreate: async ({ input }: { input: Record<string, unknown> }) => {
@@ -881,9 +872,9 @@ function createRoot(context: LinearGraphQLContext) {
       return mutationPayload({ success: true, comment: formatComment(context, comment) });
     },
 
-    commentUpdate: async ({ input }: { input: Record<string, unknown> }) => {
+    commentUpdate: async ({ id, input }: { id?: string; input: Record<string, unknown> }) => {
       requireLinearScopes(store, c, ["write"]);
-      const comment = requireComment(store, input.id);
+      const comment = requireComment(store, id ?? input.id);
       const before = commentWebhookPayload(context, comment);
       const updated = ls().comments.update(comment.id, { body: requiredString(input.body, "body") })!;
       const issue = requireIssue(store, updated.issue_id);
@@ -918,7 +909,7 @@ function createRoot(context: LinearGraphQLContext) {
         teamId: issue.team_id,
         url: issue.url,
       });
-      return { success: true };
+      return deletePayload(comment.linear_id);
     },
 
     issueLabelCreate: async ({ input }: { input: Record<string, unknown> }) => {
@@ -941,9 +932,9 @@ function createRoot(context: LinearGraphQLContext) {
       return mutationPayload({ success: true, issueLabel: formatLabel(context, label) });
     },
 
-    issueLabelUpdate: async ({ input }: { input: Record<string, unknown> }) => {
+    issueLabelUpdate: async ({ id, input }: { id?: string; input: Record<string, unknown> }) => {
       requireLinearScopes(store, c, ["write"]);
-      const label = requireLabel(store, input.id);
+      const label = requireLabel(store, id ?? input.id);
       const before = labelWebhookPayload(context, label);
       const updated = ls().issueLabels.update(label.id, {
         name: stringInput(input.name) ?? label.name,
@@ -977,7 +968,7 @@ function createRoot(context: LinearGraphQLContext) {
         actor: requireCurrentUser(context),
         teamId: label.team_id,
       });
-      return { success: true };
+      return deletePayload(label.linear_id);
     },
 
     issueAddLabel: async ({ id, labelId }: { id: string; labelId: string }) => {
@@ -1042,7 +1033,7 @@ function createRoot(context: LinearGraphQLContext) {
       requireLinearScopes(store, c, ["admin"]);
       const webhook = requireWebhook(store, id);
       ls().webhooks.delete(webhook.id);
-      return { success: true };
+      return deletePayload(webhook.linear_id);
     },
 
     agentSessionCreateOnIssue: async ({ input }: { input: Record<string, unknown> }) => {
@@ -1087,9 +1078,9 @@ function createRoot(context: LinearGraphQLContext) {
       return mutationPayload({ success: true, agentSession: formatAgentSession(context, session) });
     },
 
-    agentSessionUpdate: ({ input }: { input: Record<string, unknown> }) => {
+    agentSessionUpdate: ({ id, input }: { id?: string; input: Record<string, unknown> }) => {
       requireLinearScopes(store, c, ["write"]);
-      const session = requireAgentSession(store, input.id);
+      const session = requireAgentSession(store, id ?? input.id);
       const updated = ls().agentSessions.update(session.id, {
         state: normalizeSessionState(stringInput(input.state)) ?? session.state,
         plan: "plan" in input ? nullableString(input.plan) : session.plan,
@@ -1126,6 +1117,14 @@ function createRoot(context: LinearGraphQLContext) {
 
 function mutationPayload<T extends Record<string, unknown>>(payload: T): T & { lastSyncId: number } {
   return { lastSyncId: Date.now(), ...payload };
+}
+
+function deletePayload(entityId: string) {
+  return mutationPayload({ success: true, entityId });
+}
+
+function issueArchivePayload(context: LinearGraphQLContext, issue: LinearIssue) {
+  return mutationPayload({ success: true, entity: formatIssue(context, issue) });
 }
 
 function formatOrganization(context: LinearGraphQLContext) {
@@ -1810,6 +1809,40 @@ function requireAgentSession(store: Store, id: unknown): LinearAgentSession {
   const session = getLinearStore(store).agentSessions.findOneBy("linear_id", ref);
   if (!session) throw new Error(`Agent session not found: ${ref}`);
   return session;
+}
+
+function resolveNullableUserId(store: Store, value: unknown, field: string): string | null {
+  const ref = stringInput(value);
+  if (!ref) return null;
+  const user = resolveUser(store, ref);
+  if (!user) throw new Error(`User not found for ${field}: ${ref}`);
+  return user.linear_id;
+}
+
+function resolveNullableProjectId(store: Store, value: unknown, teamId: string): string | null {
+  const ref = stringInput(value);
+  if (!ref) return null;
+  const project = resolveProject(store, ref);
+  if (!project || (project.team_id !== null && project.team_id !== teamId)) {
+    throw new Error(`Project not found for team: ${ref}`);
+  }
+  return project.linear_id;
+}
+
+function resolveNullableCycleId(store: Store, value: unknown, teamId: string): string | null {
+  const ref = stringInput(value);
+  if (!ref) return null;
+  const cycle = resolveCycle(store, ref, teamId);
+  if (!cycle) throw new Error(`Cycle not found for team: ${ref}`);
+  return cycle.linear_id;
+}
+
+function resolveIssueLabelIds(store: Store, value: unknown, teamId: string): string[] {
+  return arrayInput(value).map((labelId) => {
+    const label = resolveLabel(store, labelId, teamId);
+    if (!label) throw new Error(`Issue label not found for team: ${labelId}`);
+    return label.linear_id;
+  });
 }
 
 async function createAgentSessionForIssue(

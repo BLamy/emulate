@@ -126,6 +126,37 @@ describe("Linear emulator", () => {
     expect(getLinearStore(store).issues.findOneBy("title", "Bad state")).toBeUndefined();
   });
 
+  it("rejects issue mutations with unknown relation IDs", async () => {
+    const linearStore = getLinearStore(store);
+    const team = linearStore.teams.findOneBy("key", "ENG")!;
+    const issue = linearStore.issues.findOneBy("identifier", "ENG-1")!;
+    const originalAssignee = issue.assignee_id;
+
+    const createWithUnknownLabel = await gql(
+      app,
+      `mutation CreateIssue($input: IssueCreateInput!) {
+        issueCreate(input: $input) { issue { identifier } }
+      }`,
+      { input: { teamId: team.linear_id, title: "Bad label", labelIds: ["missing-label"] } },
+    );
+    expect(createWithUnknownLabel.status).toBe(400);
+    const createBody = (await createWithUnknownLabel.json()) as any;
+    expect(createBody.errors[0].message).toContain("Issue label not found for team: missing-label");
+    expect(linearStore.issues.findOneBy("title", "Bad label")).toBeUndefined();
+
+    const updateWithUnknownAssignee = await gql(
+      app,
+      `mutation UpdateIssue($input: IssueUpdateInput!) {
+        issueUpdate(input: $input) { issue { id } }
+      }`,
+      { input: { id: issue.linear_id, assigneeId: "missing-user" } },
+    );
+    expect(updateWithUnknownAssignee.status).toBe(400);
+    const updateBody = (await updateWithUnknownAssignee.json()) as any;
+    expect(updateBody.errors[0].message).toContain("User not found for assigneeId: missing-user");
+    expect(linearStore.issues.findOneBy("linear_id", issue.linear_id)?.assignee_id).toBe(originalAssignee);
+  });
+
   it("rejects adding an issue label from another team", async () => {
     seedFromConfig(store, base, {
       teams: [{ key: "SEC", name: "Security" }],
@@ -171,7 +202,7 @@ describe("Linear emulator", () => {
     );
     const sessionRes = await gql(
       app,
-      `mutation CreateSession($input: AgentSessionCreateOnIssueInput!) {
+      `mutation CreateSession($input: AgentSessionCreateOnIssue!) {
         agentSessionCreateOnIssue(input: $input) { agentSession { id } }
       }`,
       { input: { issueId, plan: "Clean up child records" } },
@@ -218,7 +249,7 @@ describe("Linear emulator", () => {
 
     const sessionRes = await gql(
       app,
-      `mutation CreateSession($input: AgentSessionCreateOnCommentInput!) {
+      `mutation CreateSession($input: AgentSessionCreateOnComment!) {
         agentSessionCreateOnComment(input: $input) { agentSession { id } }
       }`,
       { input: { commentId, plan: "Handle the comment." } },
@@ -901,20 +932,25 @@ describe("Linear emulator", () => {
     expect(createIssue.issueId).toBeTruthy();
     const issueId = createIssue.issueId!;
     expect(getLinearStore(store).issues.findOneBy("linear_id", issueId)?.identifier).toBe("ENG-2");
-    const updateIssue = await client.client.rawRequest<
-      { issueUpdate: { success: boolean; issue: { id: string; title: string; priority: number } } },
-      { input: { id: string; title: string; priority: number } }
-    >(
-      `mutation($input: IssueUpdateInput!) {
-        issueUpdate(input: $input) {
-          success
-          issue { id title priority }
-        }
-      }`,
-      { input: { id: issueId, title: "Updated from SDK", priority: 1 } },
-    );
-    expect(updateIssue.data?.issueUpdate.issue.title).toBe("Updated from SDK");
-    expect(updateIssue.data?.issueUpdate.issue.priority).toBe(1);
+    const updateIssue = await client.updateIssue(issueId, { title: "Updated from SDK", priority: 1 });
+    expect(updateIssue.success).toBe(true);
+    expect(updateIssue.issueId).toBe(issueId);
+    expect(getLinearStore(store).issues.findOneBy("linear_id", issueId)?.title).toBe("Updated from SDK");
+    expect(getLinearStore(store).issues.findOneBy("linear_id", issueId)?.priority).toBe(1);
+
+    const createAgentSession = await client.agentSessionCreateOnIssue({ issueId });
+    expect(createAgentSession.success).toBe(true);
+    expect(createAgentSession.agentSessionId).toBeTruthy();
+
+    const createLabel = await client.createIssueLabel({ teamId, name: "SDK Label", color: "#0f766e" });
+    expect(createLabel.success).toBe(true);
+    const labelId = createLabel.issueLabelId!;
+    const updateLabel = await client.updateIssueLabel(labelId, { name: "SDK Label Updated" });
+    expect(updateLabel.success).toBe(true);
+    expect(getLinearStore(store).issueLabels.findOneBy("linear_id", labelId)?.name).toBe("SDK Label Updated");
+    const deleteLabel = await client.deleteIssueLabel(labelId);
+    expect(deleteLabel.success).toBe(true);
+    expect(deleteLabel.entityId).toBe(labelId);
 
     const firstIssuePage = await client.client.rawRequest<
       {
@@ -956,5 +992,27 @@ describe("Linear emulator", () => {
     expect(getLinearStore(store).comments.findOneBy("linear_id", createComment.commentId!)?.body).toBe(
       "Commented from SDK",
     );
+    const commentId = createComment.commentId!;
+    const updateComment = await client.updateComment(commentId, { body: "Updated comment from SDK" });
+    expect(updateComment.success).toBe(true);
+    expect(getLinearStore(store).comments.findOneBy("linear_id", commentId)?.body).toBe("Updated comment from SDK");
+    const deleteComment = await client.deleteComment(commentId);
+    expect(deleteComment.success).toBe(true);
+    expect(deleteComment.entityId).toBe(commentId);
+
+    const archiveIssue = await client.archiveIssue(issueId);
+    expect(archiveIssue.success).toBe(true);
+    expect(archiveIssue.entityId).toBe(issueId);
+    expect(getLinearStore(store).issues.findOneBy("linear_id", issueId)?.archived_at).toBeTruthy();
+
+    const unarchiveIssue = await client.unarchiveIssue(issueId);
+    expect(unarchiveIssue.success).toBe(true);
+    expect(unarchiveIssue.entityId).toBe(issueId);
+    expect(getLinearStore(store).issues.findOneBy("linear_id", issueId)?.archived_at).toBeNull();
+
+    const deleteIssue = await client.deleteIssue(issueId);
+    expect(deleteIssue.success).toBe(true);
+    expect(deleteIssue.entityId).toBe(issueId);
+    expect(getLinearStore(store).issues.findOneBy("linear_id", issueId)).toBeUndefined();
   });
 });
