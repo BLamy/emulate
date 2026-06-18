@@ -705,32 +705,42 @@ function createRoot(context: LinearGraphQLContext) {
         : (resolveState(store, "Todo", team.linear_id) ?? ls().workflowStates.findBy("team_id", team.linear_id)[0]);
       if (requestedStateId && !state) throw new Error(`Workflow state not found: ${requestedStateId}`);
       if (!state) throw new Error("No workflow state exists for the selected team");
-      const number = nextIssueNumber(store, team.linear_id);
       const labelIds = resolveIssueLabelIds(store, input.labelIds, team.linear_id);
+      const title = requiredString(input.title, "title");
+      const description = nullableString(input.description);
+      const priority = normalizePriority(input.priority);
+      const assigneeId = resolveNullableUserId(store, input.assigneeId, "assigneeId");
+      const delegateId = resolveNullableUserId(store, input.delegateId, "delegateId");
+      const projectId = resolveNullableProjectId(store, input.projectId, team.linear_id);
+      const cycleId = resolveNullableCycleId(store, input.cycleId, team.linear_id);
+      const dueDate = nullableString(input.dueDate);
+      const createAsUser = nullableString(input.createAsUser);
+      const displayIconUrl = nullableString(input.displayIconUrl);
+      const number = nextIssueNumber(store, team.linear_id);
       const now = new Date().toISOString();
       const issue = ls().issues.insert({
         linear_id: linearId(),
         identifier: `${team.key}-${number}`,
         number,
         team_id: team.linear_id,
-        title: requiredString(input.title, "title"),
-        description: nullableString(input.description),
-        priority: normalizePriority(input.priority),
+        title,
+        description,
+        priority,
         state_id: state.linear_id,
-        assignee_id: resolveNullableUserId(store, input.assigneeId, "assigneeId"),
+        assignee_id: assigneeId,
         creator_id: actor.linear_id,
-        delegate_id: resolveNullableUserId(store, input.delegateId, "delegateId"),
-        project_id: resolveNullableProjectId(store, input.projectId, team.linear_id),
-        cycle_id: resolveNullableCycleId(store, input.cycleId, team.linear_id),
+        delegate_id: delegateId,
+        project_id: projectId,
+        cycle_id: cycleId,
         label_ids: labelIds,
         url: `${baseUrl}/issue/${team.key}-${number}`,
         archived_at: null,
         canceled_at: state.type === "canceled" ? now : null,
         completed_at: state.type === "completed" ? now : null,
         started_at: state.type === "started" ? now : null,
-        due_date: nullableString(input.dueDate),
-        create_as_user: nullableString(input.createAsUser),
-        display_icon_url: nullableString(input.displayIconUrl),
+        due_date: dueDate,
+        create_as_user: createAsUser,
+        display_icon_url: displayIconUrl,
       });
       await dispatchLinearWebhook(store, {
         type: "Issue",
@@ -914,7 +924,9 @@ function createRoot(context: LinearGraphQLContext) {
 
     issueLabelCreate: async ({ input }: { input: Record<string, unknown> }) => {
       requireLinearScopes(store, c, ["write"]);
-      const team = resolveTeam(store, stringInput(input.teamId));
+      const teamRef = stringInput(input.teamId);
+      const team = teamRef ? resolveTeam(store, teamRef) : undefined;
+      if (teamRef && !team) throw new Error(`Team not found: ${teamRef}`);
       const label = ls().issueLabels.insert({
         linear_id: linearId(),
         team_id: team?.linear_id ?? null,
@@ -1014,7 +1026,9 @@ function createRoot(context: LinearGraphQLContext) {
 
     webhookCreate: ({ input }: { input: Record<string, unknown> }) => {
       requireLinearScopes(store, c, ["admin"]);
-      const team = resolveTeam(store, stringInput(input.teamId));
+      const teamRef = stringInput(input.teamId);
+      const team = teamRef ? resolveTeam(store, teamRef) : undefined;
+      if (teamRef && !team) throw new Error(`Team not found: ${teamRef}`);
       const webhook = ls().webhooks.insert({
         linear_id: linearId(),
         label: stringInput(input.label) ?? "Local webhook",
@@ -1040,8 +1054,9 @@ function createRoot(context: LinearGraphQLContext) {
       requireLinearScopes(store, c, ["write"]);
       const issue = requireIssue(store, input.issueId);
       const actor = requireCurrentUser(context);
+      const agentUserRef = stringInput(input.agentUserId);
       const agentUser =
-        resolveUser(store, stringInput(input.agentUserId)) ??
+        (agentUserRef ? requireUser(store, agentUserRef) : undefined) ??
         ls()
           .users.all()
           .find((user) => user.app) ??
@@ -1061,8 +1076,9 @@ function createRoot(context: LinearGraphQLContext) {
       requireLinearScopes(store, c, ["write"]);
       const comment = requireComment(store, input.commentId);
       const actor = requireCurrentUser(context);
+      const agentUserRef = stringInput(input.agentUserId);
       const agentUser =
-        resolveUser(store, stringInput(input.agentUserId)) ??
+        (agentUserRef ? requireUser(store, agentUserRef) : undefined) ??
         ls()
           .users.all()
           .find((user) => user.app) ??

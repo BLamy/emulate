@@ -131,6 +131,7 @@ describe("Linear emulator", () => {
     const team = linearStore.teams.findOneBy("key", "ENG")!;
     const issue = linearStore.issues.findOneBy("identifier", "ENG-1")!;
     const originalAssignee = issue.assignee_id;
+    const originalSequence = team.issue_sequence;
 
     const createWithUnknownLabel = await gql(
       app,
@@ -143,6 +144,19 @@ describe("Linear emulator", () => {
     const createBody = (await createWithUnknownLabel.json()) as any;
     expect(createBody.errors[0].message).toContain("Issue label not found for team: missing-label");
     expect(linearStore.issues.findOneBy("title", "Bad label")).toBeUndefined();
+    expect(linearStore.teams.findOneBy("linear_id", team.linear_id)?.issue_sequence).toBe(originalSequence);
+
+    const createAfterFailure = await gql(
+      app,
+      `mutation CreateIssue($input: IssueCreateInput!) {
+        issueCreate(input: $input) { issue { identifier } }
+      }`,
+      { input: { teamId: team.linear_id, title: "Valid after failed create" } },
+    );
+    expect(createAfterFailure.status).toBe(200);
+    const createAfterFailureBody = (await createAfterFailure.json()) as any;
+    expect(createAfterFailureBody.errors).toBeUndefined();
+    expect(createAfterFailureBody.data.issueCreate.issue.identifier).toBe("ENG-2");
 
     const updateWithUnknownAssignee = await gql(
       app,
@@ -155,6 +169,66 @@ describe("Linear emulator", () => {
     const updateBody = (await updateWithUnknownAssignee.json()) as any;
     expect(updateBody.errors[0].message).toContain("User not found for assigneeId: missing-user");
     expect(linearStore.issues.findOneBy("linear_id", issue.linear_id)?.assignee_id).toBe(originalAssignee);
+  });
+
+  it("rejects scoped resources with unknown team IDs", async () => {
+    const linearStore = getLinearStore(store);
+    const labelCount = linearStore.issueLabels.all().length;
+    const webhookCount = linearStore.webhooks.all().length;
+
+    const labelRes = await gql(
+      app,
+      `mutation CreateLabel($input: IssueLabelCreateInput!) {
+        issueLabelCreate(input: $input) { issueLabel { id } }
+      }`,
+      { input: { teamId: "missing-team", name: "Bad team label" } },
+    );
+    expect(labelRes.status).toBe(400);
+    const labelBody = (await labelRes.json()) as any;
+    expect(labelBody.errors[0].message).toContain("Team not found: missing-team");
+    expect(linearStore.issueLabels.all()).toHaveLength(labelCount);
+
+    const webhookRes = await gql(
+      app,
+      `mutation CreateWebhook($input: WebhookCreateInput!) {
+        webhookCreate(input: $input) { webhook { id } }
+      }`,
+      { input: { teamId: "missing-team", url: "http://127.0.0.1:1/linear" } },
+    );
+    expect(webhookRes.status).toBe(400);
+    const webhookBody = (await webhookRes.json()) as any;
+    expect(webhookBody.errors[0].message).toContain("Team not found: missing-team");
+    expect(linearStore.webhooks.all()).toHaveLength(webhookCount);
+  });
+
+  it("rejects explicit unknown agent user IDs", async () => {
+    const linearStore = getLinearStore(store);
+    const issue = linearStore.issues.findOneBy("identifier", "ENG-1")!;
+    const comment = linearStore.comments.findBy("issue_id", issue.linear_id)[0]!;
+    const sessionCount = linearStore.agentSessions.all().length;
+
+    const issueSession = await gql(
+      app,
+      `mutation CreateSession($input: AgentSessionCreateOnIssue!) {
+        agentSessionCreateOnIssue(input: $input) { agentSession { id } }
+      }`,
+      { input: { issueId: issue.linear_id, agentUserId: "missing-user" } },
+    );
+    expect(issueSession.status).toBe(400);
+    const issueSessionBody = (await issueSession.json()) as any;
+    expect(issueSessionBody.errors[0].message).toContain("User not found: missing-user");
+
+    const commentSession = await gql(
+      app,
+      `mutation CreateSession($input: AgentSessionCreateOnComment!) {
+        agentSessionCreateOnComment(input: $input) { agentSession { id } }
+      }`,
+      { input: { commentId: comment.linear_id, agentUserId: "missing-user" } },
+    );
+    expect(commentSession.status).toBe(400);
+    const commentSessionBody = (await commentSession.json()) as any;
+    expect(commentSessionBody.errors[0].message).toContain("User not found: missing-user");
+    expect(linearStore.agentSessions.all()).toHaveLength(sessionCount);
   });
 
   it("rejects adding an issue label from another team", async () => {
