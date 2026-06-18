@@ -24,6 +24,7 @@ const sections: NavSection[] = [
       { href: "/docs/github", label: "GitHub" },
       { href: "/docs/google", label: "Google" },
       { href: "/docs/slack", label: "Slack" },
+      { href: "/docs/linear", label: "Linear" },
       { href: "/docs/apple", label: "Apple" },
       { href: "/docs/microsoft", label: "Microsoft Entra ID" },
       { href: "/docs/aws", label: "AWS" },
