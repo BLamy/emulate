@@ -720,6 +720,14 @@ function createRoot(context: LinearGraphQLContext) {
       requireLinearScopes(store, c, ["write"]);
       const issue = requireIssue(store, id);
       const actor = requireCurrentUser(context);
+      const issueComments = ls().comments.findBy("issue_id", issue.linear_id);
+      const issueSessions = ls().agentSessions.findBy("issue_id", issue.linear_id);
+      const issueSessionIds = new Set(issueSessions.map((session) => session.linear_id));
+      for (const activity of ls().agentActivities.all()) {
+        if (issueSessionIds.has(activity.session_id)) ls().agentActivities.delete(activity.id);
+      }
+      for (const comment of issueComments) ls().comments.delete(comment.id);
+      for (const session of issueSessions) ls().agentSessions.delete(session.id);
       ls().issues.delete(issue.id);
       await dispatchLinearWebhook(store, {
         type: "Issue",
@@ -1400,25 +1408,16 @@ function issueMatchesFilter(
     comparatorMatches(issue.linear_id, filter.id),
     comparatorMatches(issue.identifier, filter.identifier),
     comparatorMatches(issue.title, filter.title),
-    comparatorMatches(team?.linear_id, filter.team) ||
-      comparatorMatches(team?.key, filter.team) ||
-      comparatorMatches(team?.name, filter.team),
-    comparatorMatches(state?.linear_id, filter.state) ||
-      comparatorMatches(state?.name, filter.state) ||
-      comparatorMatches(state?.type, filter.state),
-    comparatorMatches(assignee?.linear_id, filter.assignee) ||
-      comparatorMatches(assignee?.email, filter.assignee) ||
-      comparatorMatches(assignee?.name, filter.assignee),
-    comparatorMatches(creator?.linear_id, filter.creator) ||
-      comparatorMatches(creator?.email, filter.creator) ||
-      comparatorMatches(creator?.name, filter.creator),
-    comparatorMatches(project?.linear_id, filter.project) || comparatorMatches(project?.name, filter.project),
-    comparatorMatches(cycle?.linear_id, filter.cycle) || comparatorMatches(cycle?.name, filter.cycle),
-    filter.labels
-      ? labels.some(
-          (label) => comparatorMatches(label.linear_id, filter.labels) || comparatorMatches(label.name, filter.labels),
-        )
-      : true,
+    aliasComparatorMatches([team?.linear_id, team?.key, team?.name], filter.team),
+    aliasComparatorMatches([state?.linear_id, state?.name, state?.type], filter.state),
+    aliasComparatorMatches([assignee?.linear_id, assignee?.email, assignee?.name], filter.assignee),
+    aliasComparatorMatches([creator?.linear_id, creator?.email, creator?.name], filter.creator),
+    aliasComparatorMatches([project?.linear_id, project?.name], filter.project),
+    aliasComparatorMatches([cycle?.linear_id, cycle?.name], filter.cycle),
+    aliasComparatorMatches(
+      labels.flatMap((label) => [label.linear_id, label.name]),
+      filter.labels,
+    ),
   ];
   const orFilters = Array.isArray(filter.or) ? filter.or.filter(isRecord) : [];
   const ownMatch = issueFilterHasOwnPredicates(filter) ? checks.every(Boolean) : orFilters.length === 0;
@@ -1459,6 +1458,48 @@ function comparatorMatches(value: string | undefined | null, input: unknown): bo
   if (typeof input.endsWith === "string" && !val.endsWith(input.endsWith)) return false;
   if (typeof input.eqIgnoreCase === "string" && val.toLowerCase() !== input.eqIgnoreCase.toLowerCase()) return false;
   if (typeof input.neqIgnoreCase === "string" && val.toLowerCase() === input.neqIgnoreCase.toLowerCase()) return false;
+  return true;
+}
+
+function aliasComparatorMatches(values: Array<string | undefined | null>, input: unknown): boolean {
+  if (!input || !isRecord(input)) return true;
+  const candidates = values.filter((value): value is string => value != null);
+  if ("null" in input && typeof input.null === "boolean") {
+    return input.null ? candidates.length === 0 : candidates.length > 0;
+  }
+  if (candidates.length === 0) return false;
+
+  const neq = typeof input.neq === "string" ? input.neq : undefined;
+  const nin = Array.isArray(input.nin) ? input.nin : undefined;
+  const neqIgnoreCase = typeof input.neqIgnoreCase === "string" ? input.neqIgnoreCase : undefined;
+  if (neq !== undefined && candidates.some((value) => value === neq)) return false;
+  if (nin && candidates.some((value) => nin.includes(value))) return false;
+  if (neqIgnoreCase !== undefined && candidates.some((value) => value.toLowerCase() === neqIgnoreCase.toLowerCase())) {
+    return false;
+  }
+
+  if (!hasPositiveComparator(input)) return true;
+  return candidates.some((value) => positiveComparatorMatches(value, input));
+}
+
+function hasPositiveComparator(input: Record<string, unknown>): boolean {
+  return (
+    typeof input.eq === "string" ||
+    Array.isArray(input.in) ||
+    typeof input.contains === "string" ||
+    typeof input.startsWith === "string" ||
+    typeof input.endsWith === "string" ||
+    typeof input.eqIgnoreCase === "string"
+  );
+}
+
+function positiveComparatorMatches(value: string, input: Record<string, unknown>): boolean {
+  if (typeof input.eq === "string" && value !== input.eq) return false;
+  if (Array.isArray(input.in) && !input.in.includes(value)) return false;
+  if (typeof input.contains === "string" && !value.includes(input.contains)) return false;
+  if (typeof input.startsWith === "string" && !value.startsWith(input.startsWith)) return false;
+  if (typeof input.endsWith === "string" && !value.endsWith(input.endsWith)) return false;
+  if (typeof input.eqIgnoreCase === "string" && value.toLowerCase() !== input.eqIgnoreCase.toLowerCase()) return false;
   return true;
 }
 

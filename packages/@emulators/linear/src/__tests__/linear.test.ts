@@ -109,6 +109,60 @@ describe("Linear emulator", () => {
     expect(readBody.data.issue.comments.nodes[0].body).toBe("Done locally.");
   });
 
+  it("deletes issue comments and agent sessions with the issue", async () => {
+    const team = getLinearStore(store).teams.findOneBy("key", "ENG")!;
+    const createIssue = await gql(
+      app,
+      `mutation CreateIssue($input: IssueCreateInput!) {
+        issueCreate(input: $input) { issue { id } }
+      }`,
+      { input: { teamId: team.linear_id, title: "Delete child records" } },
+    );
+    const issueBody = (await createIssue.json()) as any;
+    const issueId = issueBody.data.issueCreate.issue.id;
+
+    await gql(
+      app,
+      `mutation CreateComment($input: CommentCreateInput!) {
+        commentCreate(input: $input) { comment { id } }
+      }`,
+      { input: { issueId, body: "Remove me with the issue." } },
+    );
+    const sessionRes = await gql(
+      app,
+      `mutation CreateSession($input: AgentSessionCreateOnIssueInput!) {
+        agentSessionCreateOnIssue(input: $input) { agentSession { id } }
+      }`,
+      { input: { issueId, plan: "Clean up child records" } },
+    );
+    const sessionBody = (await sessionRes.json()) as any;
+    const sessionId = sessionBody.data.agentSessionCreateOnIssue.agentSession.id;
+
+    await gql(
+      app,
+      `mutation CreateActivity($input: AgentActivityCreateInput!) {
+        agentActivityCreate(input: $input) { agentActivity { id } }
+      }`,
+      { input: { sessionId, type: "response", body: "Done." } },
+    );
+
+    const deleteIssue = await gql(
+      app,
+      `mutation DeleteIssue($id: String!) {
+        issueDelete(id: $id) { success }
+      }`,
+      { id: issueId },
+    );
+    expect(deleteIssue.status).toBe(200);
+    const deleteBody = (await deleteIssue.json()) as any;
+    expect(deleteBody.errors).toBeUndefined();
+
+    const linearStore = getLinearStore(store);
+    expect(linearStore.comments.findBy("issue_id", issueId)).toEqual([]);
+    expect(linearStore.agentSessions.findBy("issue_id", issueId)).toEqual([]);
+    expect(linearStore.agentActivities.findBy("session_id", sessionId)).toEqual([]);
+  });
+
   it("honors issue filter or clauses", async () => {
     const team = getLinearStore(store).teams.findOneBy("key", "ENG")!;
     await gql(
@@ -145,6 +199,25 @@ describe("Linear emulator", () => {
     const matchingBody = (await matching.json()) as any;
     expect(matchingBody.errors).toBeUndefined();
     expect(matchingBody.data.issues.nodes).toEqual([{ identifier: "ENG-2", title: "Review Linear filter logic" }]);
+  });
+
+  it("applies negative issue filters across aliases", async () => {
+    const res = await gql(
+      app,
+      `query Issues($teamFilter: IssueFilter, $labelFilter: IssueFilter) {
+        byTeam: issues(filter: $teamFilter) { nodes { identifier } }
+        byLabel: issues(filter: $labelFilter) { nodes { identifier } }
+      }`,
+      {
+        teamFilter: { team: { neq: "ENG" } },
+        labelFilter: { labels: { neq: "Bug" } },
+      },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.errors).toBeUndefined();
+    expect(body.data.byTeam.nodes).toEqual([]);
+    expect(body.data.byLabel.nodes).toEqual([]);
   });
 
   it("supports OAuth authorization code exchange with PKCE", async () => {
@@ -427,6 +500,31 @@ describe("Linear emulator", () => {
     expect(deliveries[0].event).toBe("Issue");
     expect(deliveries[0].action).toBe("create");
     expect(deliveries[0].headers["Linear-Signature"]).toBeDefined();
+  });
+
+  it("does not send all public team webhooks for private team events", async () => {
+    seedFromConfig(store, base, {
+      teams: [{ key: "SEC", name: "Security", private: true }],
+      webhooks: [
+        {
+          label: "Public teams only",
+          url: "http://127.0.0.1:1/linear",
+          resource_types: ["Issue"],
+          all_public_teams: true,
+        },
+      ],
+    });
+    const team = getLinearStore(store).teams.findOneBy("key", "SEC")!;
+
+    const res = await gql(
+      app,
+      `mutation($input: IssueCreateInput!) {
+        issueCreate(input: $input) { success issue { identifier } }
+      }`,
+      { input: { teamId: team.linear_id, title: "Private team webhook" } },
+    );
+    expect(res.status).toBe(200);
+    expect(getLinearStore(store).webhookDeliveries.all()).toHaveLength(0);
   });
 
   it("renders the shared inspector", async () => {

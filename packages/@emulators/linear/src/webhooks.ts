@@ -20,7 +20,10 @@ export async function dispatchLinearWebhook(store: Store, event: LinearWebhookEv
   const webhooks = ls.webhooks.all().filter((webhook) => {
     if (!webhook.enabled) return false;
     if (!webhook.resource_types.includes(event.type) && !webhook.resource_types.includes("*")) return false;
-    if (webhook.all_public_teams) return true;
+    if (webhook.all_public_teams) {
+      const team = event.teamId ? ls.teams.findOneBy("linear_id", event.teamId) : undefined;
+      return !team?.private;
+    }
     return webhook.team_id === event.teamId;
   });
 
