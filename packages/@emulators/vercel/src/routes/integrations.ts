@@ -1,8 +1,9 @@
 import type { Context } from "@emulators/core";
+import type { AuthUser } from "@emulators/core";
 import type { ContentfulStatusCode } from "@emulators/core";
 import type { RouteContext } from "@emulators/core";
 import { getVercelStore, type VercelStore } from "../store.js";
-import type { VercelIntegrationConfiguration, VercelTeam } from "../entities.js";
+import type { VercelIntegrationConfiguration, VercelTeam, VercelUser } from "../entities.js";
 
 function vercelErr(c: Context, status: ContentfulStatusCode, code: string, message: string) {
   return c.json({ error: { code, message } }, status);
@@ -36,17 +37,34 @@ function formatConfiguration(config: VercelIntegrationConfiguration) {
   };
 }
 
-function resolveScopeOwnerId(c: Context, vs: VercelStore): string | null {
+function authorizeOwnerId(c: Context, config: VercelIntegrationConfiguration, ownerId: string): Response | null {
+  if (config.ownerId === ownerId) return null;
+  return vercelErr(c, 403, "forbidden", "You do not have permission to access this resource");
+}
+
+function authorizeConfigurationScope(
+  c: Context,
+  vs: VercelStore,
+  config: VercelIntegrationConfiguration,
+  auth: AuthUser,
+): Response | null {
   const teamId = c.req.query("teamId");
-  const slug = c.req.query("slug");
   if (teamId) {
-    const team = vs.teams.findOneBy("uid", teamId as VercelTeam["uid"]);
-    if (team) return team.uid;
-  } else if (slug) {
-    const team = vs.teams.findOneBy("slug", slug as VercelTeam["slug"]);
-    if (team) return team.uid;
+    return authorizeOwnerId(c, config, teamId);
   }
-  return null;
+  const slug = c.req.query("slug");
+  if (slug) {
+    const team = vs.teams.findOneBy("slug", slug as VercelTeam["slug"]);
+    if (!team) {
+      return vercelErr(c, 400, "bad_request", "Could not resolve team or account scope");
+    }
+    return authorizeOwnerId(c, config, team.uid);
+  }
+  const user = vs.users.findOneBy("username", auth.login as VercelUser["username"]);
+  if (!user) {
+    return vercelErr(c, 403, "forbidden", "User not found");
+  }
+  return authorizeOwnerId(c, config, user.uid);
 }
 
 export function integrationsRoutes({ app, store }: RouteContext): void {
@@ -65,10 +83,8 @@ export function integrationsRoutes({ app, store }: RouteContext): void {
       return vercelErr(c, 404, "not_found", "The configuration was not found");
     }
 
-    const scopeOwnerId = resolveScopeOwnerId(c, vs);
-    if (scopeOwnerId && config.ownerId !== scopeOwnerId) {
-      return vercelErr(c, 403, "forbidden", "You do not have permission to access this resource");
-    }
+    const authorizationError = authorizeConfigurationScope(c, vs, config, auth);
+    if (authorizationError) return authorizationError;
 
     return c.json(formatConfiguration(config));
   });
@@ -86,10 +102,8 @@ export function integrationsRoutes({ app, store }: RouteContext): void {
       return vercelErr(c, 404, "not_found", "The configuration was not found");
     }
 
-    const scopeOwnerId = resolveScopeOwnerId(c, vs);
-    if (scopeOwnerId && config.ownerId !== scopeOwnerId) {
-      return vercelErr(c, 403, "forbidden", "You do not have permission to access this resource");
-    }
+    const authorizationError = authorizeConfigurationScope(c, vs, config, auth);
+    if (authorizationError) return authorizationError;
 
     vs.integrationConfigurations.delete(config.id);
 

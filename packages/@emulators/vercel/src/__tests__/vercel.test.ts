@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { Hono } from "@emulators/core";
 import { Store, WebhookDispatcher, authMiddleware, type TokenMap } from "@emulators/core";
 import { vercelPlugin, seedFromConfig } from "../index.js";
+import { getVercelStore } from "../store.js";
 
 const base = "http://localhost:4000";
 
@@ -24,6 +25,12 @@ function createTestApp() {
 
 function authHeaders(): Record<string, string> {
   return { Authorization: "Bearer test-token" };
+}
+
+function getTestUserOwnerId(store: Store): string {
+  const user = getVercelStore(store).users.findOneBy("username", "testuser");
+  if (!user) throw new Error("Expected testuser to be seeded");
+  return user.uid;
 }
 
 describe("Vercel plugin integration", () => {
@@ -78,15 +85,16 @@ describe("Vercel plugin integration", () => {
     expect(res.status).toBe(404);
   });
 
-  it("GET /v1/integrations/configuration/:id returns seeded configuration", async () => {
+  it("GET /v1/integrations/configuration/:id returns user-owned seeded configuration", async () => {
     const { app: testApp, store } = createTestApp();
+    const ownerId = getTestUserOwnerId(store);
     seedFromConfig(store, base, {
       integrations: [{ client_id: "test-app", client_secret: "secret", name: "test-integration", redirect_uris: [] }],
       integration_configurations: [
         {
           id: "icfg_test123",
           integrationId: "test-app",
-          ownerId: "team_abc",
+          ownerId,
           projectSelection: "all",
           canConfigureOpenTelemetry: true,
         },
@@ -105,8 +113,9 @@ describe("Vercel plugin integration", () => {
 
   it("DELETE /v1/integrations/configuration/:id removes configuration", async () => {
     const { app: testApp, store } = createTestApp();
+    const ownerId = getTestUserOwnerId(store);
     seedFromConfig(store, base, {
-      integration_configurations: [{ id: "icfg_delete_me", integrationId: "test-app", ownerId: "team_abc" }],
+      integration_configurations: [{ id: "icfg_delete_me", integrationId: "test-app", ownerId }],
     });
 
     const deleteRes = await testApp.request(`${base}/v1/integrations/configuration/icfg_delete_me`, {
@@ -121,18 +130,17 @@ describe("Vercel plugin integration", () => {
     expect(getRes.status).toBe(404);
   });
 
-  it("GET /v1/integrations/configuration/:id returns 403 when slug does not match ownerId", async () => {
+  it("GET /v1/integrations/configuration/:id returns 400 when slug scope cannot be resolved", async () => {
     const { app: testApp, store } = createTestApp();
     seedFromConfig(store, base, {
-      teams: [{ slug: "other-team", name: "Other Team" }],
       integration_configurations: [{ id: "icfg_forbidden", integrationId: "test-app", ownerId: "team_abc" }],
     });
 
-    const res = await testApp.request(`${base}/v1/integrations/configuration/icfg_forbidden?slug=other-team`, {
+    const res = await testApp.request(`${base}/v1/integrations/configuration/icfg_forbidden?slug=missing-team`, {
       headers: authHeaders(),
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("forbidden");
+    expect(body.error.code).toBe("bad_request");
   });
 });
