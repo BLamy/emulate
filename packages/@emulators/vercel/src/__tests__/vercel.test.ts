@@ -70,4 +70,56 @@ describe("Vercel plugin integration", () => {
     expect(Array.isArray(body.deployments)).toBe(true);
     expect(body.pagination).toBeDefined();
   });
+
+  it("GET /v1/integrations/configuration/:id returns 404 for unknown config", async () => {
+    const res = await app.request(`${base}/v1/integrations/configuration/icfg_unknown`, {
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /v1/integrations/configuration/:id returns seeded configuration", async () => {
+    const { app: testApp, store } = createTestApp();
+    seedFromConfig(store, base, {
+      integrations: [{ client_id: "test-app", client_secret: "secret", name: "test-integration", redirect_uris: [] }],
+      integration_configurations: [
+        {
+          id: "icfg_test123",
+          integrationId: "test-app",
+          ownerId: "team_abc",
+          projectSelection: "all",
+          canConfigureOpenTelemetry: true,
+        },
+      ],
+    });
+
+    const res = await testApp.request(`${base}/v1/integrations/configuration/icfg_test123`, {
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { id: string; projectSelection: string; canConfigureOpenTelemetry: boolean };
+    expect(body.id).toBe("icfg_test123");
+    expect(body.projectSelection).toBe("all");
+    expect(body.canConfigureOpenTelemetry).toBe(true);
+  });
+
+  it("DELETE /v1/integrations/configuration/:id removes configuration", async () => {
+    const { app: testApp, store } = createTestApp();
+    seedFromConfig(store, base, {
+      integration_configurations: [
+        { id: "icfg_delete_me", integrationId: "test-app", ownerId: "team_abc" },
+      ],
+    });
+
+    const deleteRes = await testApp.request(`${base}/v1/integrations/configuration/icfg_delete_me`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    expect(deleteRes.status).toBe(204);
+
+    const getRes = await testApp.request(`${base}/v1/integrations/configuration/icfg_delete_me`, {
+      headers: authHeaders(),
+    });
+    expect(getRes.status).toBe(404);
+  });
 });
