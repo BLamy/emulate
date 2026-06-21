@@ -122,4 +122,21 @@ describe("Vercel plugin integration", () => {
     });
     expect(getRes.status).toBe(404);
   });
+
+  it("GET /v1/integrations/configuration/:id returns 403 when slug does not match ownerId", async () => {
+    const { app: testApp, store } = createTestApp();
+    seedFromConfig(store, base, {
+      teams: [{ slug: "other-team", name: "Other Team" }],
+      integration_configurations: [
+        { id: "icfg_forbidden", integrationId: "test-app", ownerId: "team_abc" },
+      ],
+    });
+
+    const res = await testApp.request(`${base}/v1/integrations/configuration/icfg_forbidden?slug=other-team`, {
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("forbidden");
+  });
 });
