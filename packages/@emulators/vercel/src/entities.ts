@@ -267,7 +267,16 @@ export interface VercelIntegrationConfiguration extends Entity {
   slug: string;
   type: "integration-configuration";
   status: "error" | "onboarding" | "pending" | "ready" | "resumed" | "suspended" | "uninstalled";
-  source: "backoffice" | "cli" | "deploy-button" | "external" | "marketplace" | "oauth" | "resource-claims" | "v0" | null;
+  source:
+    | "backoffice"
+    | "cli"
+    | "deploy-button"
+    | "external"
+    | "marketplace"
+    | "oauth"
+    | "resource-claims"
+    | "v0"
+    | null;
   installationType: "external" | "marketplace" | null;
   canConfigureOpenTelemetry: boolean;
   externalId: string | null;

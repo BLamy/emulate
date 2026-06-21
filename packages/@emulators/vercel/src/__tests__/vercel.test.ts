@@ -106,9 +106,7 @@ describe("Vercel plugin integration", () => {
   it("DELETE /v1/integrations/configuration/:id removes configuration", async () => {
     const { app: testApp, store } = createTestApp();
     seedFromConfig(store, base, {
-      integration_configurations: [
-        { id: "icfg_delete_me", integrationId: "test-app", ownerId: "team_abc" },
-      ],
+      integration_configurations: [{ id: "icfg_delete_me", integrationId: "test-app", ownerId: "team_abc" }],
     });
 
     const deleteRes = await testApp.request(`${base}/v1/integrations/configuration/icfg_delete_me`, {
@@ -127,9 +125,7 @@ describe("Vercel plugin integration", () => {
     const { app: testApp, store } = createTestApp();
     seedFromConfig(store, base, {
       teams: [{ slug: "other-team", name: "Other Team" }],
-      integration_configurations: [
-        { id: "icfg_forbidden", integrationId: "test-app", ownerId: "team_abc" },
-      ],
+      integration_configurations: [{ id: "icfg_forbidden", integrationId: "test-app", ownerId: "team_abc" }],
     });
 
     const res = await testApp.request(`${base}/v1/integrations/configuration/icfg_forbidden?slug=other-team`, {
