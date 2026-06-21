@@ -27,10 +27,13 @@ function authHeaders(): Record<string, string> {
   return { Authorization: "Bearer test-token" };
 }
 
-function getTestUserOwnerId(store: Store): string {
-  const user = getVercelStore(store).users.findOneBy("username", "testuser");
-  if (!user) throw new Error("Expected testuser to be seeded");
-  return user.uid;
+function seedTestTeam(store: Store, slug = "test-team"): string {
+  seedFromConfig(store, base, {
+    teams: [{ slug, name: "Test Team" }],
+  });
+  const team = getVercelStore(store).teams.findOneBy("slug", slug);
+  if (!team) throw new Error("Expected test team to be seeded");
+  return team.uid;
 }
 
 describe("Vercel plugin integration", () => {
@@ -79,15 +82,18 @@ describe("Vercel plugin integration", () => {
   });
 
   it("GET /v1/integrations/configuration/:id returns 404 for unknown config", async () => {
-    const res = await app.request(`${base}/v1/integrations/configuration/icfg_unknown`, {
+    const { app: testApp, store } = createTestApp();
+    const ownerId = seedTestTeam(store);
+
+    const res = await testApp.request(`${base}/v1/integrations/configuration/icfg_unknown?teamId=${ownerId}`, {
       headers: authHeaders(),
     });
     expect(res.status).toBe(404);
   });
 
-  it("GET /v1/integrations/configuration/:id returns user-owned seeded configuration", async () => {
+  it("GET /v1/integrations/configuration/:id returns team-owned seeded configuration", async () => {
     const { app: testApp, store } = createTestApp();
-    const ownerId = getTestUserOwnerId(store);
+    const ownerId = seedTestTeam(store);
     seedFromConfig(store, base, {
       integrations: [{ client_id: "test-app", client_secret: "secret", name: "test-integration", redirect_uris: [] }],
       integration_configurations: [
@@ -101,7 +107,7 @@ describe("Vercel plugin integration", () => {
       ],
     });
 
-    const res = await testApp.request(`${base}/v1/integrations/configuration/icfg_test123`, {
+    const res = await testApp.request(`${base}/v1/integrations/configuration/icfg_test123?teamId=${ownerId}`, {
       headers: authHeaders(),
     });
     expect(res.status).toBe(200);
@@ -113,24 +119,24 @@ describe("Vercel plugin integration", () => {
 
   it("DELETE /v1/integrations/configuration/:id removes configuration", async () => {
     const { app: testApp, store } = createTestApp();
-    const ownerId = getTestUserOwnerId(store);
+    const ownerId = seedTestTeam(store);
     seedFromConfig(store, base, {
       integration_configurations: [{ id: "icfg_delete_me", integrationId: "test-app", ownerId }],
     });
 
-    const deleteRes = await testApp.request(`${base}/v1/integrations/configuration/icfg_delete_me`, {
+    const deleteRes = await testApp.request(`${base}/v1/integrations/configuration/icfg_delete_me?teamId=${ownerId}`, {
       method: "DELETE",
       headers: authHeaders(),
     });
     expect(deleteRes.status).toBe(204);
 
-    const getRes = await testApp.request(`${base}/v1/integrations/configuration/icfg_delete_me`, {
+    const getRes = await testApp.request(`${base}/v1/integrations/configuration/icfg_delete_me?teamId=${ownerId}`, {
       headers: authHeaders(),
     });
     expect(getRes.status).toBe(404);
   });
 
-  it("GET /v1/integrations/configuration/:id returns 400 when slug scope cannot be resolved", async () => {
+  it("GET /v1/integrations/configuration/:id returns 403 when slug scope cannot be resolved", async () => {
     const { app: testApp, store } = createTestApp();
     seedFromConfig(store, base, {
       integration_configurations: [{ id: "icfg_forbidden", integrationId: "test-app", ownerId: "team_abc" }],
@@ -139,8 +145,8 @@ describe("Vercel plugin integration", () => {
     const res = await testApp.request(`${base}/v1/integrations/configuration/icfg_forbidden?slug=missing-team`, {
       headers: authHeaders(),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(403);
     const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("bad_request");
+    expect(body.error.code).toBe("forbidden");
   });
 });

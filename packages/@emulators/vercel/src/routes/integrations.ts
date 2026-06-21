@@ -37,34 +37,37 @@ function formatConfiguration(config: VercelIntegrationConfiguration) {
   };
 }
 
-function authorizeOwnerId(c: Context, config: VercelIntegrationConfiguration, ownerId: string): Response | null {
-  if (config.ownerId === ownerId) return null;
-  return vercelErr(c, 403, "forbidden", "You do not have permission to access this resource");
-}
-
-function authorizeConfigurationScope(
-  c: Context,
-  vs: VercelStore,
-  config: VercelIntegrationConfiguration,
-  auth: AuthUser,
-): Response | null {
+function resolveTeamOwnerId(c: Context, vs: VercelStore, auth: AuthUser): string | Response {
   const teamId = c.req.query("teamId");
   if (teamId) {
-    return authorizeOwnerId(c, config, teamId);
+    const team = vs.teams.findOneBy("uid", teamId as VercelTeam["uid"]);
+    if (!team) return vercelErr(c, 403, "forbidden", "Not authorized");
+    return team.uid;
   }
+
   const slug = c.req.query("slug");
   if (slug) {
     const team = vs.teams.findOneBy("slug", slug as VercelTeam["slug"]);
-    if (!team) {
-      return vercelErr(c, 400, "bad_request", "Could not resolve team or account scope");
-    }
-    return authorizeOwnerId(c, config, team.uid);
+    if (!team) return vercelErr(c, 403, "forbidden", "Not authorized");
+    return team.uid;
   }
+
   const user = vs.users.findOneBy("username", auth.login as VercelUser["username"]);
   if (!user) {
-    return vercelErr(c, 403, "forbidden", "User not found");
+    return vercelErr(c, 403, "forbidden", "Not authorized");
   }
-  return authorizeOwnerId(c, config, user.uid);
+  if (!user.defaultTeamId) {
+    return vercelErr(
+      c,
+      401,
+      "missing_team_param",
+      "You must supply a `teamId` query parameter or set your default team with `PATCH /user { defaultTeamId: string }`.",
+    );
+  }
+
+  const team = vs.teams.findOneBy("uid", user.defaultTeamId as VercelTeam["uid"]);
+  if (!team) return vercelErr(c, 403, "forbidden", "Not authorized");
+  return team.uid;
 }
 
 export function integrationsRoutes({ app, store }: RouteContext): void {
@@ -76,15 +79,14 @@ export function integrationsRoutes({ app, store }: RouteContext): void {
       return vercelErr(c, 401, "not_authenticated", "Authentication required");
     }
 
+    const ownerId = resolveTeamOwnerId(c, vs, auth);
+    if (typeof ownerId !== "string") return ownerId;
+
     const configId = c.req.param("id");
     const config = vs.integrationConfigurations.findOneBy("uid", configId);
-
-    if (!config) {
+    if (!config || config.ownerId !== ownerId) {
       return vercelErr(c, 404, "not_found", "The configuration was not found");
     }
-
-    const authorizationError = authorizeConfigurationScope(c, vs, config, auth);
-    if (authorizationError) return authorizationError;
 
     return c.json(formatConfiguration(config));
   });
@@ -95,15 +97,14 @@ export function integrationsRoutes({ app, store }: RouteContext): void {
       return vercelErr(c, 401, "not_authenticated", "Authentication required");
     }
 
+    const ownerId = resolveTeamOwnerId(c, vs, auth);
+    if (typeof ownerId !== "string") return ownerId;
+
     const configId = c.req.param("id");
     const config = vs.integrationConfigurations.findOneBy("uid", configId);
-
-    if (!config) {
+    if (!config || config.ownerId !== ownerId) {
       return vercelErr(c, 404, "not_found", "The configuration was not found");
     }
-
-    const authorizationError = authorizeConfigurationScope(c, vs, config, auth);
-    if (authorizationError) return authorizationError;
 
     vs.integrationConfigurations.delete(config.id);
 
