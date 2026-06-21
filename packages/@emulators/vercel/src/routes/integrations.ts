@@ -1,9 +1,7 @@
 import type { Context } from "@emulators/core";
 import type { ContentfulStatusCode } from "@emulators/core";
 import type { RouteContext } from "@emulators/core";
-import { ApiError } from "@emulators/core";
-export { ApiError };
-import { getVercelStore } from "../store.js";
+import { getVercelStore, type VercelStore } from "../store.js";
 import type { VercelIntegrationConfiguration, VercelTeam } from "../entities.js";
 
 function vercelErr(c: Context, status: ContentfulStatusCode, code: string, message: string) {
@@ -38,6 +36,19 @@ function formatConfiguration(config: VercelIntegrationConfiguration) {
   };
 }
 
+function resolveScopeOwnerId(c: Context, vs: VercelStore): string | null {
+  const teamId = c.req.query("teamId");
+  const slug = c.req.query("slug");
+  if (teamId) {
+    const team = vs.teams.findOneBy("uid", teamId as VercelTeam["uid"]);
+    if (team) return team.uid;
+  } else if (slug) {
+    const team = vs.teams.findOneBy("slug", slug as VercelTeam["slug"]);
+    if (team) return team.uid;
+  }
+  return null;
+}
+
 export function integrationsRoutes({ app, store }: RouteContext): void {
   const vs = getVercelStore(store);
 
@@ -48,24 +59,13 @@ export function integrationsRoutes({ app, store }: RouteContext): void {
     }
 
     const configId = c.req.param("id");
-    const config = vs.integrationConfigurations.findOneBy("uid", configId as VercelIntegrationConfiguration["uid"]);
+    const config = vs.integrationConfigurations.findOneBy("uid", configId);
 
     if (!config) {
       return vercelErr(c, 404, "not_found", "The configuration was not found");
     }
 
-    const teamId = c.req.query("teamId");
-    const slug = c.req.query("slug");
-
-    let scopeOwnerId: string | null = null;
-    if (teamId) {
-      const team = vs.teams.findOneBy("uid", teamId as VercelTeam["uid"]);
-      if (team) scopeOwnerId = team.uid;
-    } else if (slug) {
-      const team = vs.teams.findOneBy("slug", slug as VercelTeam["slug"]);
-      if (team) scopeOwnerId = team.uid;
-    }
-
+    const scopeOwnerId = resolveScopeOwnerId(c, vs);
     if (scopeOwnerId && config.ownerId !== scopeOwnerId) {
       return vercelErr(c, 403, "forbidden", "You do not have permission to access this resource");
     }
@@ -80,24 +80,13 @@ export function integrationsRoutes({ app, store }: RouteContext): void {
     }
 
     const configId = c.req.param("id");
-    const config = vs.integrationConfigurations.findOneBy("uid", configId as VercelIntegrationConfiguration["uid"]);
+    const config = vs.integrationConfigurations.findOneBy("uid", configId);
 
     if (!config) {
       return vercelErr(c, 404, "not_found", "The configuration was not found");
     }
 
-    const teamId = c.req.query("teamId");
-    const slug = c.req.query("slug");
-
-    let scopeOwnerId: string | null = null;
-    if (teamId) {
-      const team = vs.teams.findOneBy("uid", teamId as VercelTeam["uid"]);
-      if (team) scopeOwnerId = team.uid;
-    } else if (slug) {
-      const team = vs.teams.findOneBy("slug", slug as VercelTeam["slug"]);
-      if (team) scopeOwnerId = team.uid;
-    }
-
+    const scopeOwnerId = resolveScopeOwnerId(c, vs);
     if (scopeOwnerId && config.ownerId !== scopeOwnerId) {
       return vercelErr(c, 403, "forbidden", "You do not have permission to access this resource");
     }
