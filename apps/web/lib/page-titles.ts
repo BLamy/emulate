@@ -12,6 +12,7 @@ export const PAGE_TITLES: Record<string, string> = {
   twilio: "Twilio API",
   apple: "Apple Sign In",
   microsoft: "Microsoft Entra ID",
+  auth0: "Auth0",
   aws: "AWS",
   "durable-streams": "Durable Streams",
   okta: "Okta",
