@@ -94,12 +94,22 @@ curl http://localhost:4005/.well-known/openid-configuration
 
 Supports `Authorization: Basic` header with base64-encoded `client_id:client_secret` as an alternative to body parameters.
 
+## Auth0
+
+The Auth0 emulator supports OIDC discovery, RS256 ID tokens, password-realm grants, refresh token grants, and client credentials grants.
+
+```bash
+curl http://localhost:4007/.well-known/openid-configuration
+```
+
+Management API endpoints require a Bearer token obtained with the `client_credentials` grant. The token endpoint accepts `client_id` and `client_secret` in the request body or as a Basic auth header.
+
 ## AWS
 
 Pass tokens as `Authorization: Bearer <token>`. Scoped permissions use `s3:*`, `sqs:*`, `iam:*`, `sts:*` patterns.
 
 ```bash
-curl http://localhost:4006/s3/ \
+curl http://localhost:4008/s3/ \
   -H "Authorization: Bearer test_token_admin"
 ```
 

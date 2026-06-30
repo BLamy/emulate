@@ -68,7 +68,8 @@ afterAll(() => Promise.all([github.close(), vercel.close()]));
       </td>
       <td>
         Service name: <code>'vercel'</code>, <code>'github'</code>, <code>'google'</code>, <code>'slack'</code>,{" "}
-        <code>'apple'</code>, <code>'microsoft'</code>, <code>'okta'</code>, <code>'aws'</code>,{" "}
+        <code>'apple'</code>, <code>'microsoft'</code>, <code>'okta'</code>, <code>'auth0'</code>,{" "}
+        <code>'aws'</code>,{" "}
         <code>'durable-streams'</code>, <code>'resend'</code>, <code>'stripe'</code>, <code>'mongoatlas'</code>,{" "}
         <code>'clerk'</code>, or <code>'linear'</code>
       </td>
@@ -213,6 +214,12 @@ npm install @emulators/github @emulators/google @emulators/linear
         <code>@emulators/okta</code>
       </td>
       <td>Okta identity provider / OIDC</td>
+    </tr>
+    <tr>
+      <td>
+        <code>@emulators/auth0</code>
+      </td>
+      <td>Auth0 Authentication API, Management API v2, OIDC</td>
     </tr>
     <tr>
       <td>

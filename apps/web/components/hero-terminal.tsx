@@ -10,10 +10,11 @@ const services = [
   { name: "Apple", port: 4004, slug: "apple" },
   { name: "Microsoft", port: 4005, slug: "microsoft" },
   { name: "Okta", port: 4006, slug: "okta" },
-  { name: "AWS", port: 4007, slug: "aws" },
-  { name: "Durable Streams", port: 4008, slug: "durable-streams" },
-  { name: "Resend", port: 4009, slug: "resend" },
-  { name: "Stripe", port: 4010, slug: "stripe" },
+  { name: "Auth0", port: 4007, slug: "auth0" },
+  { name: "AWS", port: 4008, slug: "aws" },
+  { name: "Durable Streams", port: 4009, slug: "durable-streams" },
+  { name: "Resend", port: 4010, slug: "resend" },
+  { name: "Stripe", port: 4011, slug: "stripe" },
 ];
 
 export function HeroTerminal({ pixelFont }: { pixelFont: string }) {
@@ -58,7 +59,7 @@ export function HeroTerminal({ pixelFont }: { pixelFont: string }) {
           <span className="text-neutral-200">npx emulate{portless ? " --portless" : ""}</span>
           {"\n\n"}
           <span className={`${pixelFont} text-neutral-200`}>emulate</span>
-          {" v0.4.1\n\n"}
+          {" v0.7.0\n\n"}
           {services.map((s) => (
             <span key={s.name}>
               {"  "}

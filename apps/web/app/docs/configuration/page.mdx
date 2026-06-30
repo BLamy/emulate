@@ -293,6 +293,40 @@ microsoft:
       tenant_id: 9188040d-6c67-4c5b-b112-36a304b66dad
 ```
 
+## Auth0 Seed Config
+
+```yaml
+auth0:
+  connections:
+    - name: Username-Password-Authentication
+      strategy: auth0
+  users:
+    - email: testuser@auth0.local
+      password: Test1234!
+      email_verified: true
+      given_name: Test
+      family_name: User
+      app_metadata:
+        role: admin
+  oauth_clients:
+    - client_id: auth0-test-client
+      client_secret: auth0-test-secret
+      name: Sample Auth0 Client
+      redirect_uris:
+        - http://localhost:3000/callback
+      grant_types:
+        - authorization_code
+        - refresh_token
+        - client_credentials
+  token_claim_mappings:
+    role: https://example.com/role
+  log_streams:
+    - url: http://localhost:3000/api/auth0/logs
+      events: ["ss", "fs", "sv", "scp"]
+```
+
+`signing_key` can provide deterministic `private_key_pem`, `public_key_pem`, and optional `kid` values for static JWT validation.
+
 ## AWS Seed Config
 
 ```yaml

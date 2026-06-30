@@ -21,7 +21,7 @@ The protocol is method-based. Streams can live at any path, but the default exam
 ```typescript
 import { DurableStream, stream } from "@durable-streams/client";
 
-const baseUrl = process.env.DURABLE_STREAMS_EMULATOR_URL ?? "http://localhost:4008";
+const baseUrl = process.env.DURABLE_STREAMS_EMULATOR_URL ?? "http://localhost:4009";
 const url = `${baseUrl}/streams/events`;
 
 await DurableStream.create({

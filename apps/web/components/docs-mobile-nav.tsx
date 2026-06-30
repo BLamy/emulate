@@ -29,6 +29,7 @@ const sections: NavSection[] = [
       { href: "/docs/linear", label: "Linear" },
       { href: "/docs/apple", label: "Apple" },
       { href: "/docs/microsoft", label: "Microsoft Entra ID" },
+      { href: "/docs/auth0", label: "Auth0" },
       { href: "/docs/aws", label: "AWS" },
       { href: "/docs/durable-streams", label: "Durable Streams" },
       { href: "/docs/okta", label: "Okta" },

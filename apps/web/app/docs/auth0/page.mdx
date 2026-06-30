@@ -1,0 +1,76 @@
+# Auth0
+
+Auth0 Authentication API, Management API v2, OpenID Connect, and log stream emulation. The emulator supports password-realm, refresh token, and client credentials token grants, RS256 OIDC tokens, user management, email verification tickets, and webhook-dispatched log events.
+
+## Authentication API
+
+- `POST /oauth/token` - token endpoint for `client_credentials`, password-realm, and refresh token grants
+- `GET /userinfo` - user profile from access token
+- `POST /oauth/revoke` - revoke access or refresh tokens
+
+For password-realm grants, use `grant_type=http://auth0.com/oauth/grant-type/password-realm`, `username`, `password`, and `realm`. `client_id` and `client_secret` can be passed in the request body or with an `Authorization: Basic` header.
+
+When an `audience` is provided, access tokens are RS256 JWTs. Without an `audience`, access tokens are opaque local tokens.
+
+## Management API v2
+
+- `POST /api/v2/users` - create user with email, password, connection, and metadata
+- `GET /api/v2/users/:userId` - get user by ID
+- `GET /api/v2/users-by-email` - search users by email
+- `PATCH /api/v2/users/:userId` - update user metadata, profile fields, password, and verification state
+- `POST /api/v2/tickets/email-verification` - create email verification ticket
+
+Management endpoints require a Bearer token from the `client_credentials` grant.
+
+## OIDC
+
+- `GET /.well-known/openid-configuration` - OpenID Connect discovery
+- `GET /.well-known/jwks.json` - JSON Web Key Set (JWKS)
+- `GET /_emulate/public-key.pem` - RSA public key in PEM format
+
+Use `signing_key` in seed config to provide deterministic PEM keys for static JWT validation. If omitted, the emulator generates an RS256 key pair on first use.
+
+## Log Events
+
+Auth0 log events are dispatched to configured webhook subscribers:
+
+- `ss` - successful signup
+- `fs` - failed signup
+- `sv` - successful email verification
+- `scp` - successful password change
+
+The inspector registers a local log sink automatically and exposes recent events at `GET /_emulate/events`.
+
+## Seed Config
+
+```yaml
+auth0:
+  connections:
+    - name: Username-Password-Authentication
+      strategy: auth0
+  users:
+    - email: testuser@auth0.local
+      password: Test1234!
+      email_verified: true
+      given_name: Test
+      family_name: User
+      app_metadata:
+        role: admin
+  oauth_clients:
+    - client_id: auth0-test-client
+      client_secret: auth0-test-secret
+      name: Sample Auth0 Client
+      redirect_uris:
+        - http://localhost:3000/callback
+      grant_types:
+        - authorization_code
+        - refresh_token
+        - client_credentials
+  token_claim_mappings:
+    role: https://example.com/role
+  log_streams:
+    - url: http://localhost:3000/api/auth0/logs
+      events: ["ss", "fs", "sv", "scp"]
+```
+
+`token_claim_mappings` maps `app_metadata` fields into namespaced JWT claims. Metadata keys that are already URL-namespaced are also copied directly into JWT access tokens.
