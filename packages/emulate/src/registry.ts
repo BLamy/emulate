@@ -23,6 +23,7 @@ const SERVICE_NAME_LIST = [
   "microsoft",
   "okta",
   "aws",
+  "durable-streams",
   "resend",
   "stripe",
   "mongoatlas",
@@ -402,6 +403,25 @@ export const SERVICE_REGISTRY: Record<ServiceName, ServiceEntry> = {
           users: [{ user_name: "developer", create_access_key: true }],
           roles: [{ role_name: "lambda-execution-role", description: "Role for Lambda function execution" }],
         },
+      },
+    },
+  },
+  "durable-streams": {
+    label: "Durable Streams protocol emulator",
+    endpoints: "create, append, read, head, close, delete, JSON mode, producer sequencing, inspector",
+    async load() {
+      const mod = await import("@emulators/durable-streams");
+      return { plugin: mod.durableStreamsPlugin, seedFromConfig: mod.seedFromConfig };
+    },
+    defaultFallback() {
+      return { login: "admin", id: 1, scopes: ["streams:*"] };
+    },
+    initConfig: {
+      "durable-streams": {
+        streams: [
+          { path: "/streams/events", content_type: "application/json", body: "[]" },
+          { path: "/streams/logs", content_type: "text/plain", body: "ready\n" },
+        ],
       },
     },
   },

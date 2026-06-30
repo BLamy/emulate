@@ -11,6 +11,7 @@ export const PAGE_TITLES: Record<string, string> = {
   apple: "Apple Sign In",
   microsoft: "Microsoft Entra ID",
   aws: "AWS",
+  "durable-streams": "Durable Streams",
   okta: "Okta",
   mongoatlas: "MongoDB Atlas",
   resend: "Resend",

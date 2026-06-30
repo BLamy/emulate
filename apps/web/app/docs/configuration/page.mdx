@@ -127,6 +127,7 @@ github:
 ```
 
 **Endpoints:**
+
 - `GET /app` - get authenticated app (JWT required)
 - `GET /app/installations` - list app installations
 - `GET /app/installations/:id` - get installation
@@ -319,6 +320,22 @@ aws:
 ```
 
 Default seed (always created): S3 bucket `emulate-default`, SQS queue `emulate-default-queue`, IAM user `admin` with access key pair.
+
+## Durable Streams Seed Config
+
+```yaml
+durable-streams:
+  streams:
+    - path: /streams/events
+      content_type: application/json
+      body: "[]"
+    - path: /streams/logs
+      content_type: text/plain
+      body: "ready\n"
+      closed: false
+```
+
+Default seed (always created): an empty JSON stream at `/streams/emulate-default`.
 
 ## Okta Seed Config
 

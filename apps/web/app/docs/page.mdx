@@ -1,6 +1,6 @@
 # Getting Started
 
-Local drop-in replacement for Vercel, GitHub, Google, Slack, Apple, Microsoft, Okta, AWS, Resend, Stripe, MongoDB Atlas, Clerk, and Linear APIs. Built for CI and no-network sandboxes. Fully stateful, production-fidelity API emulation. Not mocks.
+Local drop-in replacement for Vercel, GitHub, Google, Slack, Apple, Microsoft, Okta, AWS, Durable Streams, Resend, Stripe, MongoDB Atlas, Clerk, and Linear APIs. Built for CI and no-network sandboxes. Fully stateful, production-fidelity API emulation. Not mocks.
 
 ## Quick Start
 
@@ -18,11 +18,12 @@ All services start with sensible defaults. No config file needed:
 - **Microsoft** on `http://localhost:4005`
 - **Okta** on `http://localhost:4006`
 - **AWS** on `http://localhost:4007`
-- **Resend** on `http://localhost:4008`
-- **Stripe** on `http://localhost:4009`
-- **MongoDB Atlas** on `http://localhost:4010`
-- **Clerk** on `http://localhost:4011`
-- **Linear** on `http://localhost:4012`
+- **Durable Streams** on `http://localhost:4008`
+- **Resend** on `http://localhost:4009`
+- **Stripe** on `http://localhost:4010`
+- **MongoDB Atlas** on `http://localhost:4011`
+- **Clerk** on `http://localhost:4012`
+- **Linear** on `http://localhost:4013`
 
 ## CLI
 
@@ -61,17 +62,25 @@ npx emulate list
   </thead>
   <tbody>
     <tr>
-      <td><code>-p, --port</code></td>
-      <td><code>4000</code></td>
+      <td>
+        <code>-p, --port</code>
+      </td>
+      <td>
+        <code>4000</code>
+      </td>
       <td>Base port (auto-increments per service)</td>
     </tr>
     <tr>
-      <td><code>-s, --service</code></td>
+      <td>
+        <code>-s, --service</code>
+      </td>
       <td>all</td>
       <td>Comma-separated services to enable</td>
     </tr>
     <tr>
-      <td><code>--seed</code></td>
+      <td>
+        <code>--seed</code>
+      </td>
       <td>auto-detect</td>
       <td>Path to seed config (YAML or JSON)</td>
     </tr>

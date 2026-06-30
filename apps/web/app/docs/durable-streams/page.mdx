@@ -1,0 +1,78 @@
+# Durable Streams
+
+Durable Streams protocol emulation for local append-only streams. State is in-memory and routes are compatible with `@durable-streams/client` when you point stream URLs at the emulator.
+
+## Endpoints
+
+The protocol is method-based. Streams can live at any path, but the default examples use `/streams/...`.
+
+- `PUT /streams/:path` - create a stream, optionally with initial body data
+- `HEAD /streams/:path` - read stream metadata
+- `GET /streams/:path?offset=-1` - read from the beginning
+- `GET /streams/:path?offset=now` - read from the current tail
+- `GET /streams/:path?offset=<offset>&live=long-poll` - live poll response
+- `GET /streams/:path?offset=<offset>&live=sse` - Server-Sent Events response
+- `POST /streams/:path` - append bytes or JSON values
+- `POST /streams/:path` with `Stream-Closed: true` - close the stream
+- `DELETE /streams/:path` - delete a stream
+
+## Client Usage
+
+```typescript
+import { DurableStream, stream } from "@durable-streams/client";
+
+const baseUrl = process.env.DURABLE_STREAMS_EMULATOR_URL ?? "http://localhost:4008";
+const url = `${baseUrl}/streams/events`;
+
+await DurableStream.create({
+  url,
+  contentType: "application/json",
+  headers: { Authorization: "Bearer test_token_admin" },
+});
+
+await fetch(url, {
+  method: "POST",
+  headers: {
+    Authorization: "Bearer test_token_admin",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ type: "created", id: 1 }),
+});
+
+const response = await stream<{ type: string; id: number }>({
+  url,
+  headers: { Authorization: "Bearer test_token_admin" },
+  offset: "-1",
+  live: false,
+});
+
+const events = await response.json();
+```
+
+## Supported Behavior
+
+- JSON-mode append validation and array response formatting
+- `Stream-Next-Offset`, `Stream-Up-To-Date`, `Stream-Closed`, `Stream-TTL`, and `Stream-Expires-At` headers
+- `Stream-Seq` conflict checks
+- Idempotent producer headers: `Producer-Id`, `Producer-Epoch`, and `Producer-Seq`
+- Basic fork creation with `Stream-Forked-From` and `Stream-Fork-Offset`
+- Inspector at `GET /_inspector`
+
+## Seed Configuration
+
+```yaml
+durable-streams:
+  streams:
+    - path: /streams/events
+      content_type: application/json
+      body: "[]"
+    - path: /streams/logs
+      content_type: text/plain
+      body: "ready\n"
+```
+
+Default seed: `/streams/emulate-default` as an empty JSON stream.
+
+## Current Limits
+
+The emulator focuses on local testing fidelity for common create, append, read, and close workflows. It does not implement durable persistence beyond emulate's shared persistence adapter, full subscription APIs, or blocking long-poll waits.

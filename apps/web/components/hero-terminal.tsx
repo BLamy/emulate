@@ -9,9 +9,9 @@ const services = [
   { name: "Slack", port: 4003, slug: "slack" },
   { name: "Apple", port: 4004, slug: "apple" },
   { name: "Microsoft", port: 4005, slug: "microsoft" },
-  { name: "AWS", port: 4006, slug: "aws" },
-  { name: "Okta", port: 4007, slug: "okta" },
-  { name: "MongoDB Atlas", port: 4008, slug: "mongoatlas" },
+  { name: "Okta", port: 4006, slug: "okta" },
+  { name: "AWS", port: 4007, slug: "aws" },
+  { name: "Durable Streams", port: 4008, slug: "durable-streams" },
   { name: "Resend", port: 4009, slug: "resend" },
   { name: "Stripe", port: 4010, slug: "stripe" },
 ];

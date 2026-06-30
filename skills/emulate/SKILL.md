@@ -1,6 +1,6 @@
 ---
 name: emulate
-description: Local drop-in API emulator for Vercel, GitHub, Google, Slack, Apple, Microsoft, AWS, Linear, and other developer APIs. Use when the user needs to start emulated services, configure seed data, write tests against local APIs, set up CI without network access, or work with the emulate CLI or programmatic API. Triggers include "start the emulator", "emulate services", "mock API locally", "create emulator config", "test against local API", "npx emulate", or any task requiring local service emulation.
+description: Local drop-in API emulator for Vercel, GitHub, Google, Slack, Apple, Microsoft, AWS, Durable Streams, Linear, and other developer APIs. Use when the user needs to start emulated services, configure seed data, write tests against local APIs, set up CI without network access, or work with the emulate CLI or programmatic API. Triggers include "start the emulator", "emulate services", "mock API locally", "create emulator config", "test against local API", "npx emulate", or any task requiring local service emulation.
 allowed-tools: Bash(npx emulate:*)
 ---
 
@@ -16,21 +16,22 @@ npx emulate
 
 All services start with sensible defaults:
 
-| Service   | Default Port |
-|-----------|-------------|
-| Vercel    | 4000        |
-| GitHub    | 4001        |
-| Google    | 4002        |
-| Slack     | 4003        |
-| Apple     | 4004        |
-| Microsoft | 4005        |
-| Okta      | 4006        |
-| AWS       | 4007        |
-| Resend    | 4008        |
-| Stripe    | 4009        |
-| MongoDB Atlas | 4010   |
-| Clerk     | 4011        |
-| Linear    | 4012        |
+| Service         | Default Port |
+| --------------- | ------------ |
+| Vercel          | 4000         |
+| GitHub          | 4001         |
+| Google          | 4002         |
+| Slack           | 4003         |
+| Apple           | 4004         |
+| Microsoft       | 4005         |
+| Okta            | 4006         |
+| AWS             | 4007         |
+| Durable Streams | 4008         |
+| Resend          | 4009         |
+| Stripe          | 4010         |
+| MongoDB Atlas   | 4011         |
+| Clerk           | 4012         |
+| Linear          | 4013         |
 
 ## CLI
 
@@ -59,13 +60,13 @@ npx emulate list
 
 ### Options
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-p, --port` | `4000` | Base port (auto-increments per service) |
-| `-s, --service` | all | Comma-separated services to enable |
-| `--seed` | auto-detect | Path to seed config (YAML or JSON) |
-| `--base-url` | none | Override advertised base URL (supports `{service}` template) |
-| `--portless` | off | Serve over HTTPS via portless (auto-registers aliases) |
+| Flag            | Default     | Description                                                  |
+| --------------- | ----------- | ------------------------------------------------------------ |
+| `-p, --port`    | `4000`      | Base port (auto-increments per service)                      |
+| `-s, --service` | all         | Comma-separated services to enable                           |
+| `--seed`        | auto-detect | Path to seed config (YAML or JSON)                           |
+| `--base-url`    | none        | Override advertised base URL (supports `{service}` template) |
+| `--portless`    | off         | Serve over HTTPS via portless (auto-registers aliases)       |
 
 The port can also be set via `EMULATE_PORT` or `PORT` environment variables.
 
@@ -80,54 +81,57 @@ npm install emulate
 Each call to `createEmulator` starts a single service:
 
 ```typescript
-import { createEmulator } from 'emulate'
+import { createEmulator } from "emulate";
 
-const github = await createEmulator({ service: 'github', port: 4001 })
-const vercel = await createEmulator({ service: 'vercel', port: 4002 })
+const github = await createEmulator({ service: "github", port: 4001 });
+const vercel = await createEmulator({ service: "vercel", port: 4002 });
 
-github.url   // 'http://localhost:4001'
-vercel.url   // 'http://localhost:4002'
+github.url; // 'http://localhost:4001'
+vercel.url; // 'http://localhost:4002'
 
-await github.close()
-await vercel.close()
+await github.close();
+await vercel.close();
 ```
 
 ### Options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `service` | *(required)* | `'vercel'`, `'github'`, `'google'`, `'slack'`, `'apple'`, `'microsoft'`, `'okta'`, `'aws'`, `'resend'`, `'stripe'`, `'mongoatlas'`, `'clerk'`, or `'linear'` |
-| `port` | `4000` | Port for the HTTP server |
-| `seed` | none | Inline seed data (same shape as YAML config) |
-| `baseUrl` | none | Override advertised base URL. Per-service `baseUrl` in seed config takes highest priority, then this option, then `EMULATE_BASE_URL` env var (supports `{service}`), then `PORTLESS_URL` (supports `{service}`, automatically set by the `portless` CLI wrapper), then `http://localhost:<port>`. |
+| Option    | Default      | Description                                                                                                                                                                                                                                                                                       |
+| --------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `service` | _(required)_ | `'vercel'`, `'github'`, `'google'`, `'slack'`, `'apple'`, `'microsoft'`, `'okta'`, `'aws'`, `'durable-streams'`, `'resend'`, `'stripe'`, `'mongoatlas'`, `'clerk'`, or `'linear'`                                                                                                                 |
+| `port`    | `4000`       | Port for the HTTP server                                                                                                                                                                                                                                                                          |
+| `seed`    | none         | Inline seed data (same shape as YAML config)                                                                                                                                                                                                                                                      |
+| `baseUrl` | none         | Override advertised base URL. Per-service `baseUrl` in seed config takes highest priority, then this option, then `EMULATE_BASE_URL` env var (supports `{service}`), then `PORTLESS_URL` (supports `{service}`, automatically set by the `portless` CLI wrapper), then `http://localhost:<port>`. |
 
 ### Instance Methods
 
-| Method | Description |
-|--------|-------------|
-| `url` | Base URL of the running server |
-| `reset()` | Wipe the store and replay seed data |
+| Method    | Description                                  |
+| --------- | -------------------------------------------- |
+| `url`     | Base URL of the running server               |
+| `reset()` | Wipe the store and replay seed data          |
 | `close()` | Shut down the HTTP server, returns a Promise |
 
 ## Vitest / Jest Setup
 
 ```typescript
-import { createEmulator, type Emulator } from 'emulate'
+import { createEmulator, type Emulator } from "emulate";
 
-let github: Emulator
-let vercel: Emulator
+let github: Emulator;
+let vercel: Emulator;
 
 beforeAll(async () => {
-  ;[github, vercel] = await Promise.all([
-    createEmulator({ service: 'github', port: 4001 }),
-    createEmulator({ service: 'vercel', port: 4002 }),
-  ])
-  process.env.GITHUB_EMULATOR_URL = github.url
-  process.env.VERCEL_EMULATOR_URL = vercel.url
-})
+  [github, vercel] = await Promise.all([
+    createEmulator({ service: "github", port: 4001 }),
+    createEmulator({ service: "vercel", port: 4002 }),
+  ]);
+  process.env.GITHUB_EMULATOR_URL = github.url;
+  process.env.VERCEL_EMULATOR_URL = vercel.url;
+});
 
-afterEach(() => { github.reset(); vercel.reset() })
-afterAll(() => Promise.all([github.close(), vercel.close()]))
+afterEach(() => {
+  github.reset();
+  vercel.reset();
+});
+afterAll(() => Promise.all([github.close(), vercel.close()]));
 ```
 
 ## Configuration
@@ -284,6 +288,12 @@ aws:
         create_access_key: true
     roles:
       - role_name: lambda-execution-role
+
+durable-streams:
+  streams:
+    - path: /streams/events
+      content_type: application/json
+      body: "[]"
 ```
 
 ### Auth
@@ -344,7 +354,8 @@ SLACK_EMULATOR_URL=http://localhost:4003
 APPLE_EMULATOR_URL=http://localhost:4004
 MICROSOFT_EMULATOR_URL=http://localhost:4005
 AWS_EMULATOR_URL=http://localhost:4007
-LINEAR_EMULATOR_URL=http://localhost:4012
+DURABLE_STREAMS_EMULATOR_URL=http://localhost:4008
+LINEAR_EMULATOR_URL=http://localhost:4013
 ```
 
 Then use these in your app to construct API and OAuth URLs. See each service's skill for SDK-specific override instructions.
@@ -360,21 +371,25 @@ By default, all emulator state is in-memory. For persistence across process rest
 ### Built-in file persistence
 
 ```typescript
-import { filePersistence } from '@emulators/core'
+import { filePersistence } from "@emulators/core";
 
 // CLI or local dev: persists to a JSON file
-const adapter = filePersistence('.emulate/state.json')
+const adapter = filePersistence(".emulate/state.json");
 ```
 
 ### Custom adapters
 
 ```typescript
-import type { PersistenceAdapter } from '@emulators/core'
+import type { PersistenceAdapter } from "@emulators/core";
 
 const kvAdapter: PersistenceAdapter = {
-  async load() { return await kv.get('emulate-state') },
-  async save(data) { await kv.set('emulate-state', data) },
-}
+  async load() {
+    return await kv.get("emulate-state");
+  },
+  async save(data) {
+    await kv.set("emulate-state", data);
+  },
+};
 ```
 
 State is loaded on cold start and saved after every mutating request (POST, PUT, PATCH, DELETE). Saves are serialized to prevent race conditions.
@@ -395,6 +410,7 @@ packages/
     apple/           # Sign in with Apple / OIDC plugin
     microsoft/       # Microsoft Entra ID OAuth 2.0 / OIDC plugin
     aws/             # AWS S3, SQS, IAM, STS plugin
+    durable-streams/ # Durable Streams protocol plugin
 ```
 
 The core provides a generic `Store` with typed `Collection<T>` instances supporting CRUD, indexing, filtering, and pagination. Each service plugin registers routes with the shared internal app and uses the store for state.
