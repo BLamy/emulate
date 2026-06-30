@@ -8,16 +8,16 @@ Stateful Linear GraphQL API emulation with organizations, users, teams, workflow
 npx emulate --service linear
 ```
 
-When Linear is the only enabled service, it starts on `http://localhost:4000`. When all services are started, it uses `http://localhost:4012`.
+When Linear is the only enabled service, it starts on `http://localhost:4000`. When all services are started, it uses `http://localhost:4013`.
 
 ## URL Mapping
 
-| Real Linear URL | Emulator URL |
-|-----------------|--------------|
-| `https://api.linear.app/graphql` | `$LINEAR_EMULATOR_URL/graphql` |
-| `https://linear.app/oauth/authorize` | `$LINEAR_EMULATOR_URL/oauth/authorize` |
-| `https://api.linear.app/oauth/token` | `$LINEAR_EMULATOR_URL/oauth/token` |
-| `https://api.linear.app/oauth/revoke` | `$LINEAR_EMULATOR_URL/oauth/revoke` |
+| Real Linear URL                       | Emulator URL                           |
+| ------------------------------------- | -------------------------------------- |
+| `https://api.linear.app/graphql`      | `$LINEAR_EMULATOR_URL/graphql`         |
+| `https://linear.app/oauth/authorize`  | `$LINEAR_EMULATOR_URL/oauth/authorize` |
+| `https://api.linear.app/oauth/token`  | `$LINEAR_EMULATOR_URL/oauth/token`     |
+| `https://api.linear.app/oauth/revoke` | `$LINEAR_EMULATOR_URL/oauth/revoke`    |
 
 ## GraphQL
 
