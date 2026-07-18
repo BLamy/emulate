@@ -47,6 +47,12 @@ function createTestApp() {
         name: "App Client",
         grant_types: ["authorization_code", "refresh_token", "http://auth0.com/oauth/grant-type/password-realm"],
       },
+      {
+        client_id: "other-client",
+        client_secret: "other-secret",
+        name: "Other Client",
+        grant_types: ["urn:ietf:params:oauth:grant-type:device_code"],
+      },
     ],
   });
 }
@@ -136,6 +142,25 @@ async function authorizeCode(
 }
 
 describe("Authorization code with mandatory PKCE", () => {
+  it.each([
+    ["unsupported response_type", { response_type: "token" }, "response_type must be code"],
+    ["unknown client", { client_id: "unknown-client" }, "Unknown client_id"],
+    ["unregistered redirect", { redirect_uri: "http://attacker.example/callback" }, "Invalid redirect_uri"],
+  ])("rejects %s without redirecting", async (_name, override, description) => {
+    const query = new URLSearchParams({
+      response_type: "code",
+      client_id: "app-client",
+      redirect_uri: "http://localhost:3000/callback",
+      code_challenge: "challenge",
+      code_challenge_method: "S256",
+      ...override,
+    });
+    const response = await app.request(`${base}/authorize?${query}`);
+    expect(response.status).toBe(400);
+    expect(response.headers.get("location")).toBeNull();
+    expect(await response.json()).toEqual({ error: "invalid_request", error_description: description });
+  });
+
   it("renders credential refusals as inspectable browser pages without issuing redirects", async () => {
     seedFromConfig(store, base, { now: 1_700_000_000, seed: "credential-refusal" });
     const query = new URLSearchParams({
@@ -314,6 +339,36 @@ function pollDevice(deviceCode: string) {
 }
 
 describe("Device authorization", () => {
+  it("rejects an unknown client before issuing a device grant", async () => {
+    const response = await app.request(`${base}/oauth/device/code`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ client_id: "unknown-client", scope: "openid" }).toString(),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid_request", error_description: "Unknown client_id" });
+  });
+
+  it("rejects a device grant polled by another valid client without consuming it", async () => {
+    const grant = await startDeviceGrant("wrong-device-client");
+    const wrongClient = await app.request(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        client_id: "other-client",
+        client_secret: "other-secret",
+        device_code: grant.device_code,
+      }),
+    });
+    expect(wrongClient.status).toBe(400);
+    expect(await wrongClient.json()).toEqual({ error: "invalid_grant", error_description: "Wrong client_id." });
+
+    const ownerPoll = await pollDevice(grant.device_code);
+    expect(ownerPoll.status).toBe(400);
+    expect(await ownerPoll.json()).toMatchObject({ error: "authorization_pending" });
+  });
+
   it("renders unknown-code and credential refusals as inspectable browser pages", async () => {
     const unknown = await app.request(`${base}/activate`, {
       method: "POST",
