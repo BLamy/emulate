@@ -377,9 +377,9 @@ ${hiddenInputs(params)}
 
     const user = auth0Store.users.findOneBy("email", params.email ?? "");
     if (!user || !verifyPassword(params.password ?? "", user.password_hash)) {
-      return c.html(renderErrorPage("Sign in failed", AUTH0_ERRORS.WRONG_CREDENTIALS, "auth0"), 403);
+      return c.html(renderErrorPage("Sign in failed", AUTH0_ERRORS.WRONG_CREDENTIALS, "auth0"));
     }
-    if (user.blocked) return c.html(renderErrorPage("Sign in failed", AUTH0_ERRORS.USER_BLOCKED, "auth0"), 403);
+    if (user.blocked) return c.html(renderErrorPage("Sign in failed", AUTH0_ERRORS.USER_BLOCKED, "auth0"));
 
     const code = generateAuth0Material(store, "auth0_code");
     getAuthorizationCodes(store).set(code, {
@@ -441,9 +441,9 @@ ${hiddenInputs(params)}
   app.post("/activate", async (c) => {
     const body = await parseTokenBody(c);
     const entry = Array.from(getDeviceCodes(store).values()).find((grant) => grant.userCode === body.user_code);
-    if (!entry) return c.html(renderErrorPage("Unknown device code", "Check the code and try again.", "auth0"), 400);
+    if (!entry) return c.html(renderErrorPage("Unknown device code", "Check the code and try again.", "auth0"));
     if (auth0Now(store) >= entry.expiresAt) {
-      return c.html(renderErrorPage("Expired device code", "Start device authorization again.", "auth0"), 400);
+      return c.html(renderErrorPage("Expired device code", "Start device authorization again.", "auth0"));
     }
     if (body.decision === "deny") {
       entry.status = "denied";
@@ -451,7 +451,7 @@ ${hiddenInputs(params)}
     }
     const user = auth0Store.users.findOneBy("email", body.email ?? "");
     if (!user || !verifyPassword(body.password ?? "", user.password_hash) || user.blocked) {
-      return c.html(renderErrorPage("Approval failed", AUTH0_ERRORS.WRONG_CREDENTIALS, "auth0"), 403);
+      return c.html(renderErrorPage("Approval failed", AUTH0_ERRORS.WRONG_CREDENTIALS, "auth0"));
     }
     entry.status = "approved";
     entry.userId = user.user_id;

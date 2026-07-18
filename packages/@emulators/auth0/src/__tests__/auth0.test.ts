@@ -136,6 +136,27 @@ async function authorizeCode(
 }
 
 describe("Authorization code with mandatory PKCE", () => {
+  it("renders credential refusals as inspectable browser pages without issuing redirects", async () => {
+    seedFromConfig(store, base, { now: 1_700_000_000, seed: "credential-refusal" });
+    const query = new URLSearchParams({
+      response_type: "code",
+      client_id: "app-client",
+      redirect_uri: "http://localhost:3000/callback",
+      code_challenge: "challenge",
+      code_challenge_method: "S256",
+      email: "alice@example.com",
+      password: "wrong-password",
+    });
+    const response = await app.request(`${base}/authorize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: query.toString(),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(await response.text()).toContain("Wrong email or password");
+  });
+
   it("renders the shared login form and exchanges a single-use code for RS256 tokens", async () => {
     seedFromConfig(store, base, { now: 1_700_000_000, seed: "auth-code-test" });
     const { code, verifier, redirectUri } = await authorizeCode({ nonce: "nonce-123" });
@@ -276,6 +297,31 @@ function pollDevice(deviceCode: string) {
 }
 
 describe("Device authorization", () => {
+  it("renders unknown-code and credential refusals as inspectable browser pages", async () => {
+    const unknown = await app.request(`${base}/activate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ user_code: "UNKNOWN", decision: "approve" }).toString(),
+    });
+    expect(unknown.status).toBe(200);
+    expect(await unknown.text()).toContain("Unknown device code");
+
+    const grant = await startDeviceGrant("credential-refusal");
+    const wrongCredentials = await app.request(`${base}/activate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        user_code: grant.user_code,
+        email: "alice@example.com",
+        password: "wrong-password",
+        decision: "approve",
+      }).toString(),
+    });
+    expect(wrongCredentials.status).toBe(200);
+    expect(await wrongCredentials.text()).toContain("Wrong email or password");
+    expect((await pollDevice(grant.device_code)).status).toBe(400);
+  });
+
   it("renders stable hooks, reports pending, approves, and exchanges once", async () => {
     const grant = await startDeviceGrant();
     const pending = await pollDevice(grant.device_code);
