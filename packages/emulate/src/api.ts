@@ -14,6 +14,10 @@ export interface EmulatorOptions {
   port?: number;
   seed?: SeedConfig;
   baseUrl?: string;
+  /** Frozen Unix time in seconds for deterministic emulator output. */
+  now?: number;
+  /** Seed used for deterministic generated codes and token material. */
+  seedMaterial?: string;
 }
 
 export interface GeneratedSecret {
@@ -74,6 +78,8 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
   cachedResolver = loaded.createAppKeyResolver?.(store);
 
   const seed = () => {
+    if (options.now !== undefined) store.setData("emulate.now", options.now);
+    if (options.seedMaterial !== undefined) store.setData("emulate.seed", options.seedMaterial);
     loaded.plugin.seed?.(store, baseUrl);
     if (svcSeedConfig && loaded.seedFromConfig) {
       loaded.seedFromConfig(store, baseUrl, svcSeedConfig, webhooks);

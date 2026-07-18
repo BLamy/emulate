@@ -191,12 +191,14 @@ afterAll(() => Promise.all([github.close(), vercel.close()]));
 
 ### Options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `service` | *(required)* | Service name: `'vercel'`, `'github'`, `'google'`, `'slack'`, `'apple'`, `'microsoft'`, `'okta'`, `'auth0'`, `'aws'`, `'durable-streams'`, `'resend'`, `'stripe'`, `'mongoatlas'`, `'clerk'`, `'linear'`, or `'twilio'` |
-| `port` | `4000` | Port for the HTTP server |
-| `seed` | none | Inline seed data (same shape as YAML config) |
-| `baseUrl` | none | Override advertised base URL. Per-service `baseUrl` in seed config takes highest priority, then this option, then `EMULATE_BASE_URL` env var (supports `{service}`), then `PORTLESS_URL` (supports `{service}`, automatically set by the `portless` CLI wrapper), then `http://localhost:<port>`. |
+| Option         | Default      | Description                                                                                                                                                                                                                                                                                       |
+| -------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `service`      | _(required)_ | Service name: `'vercel'`, `'github'`, `'google'`, `'slack'`, `'apple'`, `'microsoft'`, `'okta'`, `'auth0'`, `'aws'`, `'durable-streams'`, `'resend'`, `'stripe'`, `'mongoatlas'`, `'clerk'`, `'linear'`, or `'twilio'`                                                                          |
+| `port`         | `4000`       | Port for the HTTP server                                                                                                                                                                                                                                                                          |
+| `seed`         | none         | Inline seed data (same shape as YAML config)                                                                                                                                                                                                                                                      |
+| `baseUrl`      | none         | Override advertised base URL. Per-service `baseUrl` in seed config takes highest priority, then this option, then `EMULATE_BASE_URL` env var (supports `{service}`), then `PORTLESS_URL` (supports `{service}`, automatically set by the `portless` CLI wrapper), then `http://localhost:<port>`. |
+| `now`          | wall clock   | Freeze Unix time in seconds for deterministic output                                                                                                                                                                                                                                              |
+| `seedMaterial` | random       | Seed deterministic generated codes and token material                                                                                                                                                                                                                                             |
 
 ### Instance methods
 
@@ -1049,7 +1051,10 @@ Auth0 Authentication API, Management API v2, OpenID Connect, and log stream emul
 
 ### Authentication API
 
-- `POST /oauth/token` - token endpoint for `client_credentials`, password-realm, and refresh token grants
+- `GET /authorize` and `POST /authorize` - browser authorization code login with mandatory PKCE `S256`
+- `POST /oauth/device/code` - begin a device authorization grant
+- `GET /activate` and `POST /activate` - browser approval or denial for a device grant
+- `POST /oauth/token` - token endpoint for authorization code, device code, `client_credentials`, password-realm, and refresh token grants
 - `GET /userinfo` - user profile from access token
 - `POST /oauth/revoke` - revoke access or refresh tokens
 
@@ -1068,6 +1073,8 @@ Auth0 Authentication API, Management API v2, OpenID Connect, and log stream emul
 - `GET /_emulate/public-key.pem` - RSA public key in PEM format
 
 Supports deterministic signing keys via `signing_key` in seed config for static JWT validation. When an `audience` is requested, access tokens are RS256 JWTs. `token_claim_mappings` can map `app_metadata` fields into namespaced JWT claims.
+
+Set `auth0.now` to a Unix timestamp and `auth0.seed` to fixed material for byte-repeatable authorization codes, device codes, and tokens. Programmatic callers can pass `createEmulator({ now, seedMaterial })`; CLI callers can pass `--now` and `--seed-material`.
 
 ### Log Events
 

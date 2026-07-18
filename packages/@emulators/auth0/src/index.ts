@@ -1,5 +1,6 @@
 import type { AppEnv, Hono, RouteContext, ServicePlugin, Store, TokenMap, WebhookDispatcher } from "@emulators/core";
 import { DEFAULT_CONNECTION, generateAuth0UserId, hashPassword } from "./helpers.js";
+import { configureAuth0Runtime } from "./oauth-state.js";
 import { inspectorRoutes } from "./routes/inspector.js";
 import { oauthRoutes } from "./routes/oauth.js";
 import { ticketRoutes } from "./routes/tickets.js";
@@ -10,6 +11,10 @@ export { getAuth0Store, type Auth0Store } from "./store.js";
 export * from "./entities.js";
 
 export interface Auth0SeedConfig {
+  now?: number;
+  seed?: string;
+  authorization_code_ttl_seconds?: number;
+  device_code_ttl_seconds?: number;
   connections?: Array<{
     name: string;
     strategy?: string;
@@ -52,6 +57,7 @@ export interface Auth0SeedConfig {
 
 function seedDefaults(store: Store, _baseUrl: string): void {
   const auth0 = getAuth0Store(store);
+  configureAuth0Runtime(store, {});
 
   if (!auth0.connections.findOneBy("name", DEFAULT_CONNECTION)) {
     auth0.connections.insert({
@@ -99,6 +105,8 @@ export function seedFromConfig(
   webhooks?: WebhookDispatcher,
 ): void {
   const auth0 = getAuth0Store(store);
+
+  configureAuth0Runtime(store, config);
 
   if (config.connections) {
     for (const conn of config.connections) {

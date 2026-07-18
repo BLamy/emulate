@@ -35,6 +35,8 @@ program
   .option("-p, --port <port>", "Base port", defaultPort)
   .option("-s, --service <services>", "Comma-separated services to enable")
   .option("--seed <file>", "Path to seed config file")
+  .option("--now <unix-seconds>", "Freeze emulator time for deterministic output")
+  .option("--seed-material <value>", "Seed deterministic generated material")
   .option("--base-url <url>", "Override advertised base URL (supports {service} template)")
   .option("--portless", "Serve over HTTPS via portless (auto-registers aliases)")
   .option(
@@ -47,6 +49,11 @@ program
       console.error(`Invalid port: ${opts.port}`);
       process.exit(1);
     }
+    const now = opts.now === undefined ? undefined : Number(opts.now);
+    if (now !== undefined && (!Number.isInteger(now) || now < 0)) {
+      console.error(`Invalid Unix time: ${opts.now}`);
+      process.exit(1);
+    }
     const options = {
       port,
       service: opts.service,
@@ -54,6 +61,8 @@ program
       baseUrl: opts.baseUrl,
       portless: opts.portless,
       generatedSecretsFile: opts.generatedSecretsFile,
+      now,
+      seedMaterial: opts.seedMaterial,
     };
     if (!opts.generatedSecretsFile) {
       await startCommand(options);

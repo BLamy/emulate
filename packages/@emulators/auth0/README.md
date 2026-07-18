@@ -14,7 +14,12 @@ npm install @emulators/auth0
 
 ### Authentication API
 
-- `POST /oauth/token` — token endpoint (client_credentials, password-realm, refresh_token)
+- `GET /authorize` — authorization code login with mandatory PKCE `S256`
+- `POST /authorize` — submit the authorization login form
+- `POST /oauth/device/code` — begin device authorization
+- `GET /activate` — device approval and denial form
+- `POST /activate` — submit a device decision
+- `POST /oauth/token` — token endpoint (authorization_code, device_code, client_credentials, password-realm, refresh_token)
 - `GET /userinfo` — user profile from access token
 - `POST /oauth/revoke` — revoke refresh token
 
@@ -38,22 +43,24 @@ npm install @emulators/auth0
 
 ## Grant Types
 
-| Grant type | Use |
-|---|---|
-| `client_credentials` | Machine-to-machine tokens (Management API access) |
-| `http://auth0.com/oauth/grant-type/password-realm` | User login with email + password + connection |
-| `refresh_token` | Exchange refresh token for new tokens |
+| Grant type                                         | Use                                               |
+| -------------------------------------------------- | ------------------------------------------------- |
+| `client_credentials`                               | Machine-to-machine tokens (Management API access) |
+| `authorization_code`                               | Browser login with mandatory PKCE `S256`          |
+| `urn:ietf:params:oauth:grant-type:device_code`     | Poll a browser-approved device grant              |
+| `http://auth0.com/oauth/grant-type/password-realm` | User login with email + password + connection     |
+| `refresh_token`                                    | Exchange refresh token for new tokens             |
 
 ## Log Event Streaming
 
 The emulator dispatches Auth0 log events via webhook when state changes occur:
 
-| Type | Event | Trigger |
-|---|---|---|
-| `ss` | Successful Signup | User created |
-| `fs` | Failed Signup | Create user failed |
-| `sv` | Email Verified | Verification ticket consumed |
-| `scp` | Password Changed | User password updated |
+| Type  | Event             | Trigger                      |
+| ----- | ----------------- | ---------------------------- |
+| `ss`  | Successful Signup | User created                 |
+| `fs`  | Failed Signup     | Create user failed           |
+| `sv`  | Email Verified    | Verification ticket consumed |
+| `scp` | Password Changed  | User password updated        |
 
 Configure webhook subscribers in the seed config via `log_streams`.
 
@@ -68,6 +75,8 @@ Error responses match Auth0's actual format so SDK error handling works unchange
 
 ```yaml
 auth0:
+  now: 1700000000
+  seed: repeatable-test-run
   connections:
     - name: Username-Password-Authentication
   users:
@@ -97,6 +106,13 @@ auth0:
 ```
 
 When `signing_key` is omitted, a random RS256 key pair is generated on first request. When provided, all ID tokens and the JWKS endpoint use the configured key, enabling static JWT validation in your backend.
+
+The committed `fixtures/test-keypair.private.jwk.json` and
+`fixtures/test-keypair.public.jwk.json` pair is reserved for deterministic integration
+tests. Convert the JWKs to PEM for `signing_key` and retain
+`kid: eforest-test-2026`. Never use this public test key outside local evidence runs.
+
+`now` freezes Unix time in seconds and `seed` makes authorization codes, device codes, and user codes repeatable. The same values are available through `createEmulator({ now, seedMaterial })` and the CLI flags `--now` and `--seed-material`. Outstanding authorization and device grants are cleared by `reset()`.
 
 ## Links
 

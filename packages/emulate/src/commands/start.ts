@@ -32,6 +32,8 @@ export interface StartOptions {
   baseUrl?: string;
   portless?: boolean;
   generatedSecretsFile?: string;
+  now?: number;
+  seedMaterial?: string;
 }
 
 interface SeedConfig {
@@ -174,8 +176,11 @@ function seedPreparedService(
   preparedService: PreparedService,
   store: Store,
   webhooks: ReturnType<typeof createServer>["webhooks"],
+  options: Pick<StartOptions, "now" | "seedMaterial">,
 ): void {
   const { loadedSvc, svcSeedConfig, baseUrl } = preparedService;
+  if (options.now !== undefined) store.setData("emulate.now", options.now);
+  if (options.seedMaterial !== undefined) store.setData("emulate.seed", options.seedMaterial);
   loadedSvc.plugin.seed?.(store, baseUrl);
   if (svcSeedConfig && loadedSvc.seedFromConfig) {
     loadedSvc.seedFromConfig(store, baseUrl, svcSeedConfig, webhooks);
@@ -336,7 +341,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
       serviceUrls.push({ name: svc, url: baseUrl });
       const { app, store, webhooks } = createPreparedServiceServer(preparedService, tokens);
       stores.push(store);
-      seedPreparedService(preparedService, store, webhooks);
+      seedPreparedService(preparedService, store, webhooks, options);
       const httpServer = serve({ fetch: app.fetch, port });
       httpServers.push(httpServer);
     }
@@ -366,7 +371,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
       serviceUrls.push({ name: svc, url: baseUrl });
       const { app, store, webhooks } = createPreparedServiceServer(preparedService, tokens);
       stores.push(store);
-      seedPreparedService(preparedService, store, webhooks);
+      seedPreparedService(preparedService, store, webhooks, options);
       const httpServer = serve({ fetch: app.fetch, port });
       httpServers.push(httpServer);
       await waitForServerListening(httpServer);

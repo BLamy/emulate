@@ -21,9 +21,14 @@ npx emulate --service auth0
 Or programmatically:
 
 ```typescript
-import { createEmulator } from 'emulate'
+import { createEmulator } from "emulate";
 
-const auth0 = await createEmulator({ service: 'auth0', port: 4007 })
+const auth0 = await createEmulator({
+  service: "auth0",
+  port: 4007,
+  now: 1700000000,
+  seedMaterial: "repeatable-test-run",
+});
 // auth0.url === 'http://localhost:4007'
 ```
 
@@ -37,16 +42,19 @@ AUTH0_EMULATOR_URL=http://localhost:4007
 
 ### URL Mapping
 
-| Real Auth0 URL | Emulator URL |
-|----------------|-------------|
-| `https://{tenant}.auth0.com/oauth/token` | `$AUTH0_EMULATOR_URL/oauth/token` |
-| `https://{tenant}.auth0.com/userinfo` | `$AUTH0_EMULATOR_URL/userinfo` |
-| `https://{tenant}.auth0.com/oauth/revoke` | `$AUTH0_EMULATOR_URL/oauth/revoke` |
-| `https://{tenant}.auth0.com/api/v2/users` | `$AUTH0_EMULATOR_URL/api/v2/users` |
-| `https://{tenant}.auth0.com/api/v2/users-by-email` | `$AUTH0_EMULATOR_URL/api/v2/users-by-email` |
+| Real Auth0 URL                                                 | Emulator URL                                            |
+| -------------------------------------------------------------- | ------------------------------------------------------- |
+| `https://{tenant}.auth0.com/oauth/token`                       | `$AUTH0_EMULATOR_URL/oauth/token`                       |
+| `https://{tenant}.auth0.com/authorize`                         | `$AUTH0_EMULATOR_URL/authorize`                         |
+| `https://{tenant}.auth0.com/oauth/device/code`                 | `$AUTH0_EMULATOR_URL/oauth/device/code`                 |
+| `https://{tenant}.auth0.com/activate`                          | `$AUTH0_EMULATOR_URL/activate`                          |
+| `https://{tenant}.auth0.com/userinfo`                          | `$AUTH0_EMULATOR_URL/userinfo`                          |
+| `https://{tenant}.auth0.com/oauth/revoke`                      | `$AUTH0_EMULATOR_URL/oauth/revoke`                      |
+| `https://{tenant}.auth0.com/api/v2/users`                      | `$AUTH0_EMULATOR_URL/api/v2/users`                      |
+| `https://{tenant}.auth0.com/api/v2/users-by-email`             | `$AUTH0_EMULATOR_URL/api/v2/users-by-email`             |
 | `https://{tenant}.auth0.com/api/v2/tickets/email-verification` | `$AUTH0_EMULATOR_URL/api/v2/tickets/email-verification` |
-| `https://{tenant}.auth0.com/.well-known/openid-configuration` | `$AUTH0_EMULATOR_URL/.well-known/openid-configuration` |
-| `https://{tenant}.auth0.com/.well-known/jwks.json` | `$AUTH0_EMULATOR_URL/.well-known/jwks.json` |
+| `https://{tenant}.auth0.com/.well-known/openid-configuration`  | `$AUTH0_EMULATOR_URL/.well-known/openid-configuration`  |
+| `https://{tenant}.auth0.com/.well-known/jwks.json`             | `$AUTH0_EMULATOR_URL/.well-known/jwks.json`             |
 
 ### auth0-java SDK
 
@@ -65,13 +73,13 @@ auth0 {
 ### auth0 Node.js SDK (npm: `auth0`)
 
 ```typescript
-import { ManagementClient, AuthenticationClient } from 'auth0'
+import { ManagementClient, AuthenticationClient } from "auth0";
 
 const management = new ManagementClient({
-  domain: 'localhost:4007',
-  clientId: 'my-m2m-client',
-  clientSecret: 'my-secret',
-})
+  domain: "localhost:4007",
+  clientId: "my-m2m-client",
+  clientSecret: "my-secret",
+});
 ```
 
 ### @auth0/nextjs-auth0
@@ -87,35 +95,35 @@ APP_BASE_URL=http://localhost:3000
 ### Auth.js / NextAuth.js
 
 ```typescript
-import Auth0Provider from '@auth/core/providers/auth0'
+import Auth0Provider from "@auth/core/providers/auth0";
 
 Auth0Provider({
   clientId: process.env.AUTH0_CLIENT_ID,
   clientSecret: process.env.AUTH0_CLIENT_SECRET,
   issuer: process.env.AUTH0_EMULATOR_URL,
-})
+});
 ```
 
 ### openid-client
 
 ```typescript
-import { Issuer } from 'openid-client'
+import { Issuer } from "openid-client";
 
-const auth0Issuer = await Issuer.discover(
-  process.env.AUTH0_EMULATOR_URL ?? 'https://my-tenant.auth0.com'
-)
+const auth0Issuer = await Issuer.discover(process.env.AUTH0_EMULATOR_URL ?? "https://my-tenant.auth0.com");
 
 const client = new auth0Issuer.Client({
   client_id: process.env.AUTH0_CLIENT_ID,
   client_secret: process.env.AUTH0_CLIENT_SECRET,
-  redirect_uris: ['http://localhost:3000/api/auth/callback/auth0'],
-})
+  redirect_uris: ["http://localhost:3000/api/auth/callback/auth0"],
+});
 ```
 
 ## Seed Config
 
 ```yaml
 auth0:
+  now: 1700000000
+  seed: repeatable-test-run
   connections:
     - name: Username-Password-Authentication
   users:
@@ -363,12 +371,12 @@ When configured, all ID tokens and the JWKS endpoint use the provided key. The `
 
 The emulator dispatches Auth0 log events via webhook when state changes:
 
-| Type | Event | Trigger |
-|------|-------|---------|
-| `ss` | Successful Signup | User created via Management API |
-| `fs` | Failed Signup | Create user failed (duplicate, invalid email, weak password) |
-| `sv` | Email Verified | Verification ticket consumed |
-| `scp` | Password Changed | User password updated via PATCH |
+| Type  | Event             | Trigger                                                      |
+| ----- | ----------------- | ------------------------------------------------------------ |
+| `ss`  | Successful Signup | User created via Management API                              |
+| `fs`  | Failed Signup     | Create user failed (duplicate, invalid email, weak password) |
+| `sv`  | Email Verified    | Verification ticket consumed                                 |
+| `scp` | Password Changed  | User password updated via PATCH                              |
 
 Events follow the Auth0 log schema:
 
@@ -437,12 +445,12 @@ curl -s -X POST $AUTH0/oauth/token \
 
 Error strings match Auth0's actual API responses so SDK error handling works unchanged:
 
-| Scenario | Emulator response |
-|----------|------------------|
-| Duplicate user | `{ "message": "The user already exists." }` |
-| Weak password | `{ "message": "PasswordStrengthError: Password is too weak" }` |
-| Invalid email | `{ "message": "Object didn't pass validation for format email: ..." }` |
-| Wrong credentials | `{ "error": "invalid_grant", "error_description": "Wrong email or password." }` |
-| Blocked user | `{ "error": "unauthorized", "error_description": "user is blocked" }` |
+| Scenario              | Emulator response                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------------- |
+| Duplicate user        | `{ "message": "The user already exists." }`                                              |
+| Weak password         | `{ "message": "PasswordStrengthError: Password is too weak" }`                           |
+| Invalid email         | `{ "message": "Object didn't pass validation for format email: ..." }`                   |
+| Wrong credentials     | `{ "error": "invalid_grant", "error_description": "Wrong email or password." }`          |
+| Blocked user          | `{ "error": "unauthorized", "error_description": "user is blocked" }`                    |
 | Invalid refresh token | `{ "error": "invalid_grant", "error_description": "Unknown or invalid refresh token." }` |
-| User not found | `{ "message": "The user does not exist." }` |
+| User not found        | `{ "message": "The user does not exist." }`                                              |

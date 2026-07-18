@@ -251,6 +251,67 @@ describe("createEmulator", () => {
     await slack.close();
   });
 
+  it("replays Auth0 authorization material after reset with injected options", async () => {
+    const auth0 = await createEmulator({
+      service: "auth0",
+      port: 14040,
+      now: 1_700_000_000,
+      seedMaterial: "api-reset",
+      seed: {
+        auth0: {
+          users: [{ email: "api@example.com", password: "ApiTest1!", user_id: "api-user" }],
+          oauth_clients: [
+            {
+              client_id: "api-client",
+              client_secret: "api-secret",
+              redirect_uris: ["http://localhost:3000/callback"],
+            },
+          ],
+        },
+      },
+    });
+
+    const authorize = async () => {
+      const params = {
+        response_type: "code",
+        client_id: "api-client",
+        redirect_uri: "http://localhost:3000/callback",
+        code_challenge: "fixed-s256-challenge",
+        code_challenge_method: "S256",
+        email: "api@example.com",
+        password: "ApiTest1!",
+      };
+      const response = await fetch(`${auth0.url}/authorize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams(params),
+        redirect: "manual",
+      });
+      expect(response.status).toBe(302);
+      return new URL(response.headers.get("location")!).searchParams.get("code")!;
+    };
+
+    const firstCode = await authorize();
+    auth0.reset();
+
+    const cleared = await fetch(`${auth0.url}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "authorization_code",
+        client_id: "api-client",
+        client_secret: "api-secret",
+        code: firstCode,
+        redirect_uri: "http://localhost:3000/callback",
+        code_verifier: "not-used",
+      }),
+    });
+    expect(cleared.status).toBe(400);
+
+    expect(await authorize()).toBe(firstCode);
+    await auth0.close();
+  });
+
   it("throws on unknown service", async () => {
     // @ts-expect-error testing invalid service name
     await expect(createEmulator({ service: "unknown-svc" })).rejects.toThrow("Unknown service");

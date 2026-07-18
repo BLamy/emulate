@@ -1,4 +1,5 @@
 import { decodeJwt, generateKeyPair, exportPKCS8, exportSPKI, jwtVerify, importSPKI } from "jose";
+import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { Hono, Store, WebhookDispatcher, authMiddleware, type TokenMap } from "@emulators/core";
 import { auth0Plugin, getAuth0Store, seedFromConfig } from "../index.js";
@@ -24,6 +25,7 @@ function createTestApp() {
     users: [
       {
         email: "alice@example.com",
+        user_id: "alice",
         password: "Alice1234!",
         email_verified: true,
         given_name: "Alice",
@@ -90,6 +92,238 @@ describe("OIDC Discovery", () => {
     expect(body.keys).toHaveLength(1);
     expect(body.keys[0]!.kid).toBe("emulate-auth0-1");
     expect(body.keys[0]!.alg).toBe("RS256");
+  });
+});
+
+function s256(verifier: string): string {
+  return createHash("sha256").update(verifier).digest("base64url");
+}
+
+async function authorizeCode(
+  options: { verifier?: string; redirectUri?: string; state?: string; nonce?: string } = {},
+) {
+  const verifier = options.verifier ?? "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
+  const redirectUri = options.redirectUri ?? "http://localhost:3000/callback";
+  const query = new URLSearchParams({
+    response_type: "code",
+    client_id: "app-client",
+    redirect_uri: redirectUri,
+    scope: "openid profile email",
+    code_challenge: s256(verifier),
+    code_challenge_method: "S256",
+    state: options.state ?? "state value&=%",
+  });
+  if (options.nonce) query.set("nonce", options.nonce);
+  const page = await app.request(`${base}/authorize?${query}`);
+  const html = await page.text();
+  expect(page.status).toBe(200);
+  expect(html).toContain('data-testid="auth0-login-form"');
+  expect(html).toContain('data-testid="auth0-login-email"');
+
+  const login = await app.request(`${base}/authorize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      ...Object.fromEntries(query),
+      email: "alice@example.com",
+      password: "Alice1234!",
+    }).toString(),
+  });
+  expect(login.status).toBe(302);
+  const location = new URL(login.headers.get("location")!);
+  expect(location.searchParams.get("state")).toBe(options.state ?? "state value&=%");
+  return { code: location.searchParams.get("code")!, verifier, redirectUri };
+}
+
+describe("Authorization code with mandatory PKCE", () => {
+  it("renders the shared login form and exchanges a single-use code for RS256 tokens", async () => {
+    seedFromConfig(store, base, { now: 1_700_000_000, seed: "auth-code-test" });
+    const { code, verifier, redirectUri } = await authorizeCode({ nonce: "nonce-123" });
+    const exchange = () =>
+      app.request(`${base}/oauth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: "app-client",
+          client_secret: "app-secret",
+          code,
+          redirect_uri: redirectUri,
+          code_verifier: verifier,
+        }).toString(),
+      });
+
+    const res = await exchange();
+    expect(res.status).toBe(200);
+    const tokens = (await res.json()) as { access_token: string; id_token: string };
+    const accessClaims = decodeJwt(tokens.access_token);
+    expect(accessClaims).toMatchObject({
+      iss: `${base}/`,
+      sub: expect.stringMatching(/^auth0\|/),
+      aud: "app-client",
+      iat: 1_700_000_000,
+      exp: 1_700_003_600,
+    });
+    expect(Object.keys(accessClaims).sort()).toEqual(["aud", "exp", "iat", "iss", "sub"]);
+    const idClaims = decodeJwt(tokens.id_token);
+    expect(idClaims).toMatchObject({ nonce: "nonce-123", email: "alice@example.com", name: "alice@example.com" });
+    expect(Object.keys(idClaims).sort()).toEqual(["aud", "email", "exp", "iat", "iss", "name", "nonce", "sub"]);
+
+    const reused = await exchange();
+    expect(reused.status).toBe(400);
+    expect(await reused.json()).toMatchObject({ error: "invalid_grant" });
+  });
+
+  it.each([
+    ["plain", "challenge", "code_challenge_method must be S256"],
+    ["S256", "", "code_challenge is required"],
+  ])("rejects invalid PKCE directly without redirect", async (method, challenge, description) => {
+    const query = new URLSearchParams({
+      response_type: "code",
+      client_id: "app-client",
+      redirect_uri: "http://localhost:3000/callback",
+      code_challenge_method: method,
+    });
+    if (challenge) query.set("code_challenge", challenge);
+    const res = await app.request(`${base}/authorize?${query}`);
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+    expect(await res.json()).toEqual({ error: "invalid_request", error_description: description });
+  });
+
+  it("rejects a wrong verifier and redirect URI without consuming the code", async () => {
+    const { code, verifier, redirectUri } = await authorizeCode();
+    const exchange = (codeVerifier: string, uri: string) =>
+      app.request(`${base}/oauth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          grant_type: "authorization_code",
+          client_id: "app-client",
+          client_secret: "app-secret",
+          code,
+          redirect_uri: uri,
+          code_verifier: codeVerifier,
+        }),
+      });
+    expect((await exchange("wrong-verifier", redirectUri)).status).toBe(400);
+    expect((await exchange(verifier, "http://localhost:3000/wrong")).status).toBe(400);
+    expect((await exchange(verifier, redirectUri)).status).toBe(200);
+  });
+
+  it("allows exactly one concurrent exchange", async () => {
+    const { code, verifier, redirectUri } = await authorizeCode();
+    const exchange = () =>
+      app.request(`${base}/oauth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          grant_type: "authorization_code",
+          client_id: "app-client",
+          client_secret: "app-secret",
+          code,
+          redirect_uri: redirectUri,
+          code_verifier: verifier,
+        }),
+      });
+    const statuses = (await Promise.all([exchange(), exchange()])).map((response) => response.status).sort();
+    expect(statuses).toEqual([200, 400]);
+  });
+
+  it("returns expired_token under an injected clock", async () => {
+    seedFromConfig(store, base, { now: 100, seed: "expiry", authorization_code_ttl_seconds: 1 });
+    const { code, verifier, redirectUri } = await authorizeCode();
+    seedFromConfig(store, base, { now: 101, seed: "expiry", authorization_code_ttl_seconds: 1 });
+    const res = await app.request(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "authorization_code",
+        client_id: "app-client",
+        client_secret: "app-secret",
+        code,
+        redirect_uri: redirectUri,
+        code_verifier: verifier,
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "expired_token" });
+  });
+});
+
+async function startDeviceGrant(seed = "device-test", now = 1_700_000_000) {
+  seedFromConfig(store, base, { now, seed });
+  const res = await app.request(`${base}/oauth/device/code`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: "app-client", scope: "openid profile email" }).toString(),
+  });
+  expect(res.status).toBe(200);
+  return (await res.json()) as { device_code: string; user_code: string; verification_uri_complete: string };
+}
+
+function pollDevice(deviceCode: string) {
+  return app.request(`${base}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+      client_id: "app-client",
+      client_secret: "app-secret",
+      device_code: deviceCode,
+    }),
+  });
+}
+
+describe("Device authorization", () => {
+  it("renders stable hooks, reports pending, approves, and exchanges once", async () => {
+    const grant = await startDeviceGrant();
+    const pending = await pollDevice(grant.device_code);
+    expect(pending.status).toBe(400);
+    expect(await pending.json()).toMatchObject({ error: "authorization_pending" });
+
+    const page = await app.request(grant.verification_uri_complete);
+    const html = await page.text();
+    expect(html).toContain('data-testid="auth0-device-form"');
+    expect(html).toContain('data-testid="auth0-device-approve"');
+    expect(html).toContain('data-testid="auth0-device-deny"');
+
+    const approval = await app.request(`${base}/activate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        user_code: grant.user_code,
+        email: "alice@example.com",
+        password: "Alice1234!",
+        decision: "approve",
+      }).toString(),
+    });
+    expect(approval.status).toBe(200);
+    expect((await pollDevice(grant.device_code)).status).toBe(200);
+    expect((await pollDevice(grant.device_code)).status).toBe(400);
+  });
+
+  it("returns access_denied after denial and invalid_grant for fabricated codes", async () => {
+    const grant = await startDeviceGrant("denial");
+    await app.request(`${base}/activate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ user_code: grant.user_code, decision: "deny" }).toString(),
+    });
+    const denied = await pollDevice(grant.device_code);
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ error: "access_denied" });
+    const fabricated = await pollDevice("fabricated");
+    expect(fabricated.status).toBe(400);
+    expect(await fabricated.json()).toMatchObject({ error: "invalid_grant" });
+  });
+
+  it("returns expired_token under an injected clock", async () => {
+    const grant = await startDeviceGrant("device-expiry", 100);
+    seedFromConfig(store, base, { now: 700, seed: "device-expiry" });
+    const expired = await pollDevice(grant.device_code);
+    expect(expired.status).toBe(400);
+    expect(await expired.json()).toMatchObject({ error: "expired_token" });
   });
 });
 
@@ -731,12 +965,90 @@ describe("Additional coverage", () => {
     expect(payload.user_name).toBe("verify-test@example.com");
   });
 
-  it("OIDC discovery does not advertise authorization_code in grant_types_supported", async () => {
+  it("OIDC discovery advertises authorization code, PKCE, and device authorization", async () => {
     const res = await app.request(`${base}/.well-known/openid-configuration`);
     const body = (await res.json()) as Record<string, unknown>;
-    const grantTypes = body.grant_types_supported as string[] | undefined;
-    // We don't implement the authorization_code flow, so don't advertise it
-    expect(grantTypes).toBeUndefined();
+    expect(body.authorization_endpoint).toBe(`${base}/authorize`);
+    expect(body.device_authorization_endpoint).toBe(`${base}/oauth/device/code`);
+    expect(body.code_challenge_methods_supported).toEqual(["S256"]);
+  });
+});
+
+describe("Deterministic OAuth state", () => {
+  it("replays generated codes after store reset and reseed", async () => {
+    seedFromConfig(store, base, { now: 1_700_000_000, seed: "reset-seed" });
+    const first = await authorizeCode({ state: "reset" });
+
+    createTestApp();
+    seedFromConfig(store, base, { now: 1_700_000_000, seed: "reset-seed" });
+    const second = await authorizeCode({ state: "reset" });
+    expect(second.code).toBe(first.code);
+  });
+
+  it("clears outstanding grants when the store resets", async () => {
+    seedFromConfig(store, base, {
+      now: 1_700_000_000,
+      seed: "clear-grants",
+      users: [{ email: "alice@example.com", password: "Alice1234!", user_id: "alice" }],
+      oauth_clients: [
+        {
+          client_id: "app-client",
+          client_secret: "app-secret",
+          redirect_uris: ["http://localhost:3000/callback"],
+        },
+      ],
+    });
+    const grant = await startDeviceGrant("clear-grants");
+    store.reset();
+    auth0Plugin.seed?.(store, base);
+    seedFromConfig(store, base, {
+      now: 1_700_000_000,
+      seed: "clear-grants",
+      users: [{ email: "alice@example.com", password: "Alice1234!", user_id: "alice" }],
+      oauth_clients: [
+        {
+          client_id: "app-client",
+          client_secret: "app-secret",
+          redirect_uris: ["http://localhost:3000/callback"],
+        },
+      ],
+    });
+    const poll = await pollDevice(grant.device_code);
+    expect(poll.status).toBe(400);
+    expect(await poll.json()).toMatchObject({ error: "invalid_grant" });
+  });
+
+  it("issues byte-identical tokens with the same key, clock, seed, and inputs", async () => {
+    const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
+    const privatePem = await exportPKCS8(privateKey);
+    const publicPem = await exportSPKI(publicKey);
+    const run = async () => {
+      createTestApp();
+      seedFromConfig(store, base, {
+        now: 1_700_000_000,
+        seed: "token-replay",
+        signing_key: { private_key_pem: privatePem, public_key_pem: publicPem, kid: "fixed-test-kid" },
+      });
+      const { code, verifier, redirectUri } = await authorizeCode({ nonce: "fixed-nonce", state: "fixed-state" });
+      const res = await app.request(`${base}/oauth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          grant_type: "authorization_code",
+          client_id: "app-client",
+          client_secret: "app-secret",
+          code,
+          redirect_uri: redirectUri,
+          code_verifier: verifier,
+        }),
+      });
+      expect(res.status).toBe(200);
+      return (await res.json()) as { access_token: string; id_token: string };
+    };
+
+    const first = await run();
+    const second = await run();
+    expect(second).toEqual(first);
   });
 });
 
