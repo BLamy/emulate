@@ -16,6 +16,8 @@ export interface StartOptions {
   seed?: string;
   baseUrl?: string;
   portless?: boolean;
+  now?: number;
+  seedMaterial?: string;
 }
 
 interface SeedConfig {
@@ -180,6 +182,9 @@ export async function startCommand(options: StartOptions): Promise<void> {
     });
     cachedResolver = loadedSvc.createAppKeyResolver?.(store);
     stores.push(store);
+
+    if (options.now !== undefined) store.setData("emulate.now", options.now);
+    if (options.seedMaterial !== undefined) store.setData("emulate.seed", options.seedMaterial);
 
     loadedSvc.plugin.seed?.(store, baseUrl);
 

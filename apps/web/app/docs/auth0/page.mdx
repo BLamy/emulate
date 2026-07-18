@@ -1,10 +1,13 @@
 # Auth0
 
-Auth0 Authentication API, Management API v2, OpenID Connect, and log stream emulation. The emulator supports password-realm, refresh token, and client credentials token grants, RS256 OIDC tokens, user management, email verification tickets, and webhook-dispatched log events.
+Auth0 Authentication API, Management API v2, OpenID Connect, and log stream emulation. The emulator supports browser authorization code with mandatory PKCE `S256`, device authorization, password-realm, refresh token, and client credentials grants, RS256 OIDC tokens, user management, email verification tickets, and webhook-dispatched log events.
 
 ## Authentication API
 
-- `POST /oauth/token` - token endpoint for `client_credentials`, password-realm, and refresh token grants
+- `GET /authorize` and `POST /authorize` - browser login with authorization code and PKCE
+- `POST /oauth/device/code` - begin device authorization
+- `GET /activate` and `POST /activate` - approve or deny a device request
+- `POST /oauth/token` - exchange authorization code, device code, client credentials, password-realm, and refresh token grants
 - `GET /userinfo` - user profile from access token
 - `POST /oauth/revoke` - revoke access or refresh tokens
 
@@ -45,6 +48,8 @@ The inspector registers a local log sink automatically and exposes recent events
 
 ```yaml
 auth0:
+  now: 1700000000
+  seed: repeatable-test-run
   connections:
     - name: Username-Password-Authentication
       strategy: auth0
@@ -74,3 +79,5 @@ auth0:
 ```
 
 `token_claim_mappings` maps `app_metadata` fields into namespaced JWT claims. Metadata keys that are already URL-namespaced are also copied directly into JWT access tokens.
+
+The `now` value is Unix time in seconds. Together with `seed` and a fixed `signing_key`, it makes browser-flow codes and signed tokens byte-repeatable. The login and device forms expose stable `data-testid` hooks for browser automation, and `reset()` clears outstanding grants before replaying seed data.
