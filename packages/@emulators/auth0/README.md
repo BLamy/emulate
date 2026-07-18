@@ -20,6 +20,12 @@ npm install @emulators/auth0
 - `GET /activate` — device approval and denial form
 - `POST /activate` — submit a device decision
 - `POST /oauth/token` — token endpoint (authorization_code, device_code, client_credentials, password-realm, refresh_token)
+
+Browser credential, unknown-code, and expired-code form refusals render an explanatory
+HTML page with status 200 so they remain inspectable without a browser console resource
+error. OAuth protocol refusals from `/authorize` validation and `/oauth/token` retain
+their documented 4xx status and JSON error taxonomy.
+
 - `GET /userinfo` — user profile from access token
 - `POST /oauth/revoke` — revoke refresh token
 
