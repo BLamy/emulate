@@ -155,6 +155,23 @@ describe("Authorization code with mandatory PKCE", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("location")).toBeNull();
     expect(await response.text()).toContain("Wrong email or password");
+
+    const auth0 = getAuth0Store(store);
+    const user = auth0.users.findOneBy("email", "alice@example.com");
+    expect(user).toBeDefined();
+    auth0.users.update(user!.id, { blocked: true });
+    const blocked = await app.request(`${base}/authorize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        ...Object.fromEntries(query),
+        email: "alice@example.com",
+        password: "Alice1234!",
+      }).toString(),
+    });
+    expect(blocked.status).toBe(200);
+    expect(blocked.headers.get("location")).toBeNull();
+    expect(await blocked.text()).toContain("user is blocked");
   });
 
   it("renders the shared login form and exchanges a single-use code for RS256 tokens", async () => {
@@ -320,6 +337,22 @@ describe("Device authorization", () => {
     expect(wrongCredentials.status).toBe(200);
     expect(await wrongCredentials.text()).toContain("Wrong email or password");
     expect((await pollDevice(grant.device_code)).status).toBe(400);
+
+    const expiredGrant = await startDeviceGrant("expired-form", 100);
+    seedFromConfig(store, base, { now: 700, seed: "expired-form" });
+    const expired = await app.request(`${base}/activate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        user_code: expiredGrant.user_code,
+        email: "alice@example.com",
+        password: "Alice1234!",
+        decision: "approve",
+      }).toString(),
+    });
+    expect(expired.status).toBe(200);
+    expect(expired.headers.get("location")).toBeNull();
+    expect(await expired.text()).toContain("Expired device code");
   });
 
   it("renders stable hooks, reports pending, approves, and exchanges once", async () => {
