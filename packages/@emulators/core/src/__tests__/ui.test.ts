@@ -27,4 +27,11 @@ describe("renderCardPage", () => {
     expect(html).toMatch(/\.user-email\{[^}]*color:#1a8c00/);
     expect(html).toContain('<div class="user-email">admin@example.com</div>');
   });
+
+  it("wraps card content in the main landmark", () => {
+    const html = renderCardPage("Authorize", "Choose an account", "");
+
+    expect(html).toContain('<main class="content">');
+    expect(html).toContain("</main>");
+  });
 });
