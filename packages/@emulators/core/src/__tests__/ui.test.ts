@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderCardPage } from "../ui.js";
+import { renderCardPage, renderUserButton } from "../ui.js";
 
 describe("renderCardPage", () => {
   it("uses readable text for the emulator footer", () => {
@@ -12,5 +12,19 @@ describe("renderCardPage", () => {
     const html = renderCardPage("Authorize Linear App", "Choose an account", "");
 
     expect(html).toContain('<h1 class="card-title">Authorize Linear App</h1>');
+  });
+
+  it("uses readable text for account email addresses", () => {
+    const button = renderUserButton({
+      letter: "A",
+      login: "admin",
+      email: "admin@example.com",
+      formAction: "/authorize",
+      hiddenFields: {},
+    });
+    const html = renderCardPage("Authorize", "Choose an account", button);
+
+    expect(html).toMatch(/\.user-email\{[^}]*color:#1a8c00/);
+    expect(html).toContain('<div class="user-email">admin@example.com</div>');
   });
 });
