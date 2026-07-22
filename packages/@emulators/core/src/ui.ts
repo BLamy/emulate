@@ -81,7 +81,7 @@ body{
 .user-text{min-width:0;}
 .user-login{font-weight:600;font-size:.875rem;display:block;color:#33ff00;}
 .user-meta{color:#1a8c00;font-size:.75rem;margin-top:1px;}
-.user-email{font-size:.6875rem;color:#116600;word-break:break-all;margin-top:1px;}
+.user-email{font-size:.6875rem;color:#1a8c00;word-break:break-all;margin-top:1px;}
 
 .settings-layout{
   max-width:920px;margin:0 auto;padding:28px 20px;
