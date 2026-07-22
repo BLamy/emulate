@@ -309,13 +309,13 @@ export function renderCardPage(title: string, subtitle: string, body: string, se
   return `${head(title)}
 <body>
 ${emuBar(service)}
-<div class="content">
+<main class="content">
   <div class="content-inner">
     <h1 class="card-title">${escapeHtml(title)}</h1>
     <div class="card-subtitle">${subtitle}</div>
     ${body}
   </div>
-</div>
+</main>
 ${POWERED_BY}
 </body></html>`;
 }
