@@ -309,9 +309,9 @@ export function renderCardPage(title: string, subtitle: string, body: string, se
   return `${head(title)}
 <body>
 ${emuBar(service)}
-<main class="content">
+<main class="content" aria-labelledby="card-page-title">
   <div class="content-inner">
-    <h1 class="card-title">${escapeHtml(title)}</h1>
+    <h1 id="card-page-title" class="card-title">${escapeHtml(title)}</h1>
     <div class="card-subtitle">${subtitle}</div>
     ${body}
   </div>
