@@ -311,7 +311,7 @@ export function renderCardPage(title: string, subtitle: string, body: string, se
 ${emuBar(service)}
 <div class="content">
   <div class="content-inner">
-    <div class="card-title">${escapeHtml(title)}</div>
+    <h1 class="card-title">${escapeHtml(title)}</h1>
     <div class="card-subtitle">${subtitle}</div>
     ${body}
   </div>
