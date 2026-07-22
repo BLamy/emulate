@@ -50,7 +50,7 @@ body{
 .card-subtitle{color:#1a8c00;font-size:.8125rem;margin-bottom:18px;line-height:1.45;}
 .powered-by{
   position:fixed;bottom:0;left:0;right:0;
-  text-align:center;padding:12px;font-size:.6875rem;color:#0a3300;
+  text-align:center;padding:12px;font-size:.6875rem;color:#1a8c00;
   font-family:'Geist Pixel',monospace;
 }
 .powered-by a{color:#1a8c00;text-decoration:none;transition:color .15s;}
