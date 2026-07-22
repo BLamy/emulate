@@ -50,7 +50,7 @@ body{
 .card-subtitle{color:#1a8c00;font-size:.8125rem;margin-bottom:18px;line-height:1.45;}
 .powered-by{
   position:fixed;bottom:0;left:0;right:0;
-  text-align:center;padding:12px;font-size:.6875rem;color:#0a3300;
+  text-align:center;padding:12px;font-size:.6875rem;color:#1a8c00;
   font-family:'Geist Pixel',monospace;
 }
 .powered-by a{color:#1a8c00;text-decoration:none;transition:color .15s;}
@@ -81,7 +81,7 @@ body{
 .user-text{min-width:0;}
 .user-login{font-weight:600;font-size:.875rem;display:block;color:#33ff00;}
 .user-meta{color:#1a8c00;font-size:.75rem;margin-top:1px;}
-.user-email{font-size:.6875rem;color:#116600;word-break:break-all;margin-top:1px;}
+.user-email{font-size:.6875rem;color:#1a8c00;word-break:break-all;margin-top:1px;}
 
 .settings-layout{
   max-width:920px;margin:0 auto;padding:28px 20px;
@@ -309,13 +309,13 @@ export function renderCardPage(title: string, subtitle: string, body: string, se
   return `${head(title)}
 <body>
 ${emuBar(service)}
-<div class="content">
+<main class="content" aria-labelledby="card-page-title">
   <div class="content-inner">
-    <div class="card-title">${escapeHtml(title)}</div>
+    <h1 id="card-page-title" class="card-title">${escapeHtml(title)}</h1>
     <div class="card-subtitle">${subtitle}</div>
     ${body}
   </div>
-</div>
+</main>
 ${POWERED_BY}
 </body></html>`;
 }
