@@ -7,4 +7,10 @@ describe("renderCardPage", () => {
 
     expect(html).toMatch(/\.powered-by\{[^}]*color:#1a8c00/);
   });
+
+  it("renders the card title as the page heading", () => {
+    const html = renderCardPage("Authorize Linear App", "Choose an account", "");
+
+    expect(html).toContain('<h1 class="card-title">Authorize Linear App</h1>');
+  });
 });
