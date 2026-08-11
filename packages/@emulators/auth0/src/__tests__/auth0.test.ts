@@ -99,6 +99,14 @@ describe("OIDC Discovery", () => {
     expect(body.keys[0]!.kid).toBe("emulate-auth0-1");
     expect(body.keys[0]!.alg).toBe("RS256");
   });
+
+  it("merges configured metadata into the built-in seeded user", () => {
+    seedFromConfig(store, base, {
+      users: [{ email: "testuser@auth0.local", app_metadata: { github_token: "local_blamy_token" } }],
+    });
+    const user = getAuth0Store(store).users.findOneBy("email", "testuser@auth0.local");
+    expect(user?.app_metadata).toMatchObject({ github_token: "local_blamy_token" });
+  });
 });
 
 function s256(verifier: string): string {
@@ -114,7 +122,7 @@ async function authorizeCode(
     response_type: "code",
     client_id: "app-client",
     redirect_uri: redirectUri,
-    scope: "openid profile email",
+    scope: "openid profile email offline_access",
     code_challenge: s256(verifier),
     code_challenge_method: "S256",
     state: options.state ?? "state value&=%",
@@ -217,7 +225,8 @@ describe("Authorization code with mandatory PKCE", () => {
 
     const res = await exchange();
     expect(res.status).toBe(200);
-    const tokens = (await res.json()) as { access_token: string; id_token: string };
+    const tokens = (await res.json()) as { access_token: string; id_token: string; refresh_token?: string };
+    expect(tokens.refresh_token).toBeTruthy();
     const accessClaims = decodeJwt(tokens.access_token);
     expect(accessClaims).toMatchObject({
       iss: `${base}/`,

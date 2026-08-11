@@ -231,7 +231,16 @@ async function createIdToken(
 async function createOidcAccessToken(store: Store, user: Auth0User, audience: string, issuer: string): Promise<string> {
   const { privateKey, kid } = await getSigningKeyPair(store);
   const now = auth0Now(store);
-  return new SignJWT({})
+  const claims: Record<string, unknown> = {};
+  if (user.app_metadata && typeof user.app_metadata === "object") {
+    const mappings = store.getData<Record<string, string>>("auth0.token_claim_mappings") ?? {};
+    for (const [metaKey, value] of Object.entries(user.app_metadata)) {
+      if (value === null || value === undefined) continue;
+      if (mappings[metaKey]) claims[mappings[metaKey]] = value;
+      if (metaKey.startsWith("https://")) claims[metaKey] = value;
+    }
+  }
+  return new SignJWT(claims)
     .setProtectedHeader({ alg: "RS256", kid, typ: "JWT" })
     .setIssuer(issuer)
     .setSubject(user.user_id)
@@ -504,6 +513,9 @@ export function oauthRoutes({ app, store, baseUrl, tokenMap }: RouteContext): vo
       const issuer = `${baseUrl}/`;
       const accessToken = await createOidcAccessToken(store, user, grant.audience, issuer);
       const idToken = await createOidcIdToken(store, user, grant.clientId, issuer, grant.nonce);
+      const refreshToken = grant.scope.includes("offline_access")
+        ? generateAuth0Material(store, "auth0_rt", 20)
+        : null;
       getAccessTokens(store).set(accessToken, {
         clientId: grant.clientId,
         scope: grant.scope,
@@ -512,18 +524,28 @@ export function oauthRoutes({ app, store, baseUrl, tokenMap }: RouteContext): vo
         userAuth0Id: user.user_id,
         audience: grant.audience,
       });
+      if (refreshToken) {
+        getRefreshTokens(store).set(refreshToken, {
+          clientId: grant.clientId,
+          scope: grant.scope,
+          userAuth0Id: user.user_id,
+          audience: grant.audience,
+        });
+      }
       tokenMap?.set(accessToken, {
         login: user.email,
         id: user.id,
         scopes: grant.scope.split(/\s+/).filter(Boolean),
       });
-      return c.json({
+      const response: Record<string, unknown> = {
         access_token: accessToken,
         id_token: idToken,
         token_type: "Bearer",
         expires_in: 3600,
         scope: grant.scope,
-      });
+      };
+      if (refreshToken) response.refresh_token = refreshToken;
+      return c.json(response);
     }
 
     if (grantType === "urn:ietf:params:oauth:grant-type:device_code") {
