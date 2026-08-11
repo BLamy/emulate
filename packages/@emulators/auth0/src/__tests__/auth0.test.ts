@@ -123,16 +123,17 @@ async function authorizeCode(
   const page = await app.request(`${base}/authorize?${query}`);
   const html = await page.text();
   expect(page.status).toBe(200);
-  expect(html).toContain('data-testid="auth0-login-form"');
-  expect(html).toContain('data-testid="auth0-login-email"');
+  expect(html).toContain('class="user-form"');
+  expect(html).toContain("alice@example.com");
+  expect(html).toContain('name="user_id"');
 
-  const login = await app.request(`${base}/authorize`, {
+  const alice = getAuth0Store(store).users.findOneBy("email", "alice@example.com")!;
+  const login = await app.request(`${base}/authorize/callback`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       ...Object.fromEntries(query),
-      email: "alice@example.com",
-      password: "Alice1234!",
+      user_id: alice.user_id,
     }).toString(),
   });
   expect(login.status).toBe(302);
@@ -161,7 +162,7 @@ describe("Authorization code with mandatory PKCE", () => {
     expect(await response.json()).toEqual({ error: "invalid_request", error_description: description });
   });
 
-  it("renders credential refusals as inspectable browser pages without issuing redirects", async () => {
+  it("renders user-selection refusals as inspectable browser pages without issuing redirects", async () => {
     seedFromConfig(store, base, { now: 1_700_000_000, seed: "credential-refusal" });
     const query = new URLSearchParams({
       response_type: "code",
@@ -169,10 +170,9 @@ describe("Authorization code with mandatory PKCE", () => {
       redirect_uri: "http://localhost:3000/callback",
       code_challenge: "challenge",
       code_challenge_method: "S256",
-      email: "alice@example.com",
-      password: "wrong-password",
+      user_id: "auth0|missing-user",
     });
-    const response = await app.request(`${base}/authorize`, {
+    const response = await app.request(`${base}/authorize/callback`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: query.toString(),
@@ -185,13 +185,12 @@ describe("Authorization code with mandatory PKCE", () => {
     const user = auth0.users.findOneBy("email", "alice@example.com");
     expect(user).toBeDefined();
     auth0.users.update(user!.id, { blocked: true });
-    const blocked = await app.request(`${base}/authorize`, {
+    const blocked = await app.request(`${base}/authorize/callback`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         ...Object.fromEntries(query),
-        email: "alice@example.com",
-        password: "Alice1234!",
+        user_id: user!.user_id,
       }).toString(),
     });
     expect(blocked.status).toBe(200);
@@ -199,7 +198,7 @@ describe("Authorization code with mandatory PKCE", () => {
     expect(await blocked.text()).toContain("user is blocked");
   });
 
-  it("renders the shared login form and exchanges a single-use code for RS256 tokens", async () => {
+  it("renders the seeded-user picker and exchanges a single-use code for RS256 tokens", async () => {
     seedFromConfig(store, base, { now: 1_700_000_000, seed: "auth-code-test" });
     const { code, verifier, redirectUri } = await authorizeCode({ nonce: "nonce-123" });
     const exchange = () =>

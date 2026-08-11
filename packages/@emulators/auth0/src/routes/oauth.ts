@@ -9,7 +9,14 @@ import {
 } from "jose";
 import { createHash } from "node:crypto";
 import type { AppEnv, Context, RouteContext, Store } from "@emulators/core";
-import { debug, escapeAttr, escapeHtml, renderCardPage, renderErrorPage } from "@emulators/core";
+import {
+  debug,
+  escapeAttr,
+  escapeHtml,
+  renderCardPage,
+  renderErrorPage,
+  renderUserButton,
+} from "@emulators/core";
 import type { Auth0User } from "../entities.js";
 import { verifyPassword } from "../helpers.js";
 import { AUTH0_ERRORS, authenticationApiError } from "../route-helpers.js";
@@ -263,12 +270,6 @@ function pkceS256(verifier: string): string {
   return createHash("sha256").update(verifier).digest("base64url");
 }
 
-function hiddenInputs(values: Record<string, string>): string {
-  return Object.entries(values)
-    .map(([name, value]) => `<input type="hidden" name="${escapeAttr(name)}" value="${escapeAttr(value)}"/>`)
-    .join("\n");
-}
-
 function authorizeParameters(url: URL, body?: Record<string, string>): Record<string, string> {
   return body ?? Object.fromEntries(url.searchParams);
 }
@@ -352,33 +353,7 @@ export function oauthRoutes({ app, store, baseUrl, tokenMap }: RouteContext): vo
     return undefined;
   }
 
-  app.get("/authorize", (c) => {
-    const params = authorizeParameters(new URL(c.req.url));
-    const invalid = validateAuthorize(c, params);
-    if (invalid) return invalid;
-
-    const body = `<form method="post" action="/authorize" data-testid="auth0-login-form">
-${hiddenInputs(params)}
-<label for="auth0-email">Email</label>
-<input id="auth0-email" class="checkout-input" data-testid="auth0-login-email" type="email" name="email" autocomplete="username" required/>
-<label for="auth0-password">Password</label>
-<input id="auth0-password" class="checkout-input" data-testid="auth0-login-password" type="password" name="password" autocomplete="current-password" required/>
-<button class="checkout-pay-btn" data-testid="auth0-login-submit" type="submit">Continue</button>
-</form>`;
-    return c.html(
-      renderCardPage("Sign in", `Continue to ${escapeHtml(params.client_id ?? "application")}`, body, "auth0"),
-    );
-  });
-
-  app.post("/authorize", async (c) => {
-    const params = authorizeParameters(new URL(c.req.url), await parseTokenBody(c));
-    const invalid = validateAuthorize(c, params);
-    if (invalid) return invalid;
-
-    const user = auth0Store.users.findOneBy("email", params.email ?? "");
-    if (!user || !verifyPassword(params.password ?? "", user.password_hash)) {
-      return c.html(renderErrorPage("Sign in failed", AUTH0_ERRORS.WRONG_CREDENTIALS, "auth0"));
-    }
+  function completeAuthorization(c: Context<AppEnv>, params: Record<string, string>, user: Auth0User): Response {
     if (user.blocked) return c.html(renderErrorPage("Sign in failed", AUTH0_ERRORS.USER_BLOCKED, "auth0"));
 
     const code = generateAuth0Material(store, "auth0_code");
@@ -396,6 +371,38 @@ ${hiddenInputs(params)}
     redirect.searchParams.set("code", code);
     if (params.state !== undefined) redirect.searchParams.set("state", params.state);
     return c.redirect(redirect.toString(), 302);
+  }
+
+  app.get("/authorize", (c) => {
+    const params = authorizeParameters(new URL(c.req.url));
+    const invalid = validateAuthorize(c, params);
+    if (invalid) return invalid;
+
+    const users = auth0Store.users.all();
+    const body = users
+      .map((user) =>
+        renderUserButton({
+          letter: (user.name || user.email).trim().slice(0, 1).toUpperCase() || "?",
+          login: user.email,
+          name: user.name,
+          formAction: "/authorize/callback",
+          hiddenFields: { ...params, user_id: user.user_id },
+        }),
+      )
+      .join("\n");
+    return c.html(
+      renderCardPage("Choose an account", `Continue to ${escapeHtml(params.client_id ?? "application")}`, body, "auth0"),
+    );
+  });
+
+  app.post("/authorize/callback", async (c) => {
+    const params = authorizeParameters(new URL(c.req.url), await parseTokenBody(c));
+    const invalid = validateAuthorize(c, params);
+    if (invalid) return invalid;
+
+    const user = auth0Store.users.findOneBy("user_id", params.user_id ?? "");
+    if (!user) return c.html(renderErrorPage("Sign in failed", AUTH0_ERRORS.WRONG_CREDENTIALS, "auth0"));
+    return completeAuthorization(c, params, user);
   });
 
   app.post("/oauth/device/code", async (c) => {
