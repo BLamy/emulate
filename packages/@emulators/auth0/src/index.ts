@@ -120,7 +120,15 @@ export function seedFromConfig(
 
   if (config.users) {
     for (const user of config.users) {
-      if (auth0.users.findOneBy("email", user.email)) continue;
+      const existing = auth0.users.findOneBy("email", user.email);
+      if (existing) {
+        if (user.app_metadata) {
+          auth0.users.update(existing.id, {
+            app_metadata: { ...existing.app_metadata, ...user.app_metadata },
+          });
+        }
+        continue;
+      }
       const connection = user.connection ?? DEFAULT_CONNECTION;
       const userId = user.user_id ? `auth0|${user.user_id}` : generateAuth0UserId();
       const nickname = user.nickname ?? user.email.split("@")[0] ?? "";
