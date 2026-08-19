@@ -97,7 +97,8 @@ body{
   background:#33ff00;color:#000;font:inherit;font-size:.875rem;font-weight:700;cursor:pointer;
 }
 .auth-submit:hover{background:#44ff22;}
-.auth-error{margin-bottom:12px;padding:9px 10px;border:1px solid #ff4444;border-radius:6px;color:#ff8888;font-size:.8125rem;line-height:1.4;}
+.auth-error-slot{height:52px;}
+.auth-error{padding:9px 10px;border:1px solid #ff4444;border-radius:6px;color:#ff8888;font-size:.8125rem;line-height:1.4;}
 .auth-divider{display:flex;align-items:center;gap:10px;margin:16px 0;color:#1a8c00;font-size:.75rem;}
 .auth-divider::before,.auth-divider::after{content:"";height:1px;flex:1;background:#0a3300;}
 
@@ -574,7 +575,7 @@ export function renderAuthForm(opts: AuthFormOptions): string {
     ? `<div class="auth-error" data-testid="login-error" role="alert">${escapeHtml(opts.error)}</div>`
     : "";
 
-  return `${error}<form class="auth-form" method="post" action="${escapeAttr(opts.formAction)}"${formTestId}>
+  return `<div class="auth-error-slot">${error}</div><form class="auth-form" method="post" action="${escapeAttr(opts.formAction)}"${formTestId}>
 ${hiddens}
   <div class="auth-field">
     <label class="auth-label" for="auth-email">Email</label>

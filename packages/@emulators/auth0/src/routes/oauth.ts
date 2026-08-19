@@ -401,7 +401,7 @@ function renderAuthorizationPage(
   if (databaseConnections.length > 0) {
     const connection = databaseConnections[0];
     forms.push(
-      `<div data-testid="auth0-emulator-url" class="info-text">Auth0 emulator: ${escapeHtml(baseUrl)}</div>`,
+      `<div class="info-text">Auth0 emulator: <span data-testid="auth0-emulator-url">${escapeHtml(baseUrl)}</span></div>`,
       renderAuthForm({
         formAction: "/authorize/password",
         hiddenFields: {
@@ -541,20 +541,11 @@ export function oauthRoutes({ app, store, baseUrl, tokenMap }: RouteContext): vo
     const user = auth0Store.users.findBy("email", email).find((candidate) => candidate.connection === connection.name);
     if (!user || !verifyPassword(password, user.password_hash)) {
       return c.html(
-        renderAuthorizationPage(
-          store,
-          baseUrl,
-          request,
-          validation.clientName,
-          AUTH0_ERRORS.WRONG_CREDENTIALS,
-          connection,
-        ),
+        renderAuthorizationPage(store, baseUrl, request, validation.clientName, AUTH0_ERRORS.WRONG_CREDENTIALS),
       );
     }
     if (user.blocked) {
-      return c.html(
-        renderAuthorizationPage(store, baseUrl, request, validation.clientName, AUTH0_ERRORS.USER_BLOCKED, connection),
-      );
+      return c.html(renderAuthorizationPage(store, baseUrl, request, validation.clientName, AUTH0_ERRORS.USER_BLOCKED));
     }
     return redirectWithCode(c, request, issueAuthorizationCode(store, request, user));
   });
