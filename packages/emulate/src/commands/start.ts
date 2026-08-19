@@ -86,7 +86,7 @@ function expandEnvironment(value: unknown): unknown {
 }
 
 function inferServicesFromConfig(config: SeedConfig): ServiceName[] | null {
-  const found = SERVICE_NAMES.filter((k) => k in config);
+  const found = Object.keys(config).filter((key): key is ServiceName => SERVICE_NAMES.includes(key as ServiceName));
   return found.length > 0 ? [...found] : null;
 }
 
