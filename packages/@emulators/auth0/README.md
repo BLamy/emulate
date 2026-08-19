@@ -14,7 +14,8 @@ npm install @emulators/auth0
 
 ### Authentication API
 
-- `POST /oauth/token` — token endpoint (client_credentials, password-realm, refresh_token)
+- `GET /authorize` — Auth0-style Universal Login connection picker
+- `POST /oauth/token` — token endpoint (authorization_code, client_credentials, password-realm, refresh_token)
 - `GET /userinfo` — user profile from access token
 - `POST /oauth/revoke` — revoke refresh token
 
@@ -40,6 +41,7 @@ npm install @emulators/auth0
 
 | Grant type | Use |
 |---|---|
+| `authorization_code` | Browser login through the Universal Login connection picker |
 | `client_credentials` | Machine-to-machine tokens (Management API access) |
 | `http://auth0.com/oauth/grant-type/password-realm` | User login with email + password + connection |
 | `refresh_token` | Exchange refresh token for new tokens |
@@ -70,6 +72,11 @@ Error responses match Auth0's actual format so SDK error handling works unchange
 auth0:
   connections:
     - name: Username-Password-Authentication
+      display_name: Username and password
+    - name: github
+      strategy: github
+      display_name: Continue with GitHub
+      default_user_id: auth0|admin
   users:
     - email: admin@example.com
       password: Admin1234!

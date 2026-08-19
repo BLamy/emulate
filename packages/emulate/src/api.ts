@@ -1,4 +1,4 @@
-import { createServer, serve, type AppKeyResolver } from "@emulators/core";
+import { createServer, serve, type AppKeyResolver, type ServiceRuntime } from "@emulators/core";
 import { SERVICE_REGISTRY } from "./registry.js";
 export type { ServiceName } from "./registry.js";
 import type { ServiceName } from "./registry.js";
@@ -67,6 +67,13 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
   seed();
 
   const httpServer = serve({ fetch: app.fetch, port });
+  let runtime: ServiceRuntime | void;
+  try {
+    runtime = await loaded.plugin.start?.(store, baseUrl);
+  } catch (error) {
+    httpServer.close();
+    throw error;
+  }
 
   return {
     url: baseUrl,
@@ -77,8 +84,11 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
     close(): Promise<void> {
       return new Promise((resolve, reject) => {
         httpServer.close((err) => {
-          if (err) reject(err);
-          else resolve();
+          if (err) {
+            reject(err);
+            return;
+          }
+          Promise.resolve(runtime?.close()).then(resolve, reject);
         });
       });
     },

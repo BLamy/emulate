@@ -28,7 +28,7 @@ export {
   type Next,
   type ServeOptions,
 } from "./http.js";
-export { type ServicePlugin, type RouteContext } from "./plugin.js";
+export { type ServicePlugin, type RouteContext, type ServiceRuntime } from "./plugin.js";
 export { WebhookDispatcher, type WebhookSubscription, type WebhookDelivery } from "./webhooks.js";
 export {
   errorHandler,
@@ -67,9 +67,11 @@ export {
   renderFormPostPage,
   renderCheckoutPage,
   renderUserButton,
+  renderAuthForm,
   type CheckoutLineItem,
   type CheckoutPageOptions,
   type UserButtonOptions,
+  type AuthFormOptions,
   type InspectorTab,
 } from "./ui.js";
 export { registerFontRoutes } from "./fonts.js";

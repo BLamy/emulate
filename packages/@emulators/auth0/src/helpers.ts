@@ -38,6 +38,7 @@ export function buildLogEvent(type: string, fields: Record<string, unknown>): Re
 }
 
 export function userResponse(user: Auth0User): Record<string, unknown> {
+  const provider = user.connection === DEFAULT_CONNECTION ? "auth0" : user.connection;
   return {
     user_id: user.user_id,
     email: user.email,
@@ -56,8 +57,8 @@ export function userResponse(user: Auth0User): Record<string, unknown> {
       {
         connection: user.connection,
         user_id: user.user_id.replace("auth0|", ""),
-        provider: "auth0",
-        isSocial: false,
+        provider,
+        isSocial: provider !== "auth0",
       },
     ],
   };

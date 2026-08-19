@@ -18,14 +18,15 @@ All services start with sensible defaults. No config file needed:
 - **Microsoft** on `http://localhost:4005`
 - **Okta** on `http://localhost:4006`
 - **Auth0** on `http://localhost:4007`
-- **AWS** on `http://localhost:4008`
-- **Durable Streams** on `http://localhost:4009`
-- **Resend** on `http://localhost:4010`
-- **Stripe** on `http://localhost:4011`
-- **MongoDB Atlas** on `http://localhost:4012`
-- **Clerk** on `http://localhost:4013`
-- **Linear** on `http://localhost:4014`
-- **Twilio** on `http://localhost:4015`
+- **Cloudflare OS** on `http://localhost:4008` (official local runtime proxy; configure a checkout first)
+- **AWS** on `http://localhost:4009`
+- **Durable Streams** on `http://localhost:4010`
+- **Resend** on `http://localhost:4011`
+- **Stripe** on `http://localhost:4012`
+- **MongoDB Atlas** on `http://localhost:4013`
+- **Clerk** on `http://localhost:4014`
+- **Linear** on `http://localhost:4015`
+- **Twilio** on `http://localhost:4016`
 
 ## CLI
 
@@ -153,7 +154,7 @@ afterAll(() => Promise.all([github.close(), vercel.close()]));
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `service` | *(required)* | Service name: `'vercel'`, `'github'`, `'google'`, `'slack'`, `'apple'`, `'microsoft'`, `'okta'`, `'auth0'`, `'aws'`, `'durable-streams'`, `'resend'`, `'stripe'`, `'mongoatlas'`, `'clerk'`, `'linear'`, or `'twilio'` |
+| `service` | *(required)* | Service name: `'vercel'`, `'github'`, `'google'`, `'slack'`, `'apple'`, `'microsoft'`, `'okta'`, `'auth0'`, `'cloudflare-os'`, `'aws'`, `'durable-streams'`, `'resend'`, `'stripe'`, `'mongoatlas'`, `'clerk'`, `'linear'`, or `'twilio'` |
 | `port` | `4000` | Port for the HTTP server |
 | `seed` | none | Inline seed data (same shape as YAML config) |
 | `baseUrl` | none | Override advertised base URL. Per-service `baseUrl` in seed config takes highest priority, then this option, then `EMULATE_BASE_URL` env var (supports `{service}`), then `PORTLESS_URL` (supports `{service}`, automatically set by the `portless` CLI wrapper), then `http://localhost:<port>`. |
@@ -249,6 +250,13 @@ google:
       name: Docs
       mime_type: application/vnd.google-apps.folder
       parent_ids: [root]
+
+cloudflare-os:
+  runtime:
+    enabled: true
+    source: ../cloudflare-os
+    port: 8787
+    startup_timeout_ms: 120000
 
 slack:
   team:

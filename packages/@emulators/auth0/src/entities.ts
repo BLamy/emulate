@@ -19,6 +19,8 @@ export interface Auth0User extends Entity {
 export interface Auth0Connection extends Entity {
   name: string;
   strategy: string;
+  display_name?: string;
+  default_user_id?: string;
 }
 
 export interface Auth0OAuthClient extends Entity {

@@ -13,6 +13,8 @@ export interface Auth0SeedConfig {
   connections?: Array<{
     name: string;
     strategy?: string;
+    display_name?: string;
+    default_user_id?: string;
   }>;
   users?: Array<{
     email: string;
@@ -102,19 +104,30 @@ export function seedFromConfig(
 
   if (config.connections) {
     for (const conn of config.connections) {
-      if (auth0.connections.findOneBy("name", conn.name)) continue;
-      auth0.connections.insert({
+      const existing = auth0.connections.findOneBy("name", conn.name);
+      const connection = {
         name: conn.name,
         strategy: conn.strategy ?? "auth0",
-      });
+        ...(conn.display_name ? { display_name: conn.display_name } : {}),
+        ...(conn.default_user_id ? { default_user_id: conn.default_user_id } : {}),
+      };
+      if (existing) {
+        auth0.connections.update(existing.id, connection);
+      } else {
+        auth0.connections.insert(connection);
+      }
     }
   }
 
   if (config.users) {
     for (const user of config.users) {
-      if (auth0.users.findOneBy("email", user.email)) continue;
       const connection = user.connection ?? DEFAULT_CONNECTION;
-      const userId = user.user_id ? `auth0|${user.user_id}` : generateAuth0UserId();
+      if (auth0.users.findBy("email", user.email).some((existing) => existing.connection === connection)) continue;
+      const userId = user.user_id
+        ? user.user_id.startsWith("auth0|")
+          ? user.user_id
+          : `auth0|${user.user_id}`
+        : generateAuth0UserId();
       const nickname = user.nickname ?? user.email.split("@")[0] ?? "";
       auth0.users.insert({
         user_id: userId,

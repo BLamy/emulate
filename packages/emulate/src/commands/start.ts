@@ -1,4 +1,4 @@
-import { createServer, serve, type AppKeyResolver, type Store } from "@emulators/core";
+import { createServer, serve, type AppKeyResolver, type ServiceRuntime, type Store } from "@emulators/core";
 import { SERVICE_REGISTRY, SERVICE_NAMES, type ServiceName } from "../registry.js";
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
@@ -38,7 +38,7 @@ function loadSeedConfig(seedPath?: string): LoadResult | null {
     const content = readFileSync(fullPath, "utf-8");
     try {
       const config = fullPath.endsWith(".json") ? JSON.parse(content) : parseYaml(content);
-      return { config, source: seedPath };
+      return { config: expandEnvironment(config) as SeedConfig, source: seedPath };
     } catch (err) {
       console.error(`Failed to parse ${seedPath}: ${err instanceof Error ? err.message : err}`);
       process.exit(1);
@@ -60,7 +60,7 @@ function loadSeedConfig(seedPath?: string): LoadResult | null {
       const content = readFileSync(fullPath, "utf-8");
       try {
         const config = fullPath.endsWith(".json") ? JSON.parse(content) : parseYaml(content);
-        return { config, source: file };
+        return { config: expandEnvironment(config) as SeedConfig, source: file };
       } catch (err) {
         console.error(`Failed to parse ${file}: ${err instanceof Error ? err.message : err}`);
         process.exit(1);
@@ -69,6 +69,20 @@ function loadSeedConfig(seedPath?: string): LoadResult | null {
   }
 
   return null;
+}
+
+function expandEnvironment(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replace(
+      /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g,
+      (_match, name: string, fallback?: string) => process.env[name] ?? fallback ?? "",
+    );
+  }
+  if (Array.isArray(value)) return value.map(expandEnvironment);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, expandEnvironment(child)]));
+  }
+  return value;
 }
 
 function inferServicesFromConfig(config: SeedConfig): ServiceName[] | null {
@@ -159,6 +173,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const serviceUrls: Array<{ name: string; url: string }> = [];
   const stores: Store[] = [];
   const httpServers: ReturnType<typeof serve>[] = [];
+  const runtimes: ServiceRuntime[] = [];
 
   for (const { svc, entry, loadedSvc, svcSeedConfig, port, baseUrl } of prepared) {
     serviceUrls.push({ name: svc, url: baseUrl });
@@ -187,13 +202,16 @@ export async function startCommand(options: StartOptions): Promise<void> {
       loadedSvc.seedFromConfig(store, baseUrl, svcSeedConfig, webhooks);
     }
 
+    const runtime = await loadedSvc.plugin.start?.(store, baseUrl);
+    if (runtime) runtimes.push(runtime);
+
     const httpServer = serve({ fetch: app.fetch, port });
     httpServers.push(httpServer);
   }
 
   printBanner(serviceUrls, tokens, configSource);
 
-  const shutdown = () => {
+  const shutdown = async () => {
     console.log(`\n${pc.dim("Shutting down...")}`);
     if (portlessAliases.length > 0) {
       removeAliases(portlessAliases);
@@ -204,6 +222,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     for (const srv of httpServers) {
       srv.close();
     }
+    await Promise.all(runtimes.map((runtime) => Promise.resolve(runtime.close())));
     process.exit(0);
   };
   process.once("SIGINT", shutdown);

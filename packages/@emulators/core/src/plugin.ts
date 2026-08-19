@@ -11,8 +11,13 @@ export interface RouteContext {
   tokenMap?: TokenMap;
 }
 
+export interface ServiceRuntime {
+  close(): Promise<void> | void;
+}
+
 export interface ServicePlugin {
   name: string;
   register(app: Hono<AppEnv>, store: Store, webhooks: WebhookDispatcher, baseUrl: string, tokenMap?: TokenMap): void;
   seed?(store: Store, baseUrl: string): void;
+  start?(store: Store, baseUrl: string): Promise<ServiceRuntime | void> | ServiceRuntime | void;
 }

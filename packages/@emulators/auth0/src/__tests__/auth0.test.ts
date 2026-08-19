@@ -81,6 +81,14 @@ describe("OIDC Discovery", () => {
     expect(body.token_endpoint).toBe(`${base}/oauth/token`);
     expect(body.userinfo_endpoint).toBe(`${base}/userinfo`);
     expect(body.jwks_uri).toBe(`${base}/.well-known/jwks.json`);
+    expect(body.authorization_endpoint).toBe(`${base}/authorize`);
+    expect(body.grant_types_supported).toEqual([
+      "authorization_code",
+      "refresh_token",
+      "client_credentials",
+      "http://auth0.com/oauth/grant-type/password-realm",
+    ]);
+    expect(body.code_challenge_methods_supported).toEqual(["plain", "S256"]);
   });
 
   it("returns JWKS", async () => {
@@ -90,6 +98,125 @@ describe("OIDC Discovery", () => {
     expect(body.keys).toHaveLength(1);
     expect(body.keys[0]!.kid).toBe("emulate-auth0-1");
     expect(body.keys[0]!.alg).toBe("RS256");
+  });
+});
+
+describe("Universal Login authorization code flow", () => {
+  const redirectUri = "http://localhost:3000/callback";
+
+  function seedSocialConnections(): string {
+    const alice = getAuth0Store(store).users.findOneBy("email", "alice@example.com");
+    if (!alice) throw new Error("Alice was not seeded");
+    seedFromConfig(store, base, {
+      connections: [
+        {
+          name: "github",
+          strategy: "github",
+          display_name: "Continue with GitHub",
+          default_user_id: alice.user_id,
+        },
+        {
+          name: "google-oauth2",
+          strategy: "google-oauth2",
+          display_name: "Continue with Google",
+          default_user_id: alice.user_id,
+        },
+      ],
+    });
+    return alice.user_id;
+  }
+
+  function authorizationUrl(extra = ""): string {
+    return `${base}/authorize?client_id=app-client&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=openid%20profile%20email&state=test-state${extra}`;
+  }
+
+  it("renders connection choices and exchanges a database login code once", async () => {
+    const aliceUserId = seedSocialConnections();
+
+    const page = await app.request(authorizationUrl());
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain("Continue with GitHub");
+    expect(html).toContain("Continue with Google");
+    expect(html).toContain('data-testid="email-input"');
+    expect(html).toContain('data-testid="password-input"');
+
+    const login = await app.request(`${base}/authorize/password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: "app-client",
+        redirect_uri: redirectUri,
+        response_type: "code",
+        scope: "openid profile email",
+        state: "test-state",
+        connection: "Username-Password-Authentication",
+        email: "alice@example.com",
+        password: "Alice1234!",
+      }).toString(),
+    });
+    expect(login.status).toBe(302);
+    const location = new URL(login.headers.get("Location")!);
+    expect(location.origin + location.pathname).toBe(redirectUri);
+    expect(location.searchParams.get("state")).toBe("test-state");
+
+    const token = await app.request(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: "app-client",
+        client_secret: "app-secret",
+        code: location.searchParams.get("code")!,
+        redirect_uri: redirectUri,
+      }).toString(),
+    });
+    expect(token.status).toBe(200);
+    const tokenBody = (await token.json()) as { access_token: string; id_token: string };
+    expect(tokenBody.access_token).toBeTruthy();
+    expect(decodeJwt(tokenBody.id_token).sub).toBe(aliceUserId);
+
+    const replay = await app.request(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: "app-client",
+        client_secret: "app-secret",
+        code: location.searchParams.get("code")!,
+        redirect_uri: redirectUri,
+      }).toString(),
+    });
+    expect(replay.status).toBe(400);
+  });
+
+  it("supports a seeded social connection button", async () => {
+    seedSocialConnections();
+
+    const response = await app.request(`${base}/authorize/connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: "app-client",
+        redirect_uri: redirectUri,
+        response_type: "code",
+        scope: "openid profile email",
+        state: "social-state",
+        connection: "github",
+      }).toString(),
+    });
+    expect(response.status).toBe(302);
+    const location = new URL(response.headers.get("Location")!);
+    expect(location.searchParams.get("state")).toBe("social-state");
+    expect(location.searchParams.get("code")).toBeTruthy();
+  });
+
+  it("rejects an unregistered redirect URI", async () => {
+    const response = await app.request(
+      `${base}/authorize?client_id=app-client&redirect_uri=${encodeURIComponent("http://localhost:3000/other")}&response_type=code`,
+    );
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("redirect_uri is not registered");
   });
 });
 
@@ -731,12 +858,15 @@ describe("Additional coverage", () => {
     expect(payload.user_name).toBe("verify-test@example.com");
   });
 
-  it("OIDC discovery does not advertise authorization_code in grant_types_supported", async () => {
+  it("OIDC discovery advertises the supported authorization grants", async () => {
     const res = await app.request(`${base}/.well-known/openid-configuration`);
     const body = (await res.json()) as Record<string, unknown>;
-    const grantTypes = body.grant_types_supported as string[] | undefined;
-    // We don't implement the authorization_code flow, so don't advertise it
-    expect(grantTypes).toBeUndefined();
+    expect(body.grant_types_supported).toEqual([
+      "authorization_code",
+      "refresh_token",
+      "client_credentials",
+      "http://auth0.com/oauth/grant-type/password-realm",
+    ]);
   });
 });
 
