@@ -9,14 +9,7 @@ import {
 } from "jose";
 import { createHash } from "node:crypto";
 import type { AppEnv, Context, RouteContext, Store } from "@emulators/core";
-import {
-  debug,
-  escapeAttr,
-  escapeHtml,
-  renderCardPage,
-  renderErrorPage,
-  renderUserButton,
-} from "@emulators/core";
+import { debug, escapeAttr, escapeHtml, renderCardPage, renderErrorPage, renderUserButton } from "@emulators/core";
 import type { Auth0User } from "../entities.js";
 import { verifyPassword } from "../helpers.js";
 import { AUTH0_ERRORS, authenticationApiError } from "../route-helpers.js";
@@ -400,7 +393,12 @@ export function oauthRoutes({ app, store, baseUrl, tokenMap }: RouteContext): vo
       )
       .join("\n");
     return c.html(
-      renderCardPage("Choose an account", `Continue to ${escapeHtml(params.client_id ?? "application")}`, body, "auth0"),
+      renderCardPage(
+        "Choose an account",
+        `Continue to ${escapeHtml(params.client_id ?? "application")}`,
+        body,
+        "auth0",
+      ),
     );
   });
 
@@ -513,9 +511,7 @@ export function oauthRoutes({ app, store, baseUrl, tokenMap }: RouteContext): vo
       const issuer = `${baseUrl}/`;
       const accessToken = await createOidcAccessToken(store, user, grant.audience, issuer);
       const idToken = await createOidcIdToken(store, user, grant.clientId, issuer, grant.nonce);
-      const refreshToken = grant.scope.includes("offline_access")
-        ? generateAuth0Material(store, "auth0_rt", 20)
-        : null;
+      const refreshToken = grant.scope.includes("offline_access") ? generateAuth0Material(store, "auth0_rt", 20) : null;
       getAccessTokens(store).set(accessToken, {
         clientId: grant.clientId,
         scope: grant.scope,
