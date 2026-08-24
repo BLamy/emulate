@@ -90,7 +90,7 @@ describe("CLI generated secrets", () => {
     const exit = vi.spyOn(process, "exit").mockImplementation((() => {
       throw new Error("test shutdown");
     }) as typeof process.exit);
-    expect(() => shutdown?.("SIGTERM")).toThrow("test shutdown");
+    await expect(Promise.resolve(shutdown?.("SIGTERM"))).rejects.toThrow("test shutdown");
     exit.mockRestore();
     for (const listener of process.listeners("SIGINT")) {
       if (!beforeSigint.includes(listener)) process.removeListener("SIGINT", listener);
@@ -155,7 +155,7 @@ describe("CLI generated secrets", () => {
     const exit = vi.spyOn(process, "exit").mockImplementation((() => {
       throw new Error("test shutdown");
     }) as typeof process.exit);
-    expect(() => shutdown?.("SIGTERM")).toThrow("test shutdown");
+    await expect(Promise.resolve(shutdown?.("SIGTERM"))).rejects.toThrow("test shutdown");
     exit.mockRestore();
     for (const listener of process.listeners("SIGINT")) {
       if (!beforeSigint.includes(listener)) process.removeListener("SIGINT", listener);
@@ -342,7 +342,7 @@ describe("CLI generated secrets", () => {
     const exit = vi.spyOn(process, "exit").mockImplementation((() => {
       throw new Error("test shutdown");
     }) as typeof process.exit);
-    expect(() => shutdown?.("SIGTERM")).toThrow("test shutdown");
+    await expect(Promise.resolve(shutdown?.("SIGTERM"))).rejects.toThrow("test shutdown");
     exit.mockRestore();
     for (const listener of process.listeners("SIGINT")) {
       if (!beforeSigint.includes(listener)) process.removeListener("SIGINT", listener);
@@ -507,7 +507,7 @@ describe("CLI generated secrets", () => {
     const exit = vi.spyOn(process, "exit").mockImplementation((() => {
       throw new Error("test shutdown");
     }) as typeof process.exit);
-    expect(() => shutdown?.("SIGTERM")).toThrow("test shutdown");
+    await expect(Promise.resolve(shutdown?.("SIGTERM"))).rejects.toThrow("test shutdown");
     exit.mockRestore();
     for (const listener of process.listeners("SIGINT")) {
       if (!beforeSigint.includes(listener)) process.removeListener("SIGINT", listener);

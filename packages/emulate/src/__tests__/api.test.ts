@@ -278,13 +278,18 @@ describe("createEmulator", () => {
         redirect_uri: "http://localhost:3000/callback",
         code_challenge: "fixed-s256-challenge",
         code_challenge_method: "S256",
-        email: "api@example.com",
-        password: "ApiTest1!",
       };
-      const response = await fetch(`${auth0.url}/authorize`, {
+      const picker = await fetch(`${auth0.url}/authorize?${new URLSearchParams(params)}`);
+      expect(picker.status).toBe(200);
+      const pickerHtml = await picker.text();
+      expect(pickerHtml).toContain('name="user_id"');
+      expect(pickerHtml).toContain("api@example.com");
+      expect(pickerHtml).not.toContain('type="password"');
+
+      const response = await fetch(`${auth0.url}/authorize/callback`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams(params),
+        body: new URLSearchParams({ ...params, user_id: "auth0|api-user" }),
         redirect: "manual",
       });
       expect(response.status).toBe(302);
