@@ -63,6 +63,7 @@
     "@emulators/microsoft": "workspace:*",
     "@emulators/okta": "workspace:*",
     "@emulators/auth0": "workspace:*",
+    "@emulators/cloudflare-os": "workspace:*",
     "@emulators/aws": "workspace:*",
     "@emulators/durable-streams": "workspace:*",
     "@emulators/google": "workspace:*",

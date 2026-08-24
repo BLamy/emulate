@@ -1,4 +1,4 @@
-import { createServer, serve, type AppKeyResolver, type Store } from "@emulators/core";
+import { createServer, serve, type AppKeyResolver, type ServiceRuntime, type Store } from "@emulators/core";
 import { SERVICE_REGISTRY, SERVICE_NAMES, type ServiceName } from "../registry.js";
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
@@ -67,7 +67,7 @@ function loadSeedConfig(seedPath?: string): LoadResult | null {
     const content = readFileSync(fullPath, "utf-8");
     try {
       const config = fullPath.endsWith(".json") ? JSON.parse(content) : parseYaml(content);
-      return { config, source: seedPath };
+      return { config: expandEnvironment(config) as SeedConfig, source: seedPath };
     } catch (err) {
       console.error(`Failed to parse ${seedPath}: ${err instanceof Error ? err.message : err}`);
       process.exit(1);
@@ -89,7 +89,7 @@ function loadSeedConfig(seedPath?: string): LoadResult | null {
       const content = readFileSync(fullPath, "utf-8");
       try {
         const config = fullPath.endsWith(".json") ? JSON.parse(content) : parseYaml(content);
-        return { config, source: file };
+        return { config: expandEnvironment(config) as SeedConfig, source: file };
       } catch (err) {
         console.error(`Failed to parse ${file}: ${err instanceof Error ? err.message : err}`);
         process.exit(1);
@@ -100,8 +100,22 @@ function loadSeedConfig(seedPath?: string): LoadResult | null {
   return null;
 }
 
+function expandEnvironment(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replace(
+      /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g,
+      (_match, name: string, fallback?: string) => process.env[name] ?? fallback ?? "",
+    );
+  }
+  if (Array.isArray(value)) return value.map(expandEnvironment);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, expandEnvironment(child)]));
+  }
+  return value;
+}
+
 function inferServicesFromConfig(config: SeedConfig): ServiceName[] | null {
-  const found = SERVICE_NAMES.filter((k) => k in config);
+  const found = Object.keys(config).filter((key): key is ServiceName => SERVICE_NAMES.includes(key as ServiceName));
   return found.length > 0 ? [...found] : null;
 }
 
@@ -223,6 +237,7 @@ function reportCleanupError(stage: string, error: unknown): void {
 
 async function rollbackStartup(
   httpServers: HttpServer[],
+  runtimes: ServiceRuntime[],
   stores: Store[],
   registeredAliases: PortlessAlias[],
   generatedSecretsFile: PublishedGeneratedSecretsFile,
@@ -232,6 +247,13 @@ async function rollbackStartup(
       await closeServer(server);
     } catch (error) {
       reportCleanupError("listener", error);
+    }
+  }
+  for (const runtime of [...runtimes].reverse()) {
+    try {
+      await runtime.close();
+    } catch (error) {
+      reportCleanupError("service runtime", error);
     }
   }
   for (const store of [...stores].reverse()) {
@@ -255,8 +277,13 @@ async function rollbackStartup(
   }
 }
 
-function installShutdown(portlessAliases: PortlessAlias[], stores: Store[], httpServers: HttpServer[]): void {
-  const shutdown = () => {
+function installShutdown(
+  portlessAliases: PortlessAlias[],
+  runtimes: ServiceRuntime[],
+  stores: Store[],
+  httpServers: HttpServer[],
+): void {
+  const shutdown = async () => {
     console.log(`\n${pc.dim("Shutting down...")}`);
     if (portlessAliases.length > 0) {
       removeAliases(portlessAliases);
@@ -267,6 +294,7 @@ function installShutdown(portlessAliases: PortlessAlias[], stores: Store[], http
     for (const server of httpServers) {
       server.close();
     }
+    await Promise.all(runtimes.map((runtime) => Promise.resolve(runtime.close())));
     process.exit(0);
   };
   process.once("SIGINT", shutdown);
@@ -330,6 +358,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const serviceUrls: Array<{ name: string; url: string }> = [];
   const stores: Store[] = [];
   const httpServers: HttpServer[] = [];
+  const runtimes: ServiceRuntime[] = [];
 
   if (!generatedSecretsTarget) {
     if (portlessAliases.length > 0) {
@@ -342,12 +371,14 @@ export async function startCommand(options: StartOptions): Promise<void> {
       const { app, store, webhooks } = createPreparedServiceServer(preparedService, tokens);
       stores.push(store);
       seedPreparedService(preparedService, store, webhooks, options);
+      const runtime = await preparedService.loadedSvc.plugin.start?.(store, baseUrl);
+      if (runtime) runtimes.push(runtime);
       const httpServer = serve({ fetch: app.fetch, port });
       httpServers.push(httpServer);
     }
 
     printBanner(serviceUrls, tokens, configSource);
-    installShutdown(portlessAliases, stores, httpServers);
+    installShutdown(portlessAliases, runtimes, stores, httpServers);
     return;
   }
 
@@ -372,6 +403,8 @@ export async function startCommand(options: StartOptions): Promise<void> {
       const { app, store, webhooks } = createPreparedServiceServer(preparedService, tokens);
       stores.push(store);
       seedPreparedService(preparedService, store, webhooks, options);
+      const runtime = await preparedService.loadedSvc.plugin.start?.(store, baseUrl);
+      if (runtime) runtimes.push(runtime);
       const httpServer = serve({ fetch: app.fetch, port });
       httpServers.push(httpServer);
       await waitForServerListening(httpServer);
@@ -379,11 +412,11 @@ export async function startCommand(options: StartOptions): Promise<void> {
 
     printBanner(serviceUrls, tokens, configSource);
   } catch (error) {
-    await rollbackStartup(httpServers, stores, registeredAliases, publishedSecretsFile);
+    await rollbackStartup(httpServers, runtimes, stores, registeredAliases, publishedSecretsFile);
     throw error;
   }
 
-  installShutdown(registeredAliases, stores, httpServers);
+  installShutdown(registeredAliases, runtimes, stores, httpServers);
 }
 
 function printBanner(

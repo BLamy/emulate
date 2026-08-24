@@ -83,6 +83,25 @@ body{
 .user-meta{color:#1a8c00;font-size:.75rem;margin-top:1px;}
 .user-email{font-size:.6875rem;color:#1a8c00;word-break:break-all;margin-top:1px;}
 
+.auth-form{margin-top:14px;}
+.auth-field{margin-bottom:12px;}
+.auth-label{display:block;color:#33ff00;font-size:.8125rem;font-weight:600;margin-bottom:6px;}
+.auth-input{
+  width:100%;padding:10px 12px;border:1px solid #0a3300;border-radius:6px;
+  background:#020;color:#33ff00;font:inherit;font-size:.875rem;outline:none;
+}
+.auth-input:focus{border-color:#33ff00;}
+.auth-input::placeholder{color:#116600;}
+.auth-submit{
+  width:100%;padding:10px 12px;border:0;border-radius:7px;
+  background:#33ff00;color:#000;font:inherit;font-size:.875rem;font-weight:700;cursor:pointer;
+}
+.auth-submit:hover{background:#44ff22;}
+.auth-error-slot{height:52px;}
+.auth-error{padding:9px 10px;border:1px solid #ff4444;border-radius:6px;color:#ff8888;font-size:.8125rem;line-height:1.4;}
+.auth-divider{display:flex;align-items:center;gap:10px;margin:16px 0;color:#1a8c00;font-size:.75rem;}
+.auth-divider::before,.auth-divider::after{content:"";height:1px;flex:1;background:#0a3300;}
+
 .settings-layout{
   max-width:920px;margin:0 auto;padding:28px 20px;
   display:flex;gap:28px;
@@ -505,6 +524,7 @@ export interface UserButtonOptions {
   email?: string;
   formAction: string;
   hiddenFields: Record<string, string>;
+  testId?: string;
 }
 
 export function renderUserButton(opts: UserButtonOptions): string {
@@ -515,7 +535,9 @@ export function renderUserButton(opts: UserButtonOptions): string {
   const nameLine = opts.name ? `<div class="user-meta">${escapeHtml(opts.name)}</div>` : "";
   const emailLine = opts.email ? `<div class="user-email">${escapeHtml(opts.email)}</div>` : "";
 
-  return `<form class="user-form" method="post" action="${escapeAttr(opts.formAction)}">
+  const testId = opts.testId ? ` data-testid="${escapeAttr(opts.testId)}"` : "";
+
+  return `<form class="user-form" method="post" action="${escapeAttr(opts.formAction)}"${testId}>
 ${hiddens}
 <button type="submit" class="user-btn">
   <span class="avatar">${escapeHtml(opts.letter)}</span>
@@ -524,5 +546,45 @@ ${hiddens}
     ${nameLine}${emailLine}
   </span>
 </button>
+</form>`;
+}
+
+export interface AuthFormOptions {
+  formAction: string;
+  hiddenFields: Record<string, string>;
+  email?: string;
+  password?: string;
+  error?: string;
+  emailTestId?: string;
+  passwordTestId?: string;
+  formTestId?: string;
+  submitTestId?: string;
+  submitLabel?: string;
+}
+
+export function renderAuthForm(opts: AuthFormOptions): string {
+  const hiddens = Object.entries(opts.hiddenFields)
+    .filter(([, value]) => value != null)
+    .map(([key, value]) => `<input type="hidden" name="${escapeAttr(key)}" value="${escapeAttr(value)}"/>`)
+    .join("\n");
+  const formTestId = opts.formTestId ? ` data-testid="${escapeAttr(opts.formTestId)}"` : "";
+  const emailTestId = opts.emailTestId ? ` data-testid="${escapeAttr(opts.emailTestId)}"` : "";
+  const passwordTestId = opts.passwordTestId ? ` data-testid="${escapeAttr(opts.passwordTestId)}"` : "";
+  const submitTestId = opts.submitTestId ? ` data-testid="${escapeAttr(opts.submitTestId)}"` : "";
+  const error = opts.error
+    ? `<div class="auth-error" data-testid="login-error" role="alert">${escapeHtml(opts.error)}</div>`
+    : "";
+
+  return `<div class="auth-error-slot">${error}</div><form class="auth-form" method="post" action="${escapeAttr(opts.formAction)}"${formTestId}>
+${hiddens}
+  <div class="auth-field">
+    <label class="auth-label" for="auth-email">Email</label>
+    <input id="auth-email" class="auth-input" type="email" name="email" autocomplete="username" value="${escapeAttr(opts.email ?? "")}" required${emailTestId}/>
+  </div>
+  <div class="auth-field">
+    <label class="auth-label" for="auth-password">Password</label>
+    <input id="auth-password" class="auth-input" type="password" name="password" autocomplete="current-password" value="${escapeAttr(opts.password ?? "")}" required${passwordTestId}/>
+  </div>
+  <button class="auth-submit" type="submit"${submitTestId}>${escapeHtml(opts.submitLabel ?? "Continue")}</button>
 </form>`;
 }

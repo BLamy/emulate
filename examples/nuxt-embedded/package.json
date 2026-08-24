@@ -8,6 +8,7 @@
     "dev": "portless run --name nuxt-embedded-demo.emulate nuxt dev",
     "build": "nuxt build",
     "preview": "nuxt preview",
+    "prelint": "nuxt prepare",
     "lint": "eslint"
   },
   "dependencies": {

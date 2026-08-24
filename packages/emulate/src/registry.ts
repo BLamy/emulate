@@ -34,6 +34,7 @@ const SERVICE_NAME_LIST = [
   "microsoft",
   "okta",
   "auth0",
+  "cloudflare-os",
   "aws",
   "durable-streams",
   "resend",
@@ -441,6 +442,28 @@ export const SERVICE_REGISTRY: Record<ServiceName, ServiceEntry> = {
             grant_types: ["authorization_code", "refresh_token", "client_credentials"],
           },
         ],
+      },
+    },
+  },
+
+  "cloudflare-os": {
+    label: "Official Cloudflare OS local runtime",
+    endpoints: "Wrangler/workerd runtime proxy, runtime health, launch configuration",
+    async load() {
+      const mod = await import("@emulators/cloudflare-os");
+      return { plugin: mod.cloudflareOsPlugin, seedFromConfig: mod.seedFromConfig };
+    },
+    defaultFallback() {
+      return { login: "local-runtime", id: 1, scopes: [] };
+    },
+    initConfig: {
+      "cloudflare-os": {
+        port: 4102,
+        runtime: {
+          enabled: false,
+          source: "../cloudflare-os",
+          port: 8787,
+        },
       },
     },
   },
