@@ -15,6 +15,10 @@ const services = [
   { name: "Durable Streams", port: 4009, slug: "durable-streams" },
   { name: "Resend", port: 4010, slug: "resend" },
   { name: "Stripe", port: 4011, slug: "stripe" },
+  { name: "MongoDB Atlas", port: 4012, slug: "mongoatlas" },
+  { name: "Clerk", port: 4013, slug: "clerk" },
+  { name: "Linear", port: 4014, slug: "linear" },
+  { name: "Agent Vault", port: 4015, slug: "agent-vault" },
 ];
 
 export function HeroTerminal({ pixelFont }: { pixelFont: string }) {
@@ -63,7 +67,7 @@ export function HeroTerminal({ pixelFont }: { pixelFont: string }) {
           {services.map((s) => (
             <span key={s.name}>
               {"  "}
-              <span className="text-neutral-500">{s.name.padEnd(14)}</span>
+              <span className="text-neutral-500">{s.name.padEnd(17)}</span>
               <span className="text-emerald-400">
                 {portless ? `https://${s.slug}.emulate.localhost` : `http://localhost:${s.port}`}
               </span>

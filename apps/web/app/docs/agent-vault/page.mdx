@@ -1,0 +1,119 @@
+# Agent Vault
+
+Infisical Agent Vault control-plane emulation for testing orchestrators and SDK integrations locally. It supports vaults, credentials, broker service rules, scoped session tokens, MITM CA metadata, agents, request logs, discovery, and an inspector UI.
+
+The emulator implements the management API used by `@infisical/agent-vault-sdk`. It does not run Agent Vault's real TCP CONNECT MITM proxy, so outbound traffic forwarding is not emulated.
+
+When Agent Vault is the only enabled service, it starts on `http://localhost:4000`. When all services are started, it uses `http://localhost:4015`.
+
+## Endpoints
+
+- `GET /v1/status` - initialized server status
+- `GET /health` - health check
+- `GET /v1/auth/me` - current actor details
+- `POST /v1/auth/login` - emulated user login response
+- `POST /v1/auth/register` - emulated user registration response
+- `GET /v1/users` - list users
+- `GET /v1/users/invites` - list pending user invites
+- `POST /v1/users/invites` - create user invite
+- `POST /v1/vaults` - create vault
+- `GET /v1/vaults` - list vaults
+- `DELETE /v1/vaults/:name` - delete vault
+- `GET /v1/vaults/:name/context` - current vault context
+- `GET /v1/vaults/:name/users` - list vault users
+- `POST /v1/vaults/:name/users` - add a user to a vault
+- `GET /v1/vaults/:name/settings` - vault settings
+- `PATCH /v1/vaults/:name/settings` - update `unmatched_host_policy`
+- `PATCH /v1/vaults/:name/credential-store` - switch credential store metadata
+- `GET /v1/credentials` - list credential keys, with optional `reveal=true`
+- `POST /v1/credentials` - set credentials
+- `DELETE /v1/credentials` - delete credentials
+- `POST /v1/credentials/oauth/connect` - save OAuth credential config and return authorization URL
+- `GET /v1/credentials/oauth/status` - inspect OAuth credential connection status
+- `POST /v1/credentials/oauth/tokens` - upload OAuth tokens for a credential
+- `GET /v1/vaults/:name/services` - list broker service rules
+- `POST /v1/vaults/:name/services` - upsert broker service rules
+- `PUT /v1/vaults/:name/services` - replace broker service rules
+- `DELETE /v1/vaults/:name/services` - clear broker service rules
+- `DELETE /v1/vaults/:name/services/:nameOrHost` - remove a service
+- `GET /v1/vaults/:name/services/credential-usage?key=KEY` - find service credential references
+- `POST /v1/sessions` - mint a vault-scoped proxy token
+- `GET /v1/sessions?vault=name` - list scoped sessions
+- `DELETE /v1/sessions/:id?vault=name` - revoke scoped session
+- `GET /v1/mitm/ca.pem` - emulated root CA PEM and `X-MITM-Port`
+- `GET /v1/agents` - list agents
+- `POST /v1/agents` - create an agent and return `av_agent_token`
+- `POST /v1/agents/:name/rotate` - rotate an agent token
+- `GET /v1/service-catalog` - common service templates
+- `GET /v1/skills/cli` - emulated agent-facing CLI skill markdown
+- `GET /v1/admin/settings` - instance settings
+- `PUT /v1/admin/settings` - update instance settings
+- `POST /v1/proposals` - create access proposal
+- `GET /v1/proposals` - list caller-visible proposals
+- `GET /v1/admin/proposals` - list admin proposals
+- `POST /v1/admin/proposals/:id/approve` - approve and apply proposal
+- `POST /v1/admin/proposals/:id/reject` - reject proposal
+- `GET /discover` - list vault services and available credentials
+- `GET /v1/vaults/:name/logs` - list request logs
+- `GET /` - tabbed inspector
+
+## SDK Example
+
+```typescript
+import { AgentVault, buildProxyEnv } from "@infisical/agent-vault-sdk";
+
+const av = new AgentVault({
+  token: "av_agt_default",
+  address: "http://localhost:4000",
+});
+
+const vault = av.vault("default");
+
+await vault.credentials.set({
+  STRIPE_KEY: "sk_test_123",
+});
+
+await vault.services!.set([
+  {
+    name: "stripe",
+    host: "api.stripe.com",
+    auth: { type: "bearer", token: "STRIPE_KEY" },
+  },
+]);
+
+const session = await vault.sessions!.create({ ttlSeconds: 3600 });
+const env = buildProxyEnv(session.containerConfig!, "/etc/ssl/agent-vault-ca.pem");
+```
+
+`containerConfig` is populated so sandbox setup code can be tested. The generated proxy URL points at the advertised MITM port, but no CONNECT proxy listener is started by this emulator. User, OAuth, proposal, invite, and settings endpoints are lightweight in-memory compatibility facades for local tests and the Agent Vault web UI.
+
+## Seed Config
+
+```yaml
+agent-vault:
+  mitm_port: 14322
+  vaults:
+    - name: default
+      credentials:
+        ANTHROPIC_API_KEY: sk-ant-emulated
+        GITHUB_PAT: ghp_emulated
+      services:
+        - name: anthropic
+          host: api.anthropic.com
+          auth:
+            type: api-key
+            key: ANTHROPIC_API_KEY
+            header: x-api-key
+        - name: github
+          host: api.github.com
+          auth:
+            type: bearer
+            token: GITHUB_PAT
+  agents:
+    - name: default-agent
+      token: av_agt_default
+      role: member
+      vaults:
+        - vault_name: default
+          vault_role: admin
+```

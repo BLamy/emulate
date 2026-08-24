@@ -1,6 +1,6 @@
 ---
 name: emulate
-description: Local drop-in API emulator for Vercel, GitHub, Google, Slack, Apple, Microsoft, AWS, Durable Streams, Linear, and other developer APIs. Use when the user needs to start emulated services, configure seed data, write tests against local APIs, set up CI without network access, or work with the emulate CLI or programmatic API. Triggers include "start the emulator", "emulate services", "mock API locally", "create emulator config", "test against local API", "npx emulate", or any task requiring local service emulation.
+description: Local drop-in API emulator for Vercel, GitHub, Google, Slack, Apple, Microsoft, Okta, Auth0, Cloudflare OS, AWS, Durable Streams, Resend, Stripe, MongoDB Atlas, Clerk, Linear, Twilio, Agent Vault, and other developer APIs. Use when the user needs to start emulated services, configure seed data, write tests against local APIs, set up CI without network access, or work with the emulate CLI or programmatic API. Triggers include "start the emulator", "emulate services", "mock API locally", "create emulator config", "test against local API", "npx emulate", or any task requiring local service emulation.
 allowed-tools: Bash(npx emulate:*)
 ---
 
@@ -16,23 +16,26 @@ npx emulate
 
 All services start with sensible defaults:
 
-| Service   | Default Port |
-|-----------|-------------|
-| Vercel    | 4000        |
-| GitHub    | 4001        |
-| Google    | 4002        |
-| Slack     | 4003        |
-| Apple     | 4004        |
-| Microsoft | 4005        |
-| Okta      | 4006        |
-| AWS       | 4007        |
-| Durable Streams | 4008  |
-| Resend    | 4009        |
-| Stripe    | 4010        |
-| MongoDB Atlas | 4011   |
-| Clerk     | 4012        |
-| Linear    | 4013        |
-| Twilio    | 4014        |
+| Service         | Default Port |
+| --------------- | ------------ |
+| Vercel          | 4000         |
+| GitHub          | 4001         |
+| Google          | 4002         |
+| Slack           | 4003         |
+| Apple           | 4004         |
+| Microsoft       | 4005         |
+| Okta            | 4006         |
+| Auth0           | 4007         |
+| Cloudflare OS   | 4008         |
+| AWS             | 4009         |
+| Durable Streams | 4010         |
+| Resend          | 4011         |
+| Stripe          | 4012         |
+| MongoDB Atlas   | 4013         |
+| Clerk           | 4014         |
+| Linear          | 4015         |
+| Twilio          | 4016         |
+| Agent Vault     | 4017         |
 
 ## CLI
 
@@ -104,7 +107,7 @@ await vercel.close();
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `service` | *(required)* | `'vercel'`, `'github'`, `'google'`, `'slack'`, `'apple'`, `'microsoft'`, `'okta'`, `'aws'`, `'durable-streams'`, `'resend'`, `'stripe'`, `'mongoatlas'`, `'clerk'`, `'linear'`, or `'twilio'` |
+| `service` | *(required)* | `'vercel'`, `'github'`, `'google'`, `'slack'`, `'apple'`, `'microsoft'`, `'okta'`, `'auth0'`, `'cloudflare-os'`, `'aws'`, `'durable-streams'`, `'resend'`, `'stripe'`, `'mongoatlas'`, `'clerk'`, `'linear'`, `'twilio'`, or `'agent-vault'` |
 | `port` | `4000` | Port for the HTTP server |
 | `seed` | none | Inline seed data (same shape as YAML config) |
 | `baseUrl` | none | Override advertised base URL. Per-service `baseUrl` in seed config takes highest priority, then this option, then `EMULATE_BASE_URL` env var (supports `{service}`), then `PORTLESS_URL` (supports `{service}`, automatically set by the `portless` CLI wrapper), then `http://localhost:<port>`. |
@@ -259,6 +262,33 @@ linear:
       user: admin@example.com
       scopes: [read, write, issues:create, comments:create, admin]
 
+agent-vault:
+  mitm_port: 14322
+  vaults:
+    - name: default
+      credentials:
+        ANTHROPIC_API_KEY: sk-ant-emulated
+        GITHUB_PAT: ghp_emulated
+      services:
+        - name: anthropic
+          host: api.anthropic.com
+          auth:
+            type: api-key
+            key: ANTHROPIC_API_KEY
+            header: x-api-key
+        - name: github
+          host: api.github.com
+          auth:
+            type: bearer
+            token: GITHUB_PAT
+  agents:
+    - name: default-agent
+      token: av_agt_default
+      role: member
+      vaults:
+        - vault_name: default
+          vault_role: admin
+
 apple:
   users:
     - email: testuser@icloud.com
@@ -360,9 +390,19 @@ GOOGLE_EMULATOR_URL=http://localhost:4002
 SLACK_EMULATOR_URL=http://localhost:4003
 APPLE_EMULATOR_URL=http://localhost:4004
 MICROSOFT_EMULATOR_URL=http://localhost:4005
-AWS_EMULATOR_URL=http://localhost:4007
-DURABLE_STREAMS_EMULATOR_URL=http://localhost:4008
-LINEAR_EMULATOR_URL=http://localhost:4013
+OKTA_EMULATOR_URL=http://localhost:4006
+AUTH0_EMULATOR_URL=http://localhost:4007
+CLOUDFLARE_OS_EMULATOR_URL=http://localhost:4008
+AWS_EMULATOR_URL=http://localhost:4009
+DURABLE_STREAMS_EMULATOR_URL=http://localhost:4010
+RESEND_EMULATOR_URL=http://localhost:4011
+STRIPE_EMULATOR_URL=http://localhost:4012
+MONGODB_ATLAS_EMULATOR_URL=http://localhost:4013
+CLERK_EMULATOR_URL=http://localhost:4014
+LINEAR_EMULATOR_URL=http://localhost:4015
+TWILIO_EMULATOR_URL=http://localhost:4016
+AGENT_VAULT_ADDR=http://localhost:4017
+AGENT_VAULT_TOKEN=av_agt_default
 ```
 
 Then use these in your app to construct API and OAuth URLs. See each service's skill for SDK-specific override instructions.
@@ -420,8 +460,16 @@ packages/
     twilio/          # Twilio Messaging, Verify, Voice, webhooks plugin
     apple/           # Sign in with Apple / OIDC plugin
     microsoft/       # Microsoft Entra ID OAuth 2.0 / OIDC plugin
+    okta/            # Okta identity provider / OIDC plugin
+    auth0/           # Auth0 Authentication API, Management API v2, OIDC plugin
+    cloudflare-os/   # Official Cloudflare OS local runtime proxy
     aws/             # AWS S3, SQS, IAM, STS plugin
     durable-streams/ # Durable Streams protocol plugin
+    resend/          # Resend email API plugin
+    stripe/          # Stripe billing and payments API plugin
+    mongoatlas/      # MongoDB Atlas Admin API + Data API plugin
+    clerk/           # Clerk Backend API and OAuth plugin
+    agent-vault/     # Infisical Agent Vault control-plane API plugin
 ```
 
 The core provides a generic `Store` with typed `Collection<T>` instances supporting CRUD, indexing, filtering, and pagination. Each service plugin registers routes with the shared internal app and uses the store for state.

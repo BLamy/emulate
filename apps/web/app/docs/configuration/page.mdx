@@ -442,3 +442,34 @@ stripe:
       recurring:
         interval: month
 ```
+
+## Agent Vault Seed Config
+
+```yaml
+agent-vault:
+  mitm_port: 14322
+  vaults:
+    - name: default
+      credentials:
+        ANTHROPIC_API_KEY: sk-ant-emulated
+        GITHUB_PAT: ghp_emulated
+      services:
+        - name: anthropic
+          host: api.anthropic.com
+          auth:
+            type: api-key
+            key: ANTHROPIC_API_KEY
+            header: x-api-key
+        - name: github
+          host: api.github.com
+          auth:
+            type: bearer
+            token: GITHUB_PAT
+  agents:
+    - name: default-agent
+      token: av_agt_default
+      role: member
+      vaults:
+        - vault_name: default
+          vault_role: admin
+```

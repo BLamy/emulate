@@ -73,6 +73,7 @@
     "@emulators/resend": "workspace:*",
     "@emulators/stripe": "workspace:*",
     "@emulators/clerk": "workspace:*",
+    "@emulators/agent-vault": "workspace:*",
     "@emulators/linear": "workspace:*",
     "@emulators/twilio": "workspace:*",
     "tsup": "^8",

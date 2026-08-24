@@ -43,6 +43,7 @@ const SERVICE_NAME_LIST = [
   "clerk",
   "linear",
   "twilio",
+  "agent-vault",
 ] as const;
 export type ServiceName = (typeof SERVICE_NAME_LIST)[number];
 export const SERVICE_NAMES: readonly ServiceName[] = SERVICE_NAME_LIST;
@@ -729,6 +730,52 @@ export const SERVICE_REGISTRY: Record<ServiceName, ServiceEntry> = {
         conversations: {
           services: [{ friendly_name: "Local Conversations" }],
         },
+      },
+    },
+  },
+  "agent-vault": {
+    label: "Infisical Agent Vault control-plane emulator",
+    endpoints:
+      "vaults, credentials, broker service rules, scoped sessions, MITM CA metadata, agents, request logs, inspector",
+    async load() {
+      const mod = await import("@emulators/agent-vault");
+      return { plugin: mod.agentVaultPlugin, seedFromConfig: mod.seedFromConfig };
+    },
+    defaultFallback() {
+      return { login: "owner@example.com", id: 1, scopes: [] };
+    },
+    initConfig: {
+      "agent-vault": {
+        mitm_port: 14322,
+        vaults: [
+          {
+            name: "default",
+            credentials: {
+              ANTHROPIC_API_KEY: "sk-ant-emulated",
+              GITHUB_PAT: "ghp_emulated",
+            },
+            services: [
+              {
+                name: "anthropic",
+                host: "api.anthropic.com",
+                auth: { type: "api-key", key: "ANTHROPIC_API_KEY", header: "x-api-key" },
+              },
+              {
+                name: "github",
+                host: "api.github.com",
+                auth: { type: "bearer", token: "GITHUB_PAT" },
+              },
+            ],
+          },
+        ],
+        agents: [
+          {
+            name: "default-agent",
+            token: "av_agt_default",
+            role: "member",
+            vaults: [{ vault_name: "default", vault_role: "admin" }],
+          },
+        ],
       },
     },
   },

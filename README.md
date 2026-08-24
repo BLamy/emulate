@@ -27,6 +27,7 @@ All services start with sensible defaults. No config file needed:
 - **Clerk** on `http://localhost:4014`
 - **Linear** on `http://localhost:4015`
 - **Twilio** on `http://localhost:4016`
+- **Agent Vault** on `http://localhost:4017`
 
 Stripe webhooks configured with a secret include a `Stripe-Signature` header signed over the timestamp and raw request body.
 
@@ -194,7 +195,7 @@ afterAll(() => Promise.all([github.close(), vercel.close()]));
 
 | Option         | Default      | Description                                                                                                                                                                                                                                                                                       |
 | -------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `service`      | _(required)_ | Service name: `'vercel'`, `'github'`, `'google'`, `'slack'`, `'apple'`, `'microsoft'`, `'okta'`, `'auth0'`, `'cloudflare-os'`, `'aws'`, `'durable-streams'`, `'resend'`, `'stripe'`, `'mongoatlas'`, `'clerk'`, `'linear'`, or `'twilio'`                                                         |
+| `service`      | _(required)_ | Service name: `'vercel'`, `'github'`, `'google'`, `'slack'`, `'apple'`, `'microsoft'`, `'okta'`, `'auth0'`, `'cloudflare-os'`, `'aws'`, `'durable-streams'`, `'resend'`, `'stripe'`, `'mongoatlas'`, `'clerk'`, `'linear'`, `'twilio'`, or `'agent-vault'`                                      |
 | `port`         | `4000`       | Port for the HTTP server                                                                                                                                                                                                                                                                          |
 | `seed`         | none         | Inline seed data (same shape as YAML config)                                                                                                                                                                                                                                                      |
 | `baseUrl`      | none         | Override advertised base URL. Per-service `baseUrl` in seed config takes highest priority, then this option, then `EMULATE_BASE_URL` env var (supports `{service}`), then `PORTLESS_URL` (supports `{service}`, automatically set by the `portless` CLI wrapper), then `http://localhost:<port>`. |
@@ -439,6 +440,33 @@ linear:
       user: admin@example.com
       scopes: [read, write, issues:create, comments:create, admin]
   strict_scopes: false
+
+agent-vault:
+  mitm_port: 14322
+  vaults:
+    - name: default
+      credentials:
+        ANTHROPIC_API_KEY: sk-ant-emulated
+        GITHUB_PAT: ghp_emulated
+      services:
+        - name: anthropic
+          host: api.anthropic.com
+          auth:
+            type: api-key
+            key: ANTHROPIC_API_KEY
+            header: x-api-key
+        - name: github
+          host: api.github.com
+          auth:
+            type: bearer
+            token: GITHUB_PAT
+  agents:
+    - name: default-agent
+      token: av_agt_default
+      role: member
+      vaults:
+        - vault_name: default
+          vault_role: admin
 
 apple:
   users:
@@ -1029,6 +1057,37 @@ To test inbound SMS webhooks, configure a seeded phone number `sms_url`, then ca
 
 Current Twilio limits: no carrier delivery, A2P 10DLC, toll-free verification, real phone number purchasing, exact rate limits, Studio, Flex, TaskRouter, Video, Sync, Segment, SendGrid, Conversations SDK websocket behavior, or complete TwiML interpreter.
 
+## Agent Vault
+
+Infisical Agent Vault control-plane emulation with vaults, credentials, broker service rules, scoped session tokens, MITM CA metadata, agents, request logs, discovery, and a local inspector.
+
+- `POST /v1/vaults` - create vault
+- `GET /v1/vaults` - list vaults
+- `GET /v1/credentials` - list credential keys, with optional `reveal=true`
+- `POST /v1/credentials` - set credentials
+- `DELETE /v1/credentials` - delete credentials
+- `GET /v1/vaults/:name/services` - list broker service rules
+- `POST /v1/vaults/:name/services` - upsert broker service rules
+- `PUT /v1/vaults/:name/services` - replace broker service rules
+- `DELETE /v1/vaults/:name/services/:nameOrHost` - remove a service
+- `GET /v1/vaults/:name/services/credential-usage?key=KEY` - find credential references
+- `POST /v1/sessions` - mint a vault-scoped proxy token
+- `GET /v1/mitm/ca.pem` - emulated root CA PEM and `X-MITM-Port`
+- `GET /v1/agents` - list agents
+- `GET /v1/service-catalog` - common service templates
+- `GET /v1/auth/me` - current actor details
+- `GET /v1/users` - list users
+- `POST /v1/proposals` - create access proposal
+- `GET /v1/admin/proposals` - list admin proposals
+- `POST /v1/admin/proposals/:id/approve` - approve and apply proposal
+- `POST /v1/credentials/oauth/connect` - configure OAuth credential flow
+- `POST /v1/credentials/oauth/tokens` - upload OAuth credential tokens
+- `GET /discover` - list vault services and available credentials
+- `GET /v1/vaults/:name/logs` - list request logs
+- `GET /` - tabbed local inspector
+
+The Agent Vault emulator implements the management API used by `@infisical/agent-vault-sdk`, web-management compatibility endpoints, and `containerConfig` generation for sandbox setup tests. It does not run Agent Vault's real TCP CONNECT MITM proxy, so actual outbound traffic forwarding is not emulated.
+
 ## Apple Sign In
 
 Sign in with Apple emulation with authorization code flow, PKCE support, RS256 ID tokens, and OIDC discovery.
@@ -1367,6 +1426,7 @@ packages/
     slack/          # Slack Web API, OAuth v2, incoming webhooks
     linear/         # Linear GraphQL API, OAuth, webhooks
     twilio/         # Twilio Messaging, Verify, Voice, webhooks
+    agent-vault/    # Infisical Agent Vault control-plane API
     apple/          # Apple Sign In / OIDC
     microsoft/      # Microsoft Entra ID OAuth 2.0 / OIDC + Graph /me
     auth0/          # Auth0 Authentication API, Management API v2, OIDC
@@ -1393,6 +1453,8 @@ Tokens are configured in the seed config and map to users. Pass them as `Authori
 **Linear**: GraphQL accepts `Authorization: Bearer <token>` or a bare personal API key value. Seeded Linear tokens map to users or app actors, OAuth apps support local authorization code and client credentials flows, and optional strict scope mode checks supported GraphQL operations.
 
 **Twilio**: HTTP Basic auth accepts the seeded Account SID/Auth Token pair or API Key/API Secret pair. Product-host APIs are exposed under local prefixes such as `/messaging/v1` and `/verify/v2`; the 2010 API lives at `/2010-04-01`.
+
+**Agent Vault**: Management endpoints accept `Authorization: Bearer <token>`. The default seed includes `av_agt_default`; unknown bearer tokens fall back to an owner-like local actor for test setup.
 
 **Apple**: OIDC authorization code flow with RS256 ID tokens. On first auth per user/client pair, a `user` JSON blob is included.
 
